@@ -8,6 +8,7 @@ parser.add_argument('function')
 parser.add_argument('inputs', nargs='+')
 parser.add_argument('-q', '--min_phred', type=int, default=0)
 parser.add_argument('-m', '--min_mapq', type=int, default=0)
+parser.add_argument('-o', '--outfile', type=str)
 
 args = parser.parse_args()
 
@@ -15,6 +16,7 @@ INPUT = args.inputs
 MIN_PHRED = args.min_phred
 MIN_MAPQ = args.min_mapq
 FUNCTION = args.function
+OUTFILE = args.outfile
 
 def plot_qscore_mapq_hists(qscores, mapqs):
     for key in qscores.keys():
@@ -23,15 +25,14 @@ def plot_qscore_mapq_hists(qscores, mapqs):
         # bin_edges has len(qscore_hist) + 1. We could find the midpoint of each edge, but let's be lazy and take the leftmost edge
         plt.plot(bin_edges[:-1], qscore_hist, label=key)  # arguments are passed to np.histogram
 
-    
     # plt.hist(mapqs, bins='auto')  # arguments are passed to np.histogram
     # plt.title("MAPQ")
     plt.title("PHRED")
     plt.legend(loc="upper right")
-    plt.figure()
-    plt.hist(qscores[key])
-
-    plt.show()
+    if (OUTFILE):
+        plt.savefig(OUTFILE)
+    else:
+        plt.show()
 
 d_phred = {}
 d_mapq = {}
