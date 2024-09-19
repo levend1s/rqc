@@ -19,7 +19,8 @@ FUNCTION = args.function
 OUTFILE = args.outfile
 
 # this calculates the NX for a reverse sorted list of read lengths
-# You might use this to calculate the N50 or N90, to find the read length which 50% or 90% of total bases read are above
+# You might use this to calculate the N50 or N90, to find the read 
+# length which at least 50% or 90% of total nucleotides read belong to
 def getNX(reverse_sorted_read_lengths, NX):
     csum = numpy.cumsum(reverse_sorted_read_lengths)
     total_bases_read = sum(reverse_sorted_read_lengths)
