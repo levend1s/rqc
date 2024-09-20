@@ -22,6 +22,8 @@ MIN_READ_LENGTH = args.min_read_length
 FUNCTION = args.function
 OUTFILE = args.outfile
 CHECK_DUPLICATE_READS = args.check_duplicate_reads
+VERBOSE = args.verbose
+
 
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
@@ -45,6 +47,9 @@ def print_tlen_distribution(tlens):
     d = []
 
     for key in tlens.keys():
+        if not tlens[key]:
+            continue
+
         cur_tlens = tlens[key]
         mean = int(numpy.mean(cur_tlens))
         median = int(numpy.median(cur_tlens))
@@ -114,9 +119,19 @@ def find_multi_reference_alignments(d_reads):
     keys = list(d_reads.keys())
     d_intersects = {}
 
+    if VERBOSE:
+        print("starting multi ref check:")
+
     for i in list(range(len(keys))):
         for j in list(range(i+1, len(keys))):
+            if VERBOSE:
+                print("looking for intersect in {} and {}".format( keys[i], keys[j]))
+
             intersect = [x for x in d_reads[keys[i]] if x in d_reads[keys[j]]]
+
+            if VERBOSE:
+                print("found {} common reads".format(len(intersect)))
+
 
             for r in intersect:
                 if r in d_intersects:
