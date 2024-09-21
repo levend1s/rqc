@@ -29,6 +29,9 @@ You can run something like this:
 ```
 $ python rqc.py -q 7 -m 5 plot $(cat samples.txt)
 ```
+![Screenshot 2024-09-21 at 10 36 34 PM](https://github.com/user-attachments/assets/9eab357d-b738-48aa-b24b-7f32687c2180)
+
+
 After playing around with quality filters, you can then print out the read ids of reads which passed the filter:
 ```
 $ python rqc.py --check_duplicate_reads True -n 10 --sort_by phred_scores -q 7 -m 5 -l 100000 search $(cat samples.txt)
