@@ -2,6 +2,7 @@ import pysam
 import matplotlib.pyplot as plt
 import argparse
 import numpy
+import pandas
 
 parser = argparse.ArgumentParser(description="filter bam file by qscores / mapqs")
 parser.add_argument('function')
@@ -9,6 +10,9 @@ parser.add_argument('inputs', nargs='+')
 parser.add_argument('-q', '--min_phred', type=int, default=0)
 parser.add_argument('-m', '--min_mapq', type=int, default=0)
 parser.add_argument('-l', '--min_read_length', type=int, default=0)
+parser.add_argument('-r', '--reverse_search', type=bool, default=False)
+parser.add_argument('-n', '--num_results', type=int, default=0)
+parser.add_argument('--sort_by', type=str, default="")
 parser.add_argument('--check_duplicate_reads', type=bool, default=False)
 parser.add_argument('-v', '--verbose', type=bool, default=False)
 parser.add_argument('-o', '--outfile', type=str)
@@ -23,7 +27,14 @@ FUNCTION = args.function
 OUTFILE = args.outfile
 CHECK_DUPLICATE_READS = args.check_duplicate_reads
 VERBOSE = args.verbose
+NUM_RESULTS = args.num_results
+REVERSE_SEARCH = args.reverse_search
+SORT_BY = args.sort_by
 
+d_phred = {}
+d_mapq = {}
+d_tlen = {}
+d_read_ids = {}
 
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
@@ -124,8 +135,9 @@ def find_multi_reference_alignments(d_reads):
 
     for i in list(range(len(keys))):
         for j in list(range(i+1, len(keys))):
-            if VERBOSE:
-                print("looking for intersect in {} and {}".format( keys[i], keys[j]))
+            print("looking for read intersect in {} ({}) and {} ({})".format( 
+                keys[i], len(d_reads[keys[i]]), keys[j], len(d_reads[keys[j]])
+                ))
 
             intersect = [x for x in d_reads[keys[i]] if x in d_reads[keys[j]]]
 
@@ -153,12 +165,9 @@ def find_multi_reference_alignments(d_reads):
     # extra newline :_)
     print()
 
-if FUNCTION == "plot":
-    d_phred = {}
-    d_mapq = {}
-    d_tlen = {}
-    d_read_ids = {}
+dataframes = {}
 
+def process_bamfiles():
     for i in range(0, len(INPUT), 2):
         label = INPUT[i]
         filename = INPUT[i+1]
@@ -189,11 +198,67 @@ if FUNCTION == "plot":
         d_tlen[label] = template_lengths
         d_read_ids[label] = read_ids
 
+        dataframes[label] = pandas.DataFrame({
+            "read_id": read_ids,
+            "phred_scores": phred_scores,
+            "mapq_scores": mapq_scores,
+            "template_lengths": template_lengths
+        })
+
         samfile.close()
+
+if FUNCTION == "search":
+    print("searching...")
+    process_bamfiles()
+
+    for sample in dataframes.keys():
+        print(sample)
+
+        if (SORT_BY):
+            dataframes[sample].sort_values(SORT_BY, inplace=True, ascending=(not REVERSE_SEARCH))
+
+        if (NUM_RESULTS):
+            print(dataframes[sample].head(NUM_RESULTS))
+        else:
+            print(dataframes[sample])
 
     if CHECK_DUPLICATE_READS:
         find_multi_reference_alignments(d_read_ids)
+
     print_tlen_distribution(d_tlen)
+
+
+if FUNCTION == "inspect":
+    print("inspecting...")
+
+    read_id = INPUT[0]
+    alignments = []
+
+
+    for i in range(1, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+
+
+
+        samfile = pysam.AlignmentFile(filename, 'rb')
+        iter = samfile.fetch()
+
+        for x in iter:
+            if (x.query_name == read_id):
+                alignments.append(x)
+
+
+        samfile.close()
+
+    for a in alignments:
+        print(a)
+    
+
+
+if FUNCTION == "plot":
+    print("plotting...")
+    process_bamfiles()
 
     plot_qscore_hists(d_phred)
     plot_mapq_hists(d_mapq)
