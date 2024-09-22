@@ -54,7 +54,7 @@ def getNX(reverse_sorted_read_lengths, NX):
 
     return reverse_sorted_read_lengths[idx]
 
-def print_tlen_distribution(tlens):
+def calc_tlen_distribution(tlens):
     d = []
 
     for key in tlens.keys():
@@ -84,6 +84,7 @@ def print_tlen_distribution(tlens):
             "median": median,
             "Q1": q1,
             "Q3": q3,
+            "IQR": q3 - q1,
             "min": min_read,
             "max": max_read,
             "N10": n10,
@@ -93,19 +94,8 @@ def print_tlen_distribution(tlens):
 
         d.append(summary)
 
-    # print summaries
-    header = d[0].keys()
-    rows = [r.values() for r in d]
-
-    for x in header:
-        print("{}\t".format(x), end="")
-
-    print()
-
-    for row in rows:
-        for x in row:
-            print("{}\t".format(x), end="")
-        print()
+    df = pandas.DataFrame(d)
+    return(df)
 
 
 def plot_qscore_hists(qscores):
@@ -118,13 +108,40 @@ def plot_qscore_hists(qscores):
     plt.title("PHRED")
     plt.legend(loc="upper right")
     if (OUTFILE):
-        plt.savefig(OUTFILE)
+        plt.savefig("phred_{}".format(OUTFILE))
 
 def plot_mapq_hists(mapqs):
     plt.figure()
     plt.title("MAPQ")
     plt.hist(mapqs.values(), histtype="bar", label=mapqs.keys(), density=True)
     plt.legend(loc="upper right")
+
+    if (OUTFILE):
+        plt.savefig("mapq_{}".format(OUTFILE))
+
+def plot_read_distribution(tlens, read_summaries):
+    plt.figure()
+    plt.title("read lengths")
+
+    print(read_summaries)
+
+    # filter outliers from read_summaries
+    outliers = {}
+    filtered_for_outliers = []
+    for _, row in read_summaries.iterrows():
+        label = row["sample"]
+        upper = row["Q3"] + (row["IQR"] * 1.5)
+        lower = row["Q1"] - (row["IQR"] * 1.5)
+
+        outliers[label] = [x for x in tlens[label] if x > upper or x < lower]
+        filtered_for_outliers.append([x for x in tlens[label] if x < upper and x > lower])
+        # print(len(outliers[label]))
+
+
+    plt.violinplot(filtered_for_outliers)
+    plt.legend(loc="upper right")
+    if (OUTFILE):
+        plt.savefig("readlengths_{}".format(OUTFILE))
 
 def find_multi_reference_alignments(d_reads):
     keys = list(d_reads.keys())
@@ -225,7 +242,9 @@ if FUNCTION == "search":
     if CHECK_DUPLICATE_READS:
         find_multi_reference_alignments(d_read_ids)
 
-    print_tlen_distribution(d_tlen)
+
+    df = calc_tlen_distribution(d_tlen)
+    print(df)
 
 
 if FUNCTION == "inspect":
@@ -262,6 +281,10 @@ if FUNCTION == "plot":
 
     plot_qscore_hists(d_phred)
     plot_mapq_hists(d_mapq)
+
+    read_summaries = calc_tlen_distribution(d_tlen)
+    plot_read_distribution(d_tlen, read_summaries)
+
 
     try:
         plt.show()
