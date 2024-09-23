@@ -127,21 +127,68 @@ def plot_read_distribution(tlens, read_summaries):
 
     # filter outliers from read_summaries
     outliers = {}
-    filtered_for_outliers = []
+    filtered_for_outliers = {}
     for _, row in read_summaries.iterrows():
         label = row["sample"]
         upper = row["Q3"] + (row["IQR"] * 1.5)
         lower = row["Q1"] - (row["IQR"] * 1.5)
 
         outliers[label] = [x for x in tlens[label] if x > upper or x < lower]
-        filtered_for_outliers.append([x for x in tlens[label] if x < upper and x > lower])
-        # print(len(outliers[label]))
+        filtered_for_outliers[label] = [x for x in tlens[label] if x < upper and x > lower]
 
+    labels = []
+    for k in tlens.keys():
+        labels.append(
+            "{}" "\n"
+            "n_reads={}" "\n"
+            "n_outliers={}".format(k, len(filtered_for_outliers[k]), len(outliers[k]))
+        )
+    axes = plt.gca()
+    axes.set_xticks(numpy.arange(1, len(labels) + 1), labels=labels)
+    axes.set_ylabel("read length (nt)")
 
-    plt.violinplot(filtered_for_outliers)
-    plt.legend(loc="upper right")
+    plt.violinplot(filtered_for_outliers.values())
+
     if (OUTFILE):
         plt.savefig("readlengths_{}".format(OUTFILE))
+
+    # ---------------- violin plot combining all samples ----------------
+    plt.figure()
+    plt.title("read lengths all samples")
+
+    lengths_combined = {}
+    lengths_combined_outliers = {}
+
+
+    for k in filtered_for_outliers.keys():
+        group = k.split("_")[1]
+        if group not in lengths_combined:
+            lengths_combined[group] = filtered_for_outliers[k]
+            lengths_combined_outliers[group] = outliers[k]
+
+        else:
+            lengths_combined[group] += filtered_for_outliers[k]
+            lengths_combined_outliers[group] += outliers[k]
+
+    labels = []
+    for k in lengths_combined.keys():
+        labels.append(
+            "{}" "\n"
+            "n_reads={}" "\n"
+            "n_outliers={}".format(k, len(lengths_combined[k]), len(lengths_combined_outliers[k]))
+        )
+    axes = plt.gca()
+    axes.set_xticks(numpy.arange(1, len(labels) + 1), labels=labels)
+    axes.set_ylabel("read length (nt)")
+
+    plt.violinplot(lengths_combined.values())
+
+    if (OUTFILE):
+        plt.savefig("allreadlengths_{}".format(OUTFILE))
+
+
+
+    
 
 def find_multi_reference_alignments(d_reads):
     keys = list(d_reads.keys())
