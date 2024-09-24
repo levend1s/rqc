@@ -16,6 +16,10 @@ parser.add_argument('--sort_by', type=str, default="")
 parser.add_argument('--check_duplicate_reads', type=bool, default=False)
 parser.add_argument('-v', '--verbose', type=bool, default=False)
 parser.add_argument('-o', '--outfile', type=str)
+parser.add_argument('-f', '--feature', type=str)
+parser.add_argument('-a', '--annotation_file', type=str)
+
+
 
 args = parser.parse_args()
 
@@ -30,6 +34,9 @@ VERBOSE = args.verbose
 NUM_RESULTS = args.num_results
 REVERSE_SEARCH = args.reverse_search
 SORT_BY = args.sort_by
+FEATURE = args.feature
+ANNOTATION_FILE= args.annotation_file
+
 
 d_phred = {}
 d_mapq = {}
@@ -187,9 +194,6 @@ def plot_read_distribution(tlens, read_summaries):
         plt.savefig("allreadlengths_{}".format(OUTFILE))
 
 
-
-    
-
 def find_multi_reference_alignments(d_reads):
     keys = list(d_reads.keys())
     d_intersects = {}
@@ -240,6 +244,8 @@ def process_bamfiles():
         mapq_scores = []
         template_lengths = []
         read_ids = []
+        cigar_tuples = []
+
 
 
         samfile = pysam.AlignmentFile(filename, 'rb')
@@ -256,6 +262,8 @@ def process_bamfiles():
                 # our dorado modbam files have TLEN as 0, why? Not all entries have an MN:i tag, why?
                 template_lengths.append(len(x.query_sequence))
                 read_ids.append(x.query_name)
+                cigar_tuples.append(x.cigartuples)
+
 
         d_phred[label] = numpy.array(phred_scores)
         d_mapq[label] = mapq_scores
@@ -266,7 +274,8 @@ def process_bamfiles():
             "read_id": read_ids,
             "phred_scores": phred_scores,
             "mapq_scores": mapq_scores,
-            "template_lengths": template_lengths
+            "template_lengths": template_lengths,
+            "cigar_tuples": cigar_tuples
         })
 
         samfile.close()
@@ -283,6 +292,7 @@ if FUNCTION == "search":
 
         if (NUM_RESULTS):
             print(dataframes[sample].head(NUM_RESULTS))
+            # print(len(dataframes[sample].cigar_tuples))
         else:
             print(dataframes[sample])
 
@@ -320,7 +330,86 @@ if FUNCTION == "inspect":
     for a in alignments:
         print(a)
     
+import gffpandas.gffpandas as gffpandas
+import sys
+import scipy
 
+if FUNCTION == "coverage":
+    # load annotation file
+    feature_id = INPUT[0]
+    print("plotting gene coverage for {}...".format(feature_id))
+
+    annotation_file = gffpandas.read_gff3(ANNOTATION_FILE)
+
+    matches = annotation_file.filter_feature_of_type([feature_id])
+    if len(matches.df) == 0:
+        print("WARNING: no matches of type {}".format(feature_id))
+        matches = annotation_file.get_feature_by_attribute("ID", [feature_id])
+
+        if len(matches.df) > 1:
+            print("ERROR: multiple entries for {} found in gff file. exiting...".format(feature_id))
+            sys.exit()
+
+    print("FOUND {} MATCHES FOR {}".format(len(matches.df), feature_id))
+
+    num_matches = len(matches.df)
+    coverage_lists = [None] * num_matches
+    normalised_coverage_lists = [None] * num_matches
+
+    num_bins = 1000
+
+    for i in range(1, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+        samfile = pysam.AlignmentFile(filename, 'rb')
+
+        i = 0
+        for index, row in matches.df.iterrows():
+            print(i)
+            a, c, t, g = samfile.count_coverage(
+                contig=row['seq_id'], 
+                start=row['start'], 
+                stop=row['end'], 
+                quality_threshold=MIN_PHRED
+            )
+
+            c = numpy.add(numpy.add(a, c), numpy.add(g, t))
+
+            if (row["strand"] == "-"):
+                c = list(reversed(c))
+
+            # resample coverage into an array of size num_bins
+            x = numpy.arange(0, len(c), len(c) / num_bins)
+            resampled_coverage = numpy.interp(x, range(len(c)), c)
+            coverage_lists[i] = resampled_coverage
+
+            if resampled_coverage.max() > 0:
+                normalised_resampled_coverage = resampled_coverage * (1.0 / resampled_coverage.max())
+                normalised_coverage_lists[i] = normalised_resampled_coverage
+            else:
+                normalised_coverage_lists[i] = resampled_coverage
+
+            i += 1
+
+        samfile.close()
+
+    total_coverage = numpy.array([sum(i) for i in zip(*coverage_lists)])
+
+    all_normalised_total_coverage = numpy.array([sum(i) for i in zip(*normalised_coverage_lists)])
+    normalised_total_coverage = all_normalised_total_coverage * (1.0 / all_normalised_total_coverage.max())
+
+    # this looks at coverage for each gene, resamples and normalises the coverage and adds it to a list
+    # then takes the average of all those resampled and normalised coverages
+    # this smooths out the cases where some genes might have read depth in the 1000's, and others in the 10's
+    # so our data isn't skewed toward genes that are higher expressed 
+    plt.plot(normalised_total_coverage)
+    plt.title("normalised_total_coverage read depth for {}".format(feature_id))
+    plt.figure()
+    # this looks at the coverage for each gene and resamples it, then takes the sum of all those resampled coverages and plots it
+    # this can be skewed towards genes which have greater read depth
+    plt.plot(total_coverage)
+    plt.title("read depth for {}".format(feature_id))
+    plt.show()
 
 if FUNCTION == "plot":
     print("plotting...")
@@ -331,6 +420,8 @@ if FUNCTION == "plot":
 
     read_summaries = calc_tlen_distribution(d_tlen)
     plot_read_distribution(d_tlen, read_summaries)
+
+
 
 
     try:
