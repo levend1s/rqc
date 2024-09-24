@@ -356,7 +356,7 @@ if FUNCTION == "coverage":
     coverage_lists = [None] * num_matches
     normalised_coverage_lists = [None] * num_matches
 
-    num_bins = 1000
+    num_bins = 100
 
     for i in range(1, len(INPUT), 2):
         label = INPUT[i]
@@ -366,6 +366,7 @@ if FUNCTION == "coverage":
         i = 0
         for index, row in matches.df.iterrows():
             print(i)
+
             a, c, t, g = samfile.count_coverage(
                 contig=row['seq_id'], 
                 start=row['start'], 
@@ -402,13 +403,19 @@ if FUNCTION == "coverage":
     # then takes the average of all those resampled and normalised coverages
     # this smooths out the cases where some genes might have read depth in the 1000's, and others in the 10's
     # so our data isn't skewed toward genes that are higher expressed 
-    plt.plot(normalised_total_coverage)
-    plt.title("normalised_total_coverage read depth for {}".format(feature_id))
-    plt.figure()
+    fig, axes = plt.subplots()
+    plt.plot(total_coverage, color="red")
+    axes.set_ylabel("total read depth (nt)", color="red")
+    axes.set_ylim(ymin=0)
     # this looks at the coverage for each gene and resamples it, then takes the sum of all those resampled coverages and plots it
     # this can be skewed towards genes which have greater read depth
-    plt.plot(total_coverage)
+    axes_2 = axes.twinx()
+    axes_2.set_ylabel("normalised read depth", color="blue")
+    axes_2.plot(normalised_total_coverage, color="blue")
+    axes_2.set_ylim(ymin=0)
+
     plt.title("read depth for {}".format(feature_id))
+    fig.tight_layout()
     plt.show()
 
 if FUNCTION == "plot":
