@@ -365,16 +365,35 @@ if FUNCTION == "coverage":
 
         i = 0
         for index, row in matches.df.iterrows():
-            print(i)
+            # DEBUGGING
+            # print(i)
+            # if i == num_matches:
+            #     break
 
-            a, c, t, g = samfile.count_coverage(
+            # TODO: if two genes are close to each other, then this doesn't discern for only reads mapped to our gene of interest
+            # so we can end up with weird lumps in the 5' end
+            # a, c, t, g = samfile.count_coverage(
+            #     contig=row['seq_id'], 
+            #     start=row['start'], 
+            #     stop=row['end'], 
+            #     quality_threshold=MIN_PHRED
+            # )
+            # c = numpy.add(numpy.add(a, c), numpy.add(g, t))
+
+            c = [0] * (row['end'] - row['start'])
+            j = 0
+            for column in samfile.pileup(
                 contig=row['seq_id'], 
                 start=row['start'], 
                 stop=row['end'], 
-                quality_threshold=MIN_PHRED
-            )
-
-            c = numpy.add(numpy.add(a, c), numpy.add(g, t))
+                min_mapping_quality=MIN_MAPQ,
+                truncate = True
+            ):
+                # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
+                read_depth = len(list(filter(None, column.get_query_sequences())))
+                c[j] = read_depth
+                j += 1
+                
 
             if (row["strand"] == "-"):
                 c = list(reversed(c))
@@ -407,12 +426,15 @@ if FUNCTION == "coverage":
     plt.plot(total_coverage, color="red")
     axes.set_ylabel("total read depth (nt)", color="red")
     axes.set_ylim(ymin=0)
+
     # this looks at the coverage for each gene and resamples it, then takes the sum of all those resampled coverages and plots it
     # this can be skewed towards genes which have greater read depth
     axes_2 = axes.twinx()
     axes_2.set_ylabel("normalised read depth", color="blue")
     axes_2.plot(normalised_total_coverage, color="blue")
     axes_2.set_ylim(ymin=0)
+    # axes_2.set_xlim(xmin=0, xmax=100)
+
 
     plt.title("read depth for {}".format(feature_id))
     fig.tight_layout()
