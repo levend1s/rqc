@@ -244,8 +244,6 @@ def process_bamfiles():
         mapq_scores = []
         template_lengths = []
         read_ids = []
-        cigar_tuples = []
-
 
 
         samfile = pysam.AlignmentFile(filename, 'rb')
@@ -262,7 +260,6 @@ def process_bamfiles():
                 # our dorado modbam files have TLEN as 0, why? Not all entries have an MN:i tag, why?
                 template_lengths.append(len(x.query_sequence))
                 read_ids.append(x.query_name)
-                cigar_tuples.append(x.cigartuples)
 
 
         d_phred[label] = numpy.array(phred_scores)
@@ -275,7 +272,6 @@ def process_bamfiles():
             "phred_scores": phred_scores,
             "mapq_scores": mapq_scores,
             "template_lengths": template_lengths,
-            "cigar_tuples": cigar_tuples
         })
 
         samfile.close()
@@ -366,7 +362,7 @@ if FUNCTION == "coverage":
         i = 0
         for index, row in matches.df.iterrows():
             # DEBUGGING
-            # print(i)
+            print(i)
             # if i == num_matches:
             #     break
 
@@ -380,6 +376,10 @@ if FUNCTION == "coverage":
             # )
             # c = numpy.add(numpy.add(a, c), numpy.add(g, t))
 
+            # This is the correct way to get gene coverage, since we can filter for reads of low mapping quality
+            # It does not check the read is on the correct strand, and it does not check that the read mapped primarily
+            # to the gene of interest (in the case two genes are close together, and some transcript overhand from one
+            # gene bleeds into another gene coverage)
             c = [0] * (row['end'] - row['start'])
             j = 0
             for column in samfile.pileup(
@@ -435,7 +435,6 @@ if FUNCTION == "coverage":
     axes_2.set_ylim(ymin=0)
     # axes_2.set_xlim(xmin=0, xmax=100)
 
-
     plt.title("read depth for {}".format(feature_id))
     fig.tight_layout()
     plt.show()
@@ -457,6 +456,86 @@ if FUNCTION == "plot":
         plt.show()
     except:
         pass
+
+
+
+if FUNCTION == "de":
+    de = pandas.read_csv(INPUT[0], sep='\t')
+    # print(de.head())
+
+    de_filtered = de[de["adj.P.Val"] < 0.05]
+    print(de_filtered)
+
+import seaborn
+
+if FUNCTION == "plot_dmr":
+    # plot transcript against dmr score
+
+    d = {}
+
+    heatmap_data = []
+
+    for i in range(0, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+
+        bed = pandas.read_csv(filename, sep='\t')
+        dmr_scores = bed.iloc[:,4]
+        dmr_scores = dmr_scores.values.tolist()
+
+        d[label] = dmr_scores
+        heatmap_data.append(dmr_scores)
+
+    dmr_cutoff = 1000
+    high_dmr_scores = [x for x in dmr_scores if x > dmr_cutoff]
+
+    # plt.violinplot(high_dmr_scores)
+    # seaborn.stripplot(high_dmr_scores)
+    a = numpy.random.random((16, 16))
+    # plt.imshow([high_dmr_scores, high_dmr_scores], cmap='hot', interpolation='nearest')
+    plt.plot(high_dmr_scores)
+    plt.show()
+
+
+if FUNCTION == "find_dmr":
+    # we'll consider a region differentially methylated as a result of METTL3 knock sideways if
+    # - the average scores across C1,2 vs K1,2 is above 1 likelihood
+    # AND the average score across c1vsc2 and k1vsk2 is below 1 likelihood
+
+    label = INPUT[0]
+    filename = INPUT[1]
+    bed = pandas.read_csv(INPUT[1], sep='\t')
+    df = bed[bed.columns[3:5]]
+    df.columns = ["region", label]
+
+    for i in range(2, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+
+        this_bed = pandas.read_csv(filename, sep='\t')
+        dmr_scores = this_bed[this_bed.columns[3:5]]
+        dmr_scores.columns = ["region", label]
+
+        # merge into df
+        df = df.merge(dmr_scores, on="region", how="left")
+
+    same_treatment_columns = df[df.columns[1:3]]
+    diff_treatment_columns = df[df.columns[3:7]]
+
+    df['same_treatment_average'] = same_treatment_columns.mean(numeric_only=True, axis=1)
+    df['diff_treatment_average'] = diff_treatment_columns.mean(numeric_only=True, axis=1)
+
+    SAME_TREATMENT_THRESHOLD = 0
+    DIFF_TREATMENT_THRESHOLD = 1
+
+    df['differentially_expressed'] = False
+    df.loc[(df['same_treatment_average'] <= SAME_TREATMENT_THRESHOLD) & (df['diff_treatment_average'] >= DIFF_TREATMENT_THRESHOLD), 'differentially_expressed'] = True
+
+    # write dataframe to file
+    df.to_csv(OUTFILE, sep='\t')
+        
+
+
 
 
 
