@@ -370,7 +370,7 @@ if FUNCTION == "base_coverage":
         filename = INPUT[i+1]
         samfile = pysam.AlignmentFile(filename, 'rb')
 
-        output = pandas.DataFrame(columns = ["seq_id", "start", "end", "count_a", "count_t", "count_c", "count_g"])
+        output = pandas.DataFrame(columns = ["seq_id", "start", "end", "count_a", "count_c", "count_g", "count_t"])
 
         for index, row in matches.iterrows():
             # DEBUGGING
@@ -380,7 +380,7 @@ if FUNCTION == "base_coverage":
 
             # TODO: if two genes are close to each other, then this doesn't discern for only reads mapped to our gene of interest
             # so we can end up with weird lumps in the 5' end
-            a, c, t, g = samfile.count_coverage(
+            a, c, g, t = samfile.count_coverage(
                 contig=row['seq_id'], 
                 start=row['start'], 
                 stop=row['end'],
@@ -396,19 +396,19 @@ if FUNCTION == "base_coverage":
             #     print(column)
 
             sum_a = sum(a)
-            sum_t = sum(t)
             sum_c = sum(c)
             sum_g = sum(g)
+            sum_t = sum(t)
 
-            output.loc[index] = [row['seq_id']] + [row['start']] + [row['end']] + [sum_a] + [sum_t] + [sum_c] + [sum_g]
+            output.loc[index] = [row['seq_id']] + [row['start']] + [row['end']] + [sum_a] + [sum_c] + [sum_g] + [sum_t]
 
 
         print(output)
         print("total {} {} {} {}".format(
             output['count_a'].sum(),
-            output['count_t'].sum(),
             output['count_c'].sum(),
-            output['count_g'].sum()
+            output['count_g'].sum(),
+            output['count_t'].sum()
         ))
         
             
