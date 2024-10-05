@@ -361,7 +361,6 @@ if FUNCTION == "base_coverage":
 
         num_matches = len(matches.df)
         matches = matches.df
-        print(matches)
 
     print("FOUND {} MATCHES FOR {}".format(num_matches, feature_id))
 
@@ -387,14 +386,14 @@ if FUNCTION == "base_coverage":
                 stop=row['end'],
                 quality_threshold=0
             )
-            for column in samfile.pileup(
-                contig=row['seq_id'], 
-                start=row['start'], 
-                stop=row['end'], 
-                min_mapping_quality=MIN_MAPQ,
-                truncate = True
-            ):
-                print(column)
+            # for column in samfile.pileup(
+            #     contig=row['seq_id'], 
+            #     start=row['start'], 
+            #     stop=row['end'], 
+            #     min_mapping_quality=MIN_MAPQ,
+            #     truncate = True
+            # ):
+            #     print(column)
 
             sum_a = sum(a)
             sum_t = sum(t)
