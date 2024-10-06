@@ -618,8 +618,21 @@ if FUNCTION == "find_dmr":
     # write dataframe to file
     df.to_csv(OUTFILE, sep='\t')
         
+import logomaker
+if FUNCTION == "logo":
+    filename = INPUT[0]
 
-
+    crp_df = -logomaker.get_example_matrix('crp_energy_matrix',
+                                        print_description=False)
+    
+    f = open(filename, 'r')
+    seqs = f.read().splitlines()
+    counts_matrix = logomaker.alignment_to_matrix(seqs)
+    print(counts_matrix)
+    l = logomaker.Logo(counts_matrix)
+    l.ax.set_xticklabels(["", "-2", "-1", "0", "+1", "+2"])
+    l.ax.set_ylabel('count')
+    plt.show()
 
 
 
