@@ -197,7 +197,6 @@ def plot_read_distribution(tlens, read_summaries):
 
     labels = []
     for k in lengths_combined.keys():
-        group = k.split("_")[1]
 
         labels.append(
             "{}" "\n"
@@ -533,7 +532,7 @@ if FUNCTION == "plot_coverage":
     axes.set_ylabel("total read depth (nt)", color="red")
     axes.set_ylim(ymin=0)
 
-    axes.set_xlabel("% through gene (5' -> 3')")
+    axes.set_xlabel("% through gene")
 
     # this looks at the coverage for each gene and resamples it, then takes the sum of all those resampled coverages and plots it
     # this can be skewed towards genes which have greater read depth
