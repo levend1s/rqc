@@ -108,12 +108,16 @@ def calc_tlen_distribution(tlens):
 def plot_qscore_hists(qscores):
     for key in qscores.keys():
         bins = numpy.arange(numpy.floor(qscores[key].min()), numpy.ceil(qscores[key].max()))
+        print("num bins {}".format(len(bins)))
         qscore_hist, bin_edges = numpy.histogram(qscores[key], bins=bins, density=True)
         # bin_edges has len(qscore_hist) + 1. We could find the midpoint of each edge, but let's be lazy and take the leftmost edge
-        plt.plot(bin_edges[:-1], qscore_hist, label=key)  # arguments are passed to np.histogram
+        plt.plot(bin_edges[:-1], qscore_hist, label=key.replace("_pfal", ""))  # arguments are passed to np.histogram
 
-    plt.title("PHRED")
+    # plt.title("PHRED")
     plt.legend(loc="upper right")
+    plt.xlabel("transcript quality (qscore)")
+    plt.ylabel("density")
+
     if (OUTFILE):
         plt.savefig("phred_{}".format(OUTFILE))
 
@@ -128,7 +132,7 @@ def plot_mapq_hists(mapqs):
 
 def plot_read_distribution(tlens, read_summaries):
     plt.figure()
-    plt.title("read lengths")
+    # plt.title("read lengths")
 
     print(read_summaries)
 
@@ -143,12 +147,22 @@ def plot_read_distribution(tlens, read_summaries):
         outliers[label] = [x for x in tlens[label] if x > upper or x < lower]
         filtered_for_outliers[label] = [x for x in tlens[label] if x < upper and x > lower]
 
+    org_names = {
+        '36C1_Pfal': 'P. falciparum',
+        '36C1_Yeast': 'S. cerevisiae',
+        '36C1_Human': 'H. sapien',
+
+        'pfal': 'P. falciparum',
+        'yeast': 'S. cerevisiae',
+        'humans': 'H. sapien'
+    }
+
     labels = []
     for k in tlens.keys():
         labels.append(
             "{}" "\n"
-            "n_reads={}" "\n"
-            "n_outliers={}".format(k, len(filtered_for_outliers[k]), len(outliers[k]))
+            "{:,} reads" "\n"
+            "{:,} outliers".format(org_names[k], len(filtered_for_outliers[k]), len(outliers[k]))
         )
     axes = plt.gca()
     axes.set_xticks(numpy.arange(1, len(labels) + 1), labels=labels)
@@ -618,8 +632,9 @@ if FUNCTION == "find_dmr":
     # write dataframe to file
     df.to_csv(OUTFILE, sep='\t')
         
-import logomaker
 if FUNCTION == "logo":
+    import logomaker
+
     filename = INPUT[0]
 
     crp_df = -logomaker.get_example_matrix('crp_energy_matrix',
@@ -634,7 +649,48 @@ if FUNCTION == "logo":
     l.ax.set_ylabel('count')
     plt.show()
 
+if FUNCTION == "plot_entropy":
+    # read in an entropy regions bed file and plot a pdf histogram for mean entropy 
+    column = INPUT[0]
+    filename = INPUT[1]
+
+    bed = pandas.read_csv(filename, sep='\t')
+    entropy_values = bed[bed.columns[int(column)]].to_numpy()
+    print(len(entropy_values))
+
+    for i in range(2, len(INPUT)):
+        filename = INPUT[i]
+        b = pandas.read_csv(filename, sep='\t')
+        e = b[b.columns[int(column)]].to_numpy()
+        entropy_values = numpy.append(entropy_values, e)
+        print(len(entropy_values))
 
 
+    bins = numpy.arange(round(entropy_values.min(), 2), round(entropy_values.max(), 2), step=0.01)
+    entropy_hist, bin_edges = numpy.histogram(entropy_values, bins=bins)
+    # bin_edges has len(qscore_hist) + 1. We could find the midpoint of each edge, but let's be lazy and take the leftmost edge
+
+    # print(qscore_hist)
+    # print(bin_edges[:-1])
+
+    log_entropy_hist = numpy.log10(entropy_hist)
+    log_entropy_hist[log_entropy_hist == -numpy.inf] = 0
+
+    xnew = numpy.linspace(bin_edges[:-1].min(), bin_edges[:-1].max(), 300) 
+    spl = scipy.interpolate.make_interp_spline(bin_edges[:-1], log_entropy_hist, k=3)  # type: BSpline
+    power_smooth = spl(xnew)
+
+    axes = plt.gca()
+    axes.set_ylim(ymin=0, ymax=4)
+    plt.plot(xnew, power_smooth)
+
+    plt.figure()
+    plt.yscale('log')
+    plt.plot(bin_edges[:-1], entropy_hist)  # arguments are passed to np.histogram
+
+
+    plt.show()
+
+    
 
 
