@@ -544,7 +544,9 @@ if FUNCTION == "plot_coverage":
 
     # plt.title("read depth for {}".format(feature_id))
     fig.tight_layout()
-    plt.show()
+
+    if (OUTFILE):
+        plt.savefig("coverage_{}".format(OUTFILE))
 
 if FUNCTION == "plot":
     print("plotting...")
