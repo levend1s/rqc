@@ -453,21 +453,23 @@ if FUNCTION == "plot_coverage":
 
     print("FOUND {} MATCHES FOR {}".format(len(matches.df), feature_id))
 
+    num_samples = int((len(INPUT) - 1) / 2)
+
     num_matches = len(matches.df)
-    coverage_lists = [None] * num_matches
-    normalised_coverage_lists = [None] * num_matches
+    coverage_lists = [None] * num_matches * num_samples
+    normalised_coverage_lists = [None] * num_matches * num_samples
 
     num_bins = 100
+    index = 0
 
-    for i in range(1, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
+    for in_index in range(1, len(INPUT), 2):
+        label = INPUT[in_index]
+        filename = INPUT[in_index+1]
         samfile = pysam.AlignmentFile(filename, 'rb')
 
-        i = 0
-        for index, row in matches.df.iterrows():
+        for row_index, row in matches.df.iterrows():
             # DEBUGGING
-            print(i)
+            print(index)
             # if i == num_matches:
             #     break
 
@@ -506,15 +508,15 @@ if FUNCTION == "plot_coverage":
             # resample coverage into an array of size num_bins
             x = numpy.arange(0, len(c), len(c) / num_bins)
             resampled_coverage = numpy.interp(x, range(len(c)), c)
-            coverage_lists[i] = resampled_coverage
+            coverage_lists[index] = resampled_coverage
 
             if resampled_coverage.max() > 0:
                 normalised_resampled_coverage = resampled_coverage * (1.0 / resampled_coverage.max())
-                normalised_coverage_lists[i] = normalised_resampled_coverage
+                normalised_coverage_lists[index] = normalised_resampled_coverage
             else:
-                normalised_coverage_lists[i] = resampled_coverage
+                normalised_coverage_lists[index] = resampled_coverage
 
-            i += 1
+            index += 1
 
         samfile.close()
 
@@ -544,6 +546,7 @@ if FUNCTION == "plot_coverage":
 
     # plt.title("read depth for {}".format(feature_id))
     fig.tight_layout()
+    plt.show()
 
     if (OUTFILE):
         plt.savefig("coverage_{}".format(OUTFILE))
