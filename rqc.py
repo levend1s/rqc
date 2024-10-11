@@ -152,6 +152,10 @@ def plot_read_distribution(tlens, read_summaries):
         '36C1_Yeast': 'S. cerevisiae',
         '36C1_Human': 'H. sapien',
 
+        'Pfal': 'P. falciparum',
+        'Yeast': 'S. cerevisiae',
+        'Human': 'H. sapien',
+
         'pfal': 'P. falciparum',
         'yeast': 'S. cerevisiae',
         'humans': 'H. sapien'
@@ -164,10 +168,10 @@ def plot_read_distribution(tlens, read_summaries):
             "{:,} reads" "\n"
             "{:,} outliers".format(org_names[k], len(filtered_for_outliers[k]), len(outliers[k]))
         )
-    axes = plt.gca()
+    fig, axes = plt.subplots()
     axes.set_xticks(numpy.arange(1, len(labels) + 1), labels=labels)
     axes.set_ylabel("read length (nt)")
-
+    fig.tight_layout()
     plt.violinplot(filtered_for_outliers.values())
 
     if (OUTFILE):
@@ -175,7 +179,7 @@ def plot_read_distribution(tlens, read_summaries):
 
     # ---------------- violin plot combining all samples ----------------
     plt.figure()
-    plt.title("read lengths all samples")
+    # plt.title("read lengths all samples")
 
     lengths_combined = {}
     lengths_combined_outliers = {}
@@ -195,12 +199,14 @@ def plot_read_distribution(tlens, read_summaries):
     for k in lengths_combined.keys():
         labels.append(
             "{}" "\n"
-            "n_reads={}" "\n"
-            "n_outliers={}".format(k, len(lengths_combined[k]), len(lengths_combined_outliers[k]))
+            "{:,} reads" "\n"
+            "{:,} outliers".format(org_names[k], len(lengths_combined[k]), len(lengths_combined_outliers[k]))
         )
     axes = plt.gca()
+    fig, axes = plt.subplots()
     axes.set_xticks(numpy.arange(1, len(labels) + 1), labels=labels)
     axes.set_ylabel("read length (nt)")
+    fig.tight_layout()
 
     plt.violinplot(lengths_combined.values())
 
