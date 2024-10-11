@@ -161,21 +161,21 @@ def plot_read_distribution(tlens, read_summaries):
         'humans': 'H. sapien'
     }
 
-    labels = []
-    for k in tlens.keys():
-        labels.append(
-            "{}" "\n"
-            "{:,} reads" "\n"
-            "{:,} outliers".format(org_names[k], len(filtered_for_outliers[k]), len(outliers[k]))
-        )
-    fig, axes = plt.subplots()
-    axes.set_xticks(numpy.arange(1, len(labels) + 1), labels=labels)
-    axes.set_ylabel("read length (nt)")
-    fig.tight_layout()
-    plt.violinplot(filtered_for_outliers.values())
+    # labels = []
+    # for k in tlens.keys():
+    #     labels.append(
+    #         "{}" "\n"
+    #         "{:,} reads" "\n"
+    #         "{:,} outliers".format(org_names[k], len(filtered_for_outliers[k]), len(outliers[k]))
+    #     )
+    # fig, axes = plt.subplots()
+    # axes.set_xticks(numpy.arange(1, len(labels) + 1), labels=labels)
+    # axes.set_ylabel("read length (nt)")
+    # fig.tight_layout()
+    # plt.violinplot(filtered_for_outliers.values())
 
-    if (OUTFILE):
-        plt.savefig("readlengths_{}".format(OUTFILE))
+    # if (OUTFILE):
+    #     plt.savefig("readlengths_{}".format(OUTFILE))
 
     # ---------------- violin plot combining all samples ----------------
     plt.figure()
@@ -197,6 +197,8 @@ def plot_read_distribution(tlens, read_summaries):
 
     labels = []
     for k in lengths_combined.keys():
+        group = k.split("_")[1]
+
         labels.append(
             "{}" "\n"
             "{:,} reads" "\n"
@@ -531,6 +533,8 @@ if FUNCTION == "plot_coverage":
     axes.set_ylabel("total read depth (nt)", color="red")
     axes.set_ylim(ymin=0)
 
+    axes.set_xlabel("% through gene (5' -> 3')")
+
     # this looks at the coverage for each gene and resamples it, then takes the sum of all those resampled coverages and plots it
     # this can be skewed towards genes which have greater read depth
     axes_2 = axes.twinx()
@@ -539,7 +543,7 @@ if FUNCTION == "plot_coverage":
     axes_2.set_ylim(ymin=0)
     # axes_2.set_xlim(xmin=0, xmax=100)
 
-    plt.title("read depth for {}".format(feature_id))
+    # plt.title("read depth for {}".format(feature_id))
     fig.tight_layout()
     plt.show()
 
@@ -548,7 +552,7 @@ if FUNCTION == "plot":
     process_bamfiles()
 
     plot_qscore_hists(d_phred)
-    plot_mapq_hists(d_mapq)
+    #plot_mapq_hists(d_mapq)
 
     read_summaries = calc_tlen_distribution(d_tlen)
     plot_read_distribution(d_tlen, read_summaries)
