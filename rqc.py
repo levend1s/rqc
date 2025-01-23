@@ -3,9 +3,15 @@ import matplotlib.pyplot as plt
 import argparse
 import numpy
 import pandas
+import gffpandas.gffpandas as gffpandas
+import sys
+import scipy
+import ast
+
+numpy.seterr(divide='ignore', invalid='ignore')
 
 parser = argparse.ArgumentParser(description="filter bam file by qscores / mapqs")
-parser.add_argument('function')
+parser.add_argument('COMMAND')
 parser.add_argument('inputs', nargs='+')
 parser.add_argument('-q', '--min_phred', type=int, default=0)
 parser.add_argument('-m', '--min_mapq', type=int, default=0)
@@ -18,6 +24,8 @@ parser.add_argument('-v', '--verbose', type=bool, default=False)
 parser.add_argument('-o', '--outfile', type=str)
 parser.add_argument('-f', '--feature', type=str)
 parser.add_argument('-a', '--annotation_file', type=str)
+parser.add_argument('--coverage_type', type=str, default = "gene")
+
 
 
 
@@ -27,7 +35,7 @@ INPUT = args.inputs
 MIN_PHRED = args.min_phred
 MIN_MAPQ = args.min_mapq
 MIN_READ_LENGTH = args.min_read_length
-FUNCTION = args.function
+COMMAND = args.COMMAND
 OUTFILE = args.outfile
 CHECK_DUPLICATE_READS = args.check_duplicate_reads
 VERBOSE = args.verbose
@@ -36,6 +44,7 @@ REVERSE_SEARCH = args.reverse_search
 SORT_BY = args.sort_by
 FEATURE = args.feature
 ANNOTATION_FILE= args.annotation_file
+COVERAGE_TYPE= args.coverage_type
 
 
 d_phred = {}
@@ -297,7 +306,7 @@ def process_bamfiles():
 
         samfile.close()
 
-if FUNCTION == "search":
+if COMMAND == "search":
     print("searching...")
     process_bamfiles()
 
@@ -321,7 +330,7 @@ if FUNCTION == "search":
     print(df)
 
 
-if FUNCTION == "inspect":
+if COMMAND == "inspect":
     print("inspecting...")
 
     read_id = INPUT[0]
@@ -346,12 +355,8 @@ if FUNCTION == "inspect":
 
     for a in alignments:
         print(a)
-    
-import gffpandas.gffpandas as gffpandas
-import sys
-import scipy
 
-if FUNCTION == "base_coverage":
+if COMMAND == "base_coverage":
     # load annotation file
     feature_id = INPUT[0]
     print("summarising base coverage for {}...".format(feature_id))
@@ -431,35 +436,231 @@ if FUNCTION == "base_coverage":
             output['count_g'].sum(),
             output['count_t'].sum()
         ))
-        
-            
 
+# options: total, average, max
+def resample_coverage(cov, bins, method):
+    # handle the case where the subfeature (cov) is shorter than the number of bins
+    if len(cov) < bins:
+        temp_cov = []
+        for e in cov:
+            temp_cov += [e] * bins
+        cov = temp_cov
 
-if FUNCTION == "plot_coverage":
+    window_size = int(len(cov) / bins)
+
+    resampled_coverage = numpy.zeros(bins)
+    for window_index in range(bins):
+        if method == "sum":
+            resampled_coverage[window_index] = sum( cov[(window_size * window_index) : (window_size * (window_index+1))] )
+        elif method == "max":
+            resampled_coverage[window_index] = numpy.array(cov[(window_size * window_index) : (window_size * (window_index+1))]).max()
+        elif method == "mean":
+            resampled_coverage[window_index] = numpy.array(cov[(window_size * window_index) : (window_size * (window_index+1))]).mean()
+        else:
+            print("WARNING: resample coverage method not provided")
+
+    return resampled_coverage
+
+def normalise_coverage(cov):
+    if cov.max() > 0:
+        diff = cov.max() - cov.min()
+        if diff == 0:
+            normalised_resampled_coverage = cov * (1.0 / cov.max())
+        else:
+            normalised_resampled_coverage = (cov - cov.min()) * (1.0 / diff)
+
+        return normalised_resampled_coverage
+    else:
+        return cov
+    
+# returns df of child features for tx_id
+def get_feature_children(tx_id, gff_df):
+    matches = gff_df.get_feature_by_attribute("Parent", tx_id)
+    return matches
+
+def plot_gene_coverage(coverages):
+    textstr = "num genes: {}\nmean transcript length: {}\nnum bins: {}".format(coverages['num_matches'] * coverages['num_samples'], coverages['tx_lengths_mean'], coverages['num_bins'])
+
+    fig, axes = plt.subplots()
+    plt.plot(coverages['coverage'], label="coverage: {}".format(coverages['method']), color="blue")
+
+    if MODS_FILE_BED:
+        plt.plot(coverages['mod_coverage'], label="mod coverage: {}".format(coverages['method']), color="red")
+    
+    plt.legend(loc="upper right")
+    axes.set_ylabel(coverages['y_label'], color="black")
+    axes.set_ylim(ymin=0)
+    axes.set_xlabel("% through gene")
+    axes.text(
+        0.05, 
+        0.95, 
+        textstr, 
+        transform=axes.transAxes, 
+        fontsize=10,
+        verticalalignment='top'
+    )
+
+    # add vlines with intensity relative to value stored in sites_of_interest
+    if coverages['sites_of_interest'].any():
+        barcode_height = 0.05
+        normalised_site_frequencies = normalise_coverage(coverages['sites_of_interest'])
+        barcode_height_normalised_site_frequencies = normalised_site_frequencies * barcode_height
+
+        for x in range(len(coverages['sites_of_interest'])):
+            if normalised_site_frequencies[x]:
+                plt.axvline(
+                    x=x, 
+                    ymin=1 - barcode_height, 
+                    ymax=1 - barcode_height + barcode_height_normalised_site_frequencies[x], 
+                    color='black', 
+                    alpha=normalised_site_frequencies[x], 
+                    ls="-",
+                    linewidth=2.0
+                )
+                # if coverages['sites_of_interest'][x] == max_site_count:
+                #     # add text under x axis
+                #     textstr = "{} DRACHs".format(int(coverages['sites_of_interest'][x]))
+
+                #     axes.text(
+                #         x, 
+                #         -0.10, 
+                #         textstr, 
+                #         fontsize=7,
+                #         verticalalignment='top',
+                #         horizontalalignment='left',
+                #         rotation=-90
+                #     )
+                    
+    fig.tight_layout()
+
+def plot_subfeature_coverage(coverages):
+    fig, axes = plt.subplots()
+    plt.plot(coverages['coverage'], label="total coverage: {}".format(coverages['method']), color="blue")
+
+    if MODS_FILE_BED:
+        plt.plot(coverages['mod_coverage'], label="mod coverage: {}".format(coverages['method']), color="red")
+    
+    plt.legend(loc="upper right")
+    axes.set_ylabel(coverages['y_label'], color="black")
+    axes.set_ylim(ymin=0)
+    plt.tick_params(
+        axis='x',          
+        which='both',
+        bottom=False,
+        top=False,
+        labelbottom=False
+    )
+
+    textstr = "num genes: {}\nmean transcript length: {}\nnum bins: {}".format(coverages['num_matches'] * coverages['num_samples'], coverages['tx_lengths_mean'], coverages['num_bins'])
+    
+    axes.text(
+        0.05, 
+        0.95, 
+        textstr, 
+        transform=axes.transAxes,
+        fontsize=10,
+        verticalalignment='top'
+    )
+
+    subfeature_width = int(coverages['num_bins'] / coverages['num_subfeatures'])
+
+    # rename subfeature names to E1, E2, 3'UTR etc
+    if 'UTR' in subfeature_names[0]:
+        subfeature_names[0] = "5'UTR"
+    if 'UTR' in subfeature_names[1]:
+        subfeature_names[1] = "5'UTR"
+    if 'UTR' in subfeature_names[-1]:
+        subfeature_names[-1] = "3'UTR"
+    if 'UTR' in subfeature_names[-2]:
+        subfeature_names[-2] = "3'UTR"
+
+    exon_idx = 1
+    for i in range(coverages['num_subfeatures']):
+        if subfeature_names[i] == 'CDS':
+            subfeature_names[i] = "E{}".format(exon_idx)
+            exon_idx += 1
+
+    for l in range(coverages['num_subfeatures'] + 1):
+        line_x_coord = subfeature_width * l
+        label_x_coord = (line_x_coord + (subfeature_width / 2))
+        plt.axvline(x= line_x_coord, color='darkgray', ls="--", linewidth=1.0)
+        label_x_coord = line_x_coord + int(subfeature_width / 2)
+        if l != coverages['num_subfeatures']:
+            axes.text(
+                label_x_coord,
+                -0.02, 
+                subfeature_names[l], 
+                fontsize=10,
+                verticalalignment='top',
+                horizontalalignment='center',
+                rotation=45
+            )
+
+     # add vlines with intensity relative to value stored in sites_of_interest
+    if coverages['sites_of_interest'].any():
+        barcode_height = 0.05
+        normalised_site_frequencies = normalise_coverage(coverages['sites_of_interest'])
+        barcode_height_normalised_site_frequencies = normalised_site_frequencies * barcode_height
+
+        for x in range(len(coverages['sites_of_interest'])):
+            if normalised_site_frequencies[x]:
+                plt.axvline(
+                    x=x, 
+                    ymin=1 - barcode_height, 
+                    ymax=1 - barcode_height + barcode_height_normalised_site_frequencies[x], 
+                    color='black', 
+                    alpha=normalised_site_frequencies[x], 
+                    ls="-",
+                    linewidth=2.0
+                )
+
+    fig.tight_layout()
+
+MODS_FILE_BED = "/Users/joshualevendis/OfflineDocuments/RNA/modkit/28C1_pfal_pileup_A_0.9_onlyAswith_nmod_above_zero.bed"
+DRACH_SITES_BED = "/Users/joshualevendis/Documents/RNA/modkit/DRACH_forward_and_negative_motifs_plasmodb.bed"
+
+if COMMAND == "plot_coverage":
     # load annotation file
     feature_id = INPUT[0]
-    print("plotting gene coverage for {}...".format(feature_id))
-
     annotation_file = gffpandas.read_gff3(ANNOTATION_FILE)
+
+    modkit_bedmethyl_header = [
+        "contig", "start", "end", "code", "score", "strand", 
+        "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
+        "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
+    ]
+    if MODS_FILE_BED:
+        mods_file_df = pandas.read_csv(MODS_FILE_BED, sep='\t', names=modkit_bedmethyl_header)
+    if DRACH_SITES_BED:
+        site_file_df = pandas.read_csv(DRACH_SITES_BED, sep='\t', names=modkit_bedmethyl_header)
 
     matches = annotation_file.filter_feature_of_type([feature_id])
     if len(matches.df) == 0:
-        print("WARNING: no matches of type {}".format(feature_id))
-        matches = annotation_file.get_feature_by_attribute("ID", [feature_id])
-
-        if len(matches.df) > 1:
-            print("ERROR: multiple entries for {} found in gff file. exiting...".format(feature_id))
-            sys.exit()
-
-    print("FOUND {} MATCHES FOR {}".format(len(matches.df), feature_id))
+        evaluated_input = ast.literal_eval(feature_id)
+        matches = annotation_file.get_feature_by_attribute("ID", evaluated_input)
+        print("Looking for {} IDs, found {} matches. Plotting gene coverage for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+    else:
+        print("Found {} matches for type {}. Plotting gene coverage...".format(len(matches.df), feature_id))
 
     num_samples = int((len(INPUT) - 1) / 2)
 
     num_matches = len(matches.df)
     coverage_lists = [None] * num_matches * num_samples
     normalised_coverage_lists = [None] * num_matches * num_samples
+    mod_coverage_lists = [None] * num_matches * num_samples
+    normalised_mod_coverage_lists = [None] * num_matches * num_samples
+    sites_of_interest_lists = [None] * num_matches * num_samples
 
-    num_bins = 100
+    num_bins = 1000
+    PLOT_BP_UPSTREAM_DOWNSTREAM = 200
+    METHOD = "max"
+    PYSAM_PILEUP_MAX_DEPTH = 8000 # default
+    tx_lengths = numpy.zeros(num_matches * num_samples)
+    subfeature_names = []
+    num_subfeatures = 0
+
+
+    matches = matches.attributes_to_columns()
     index = 0
 
     for in_index in range(1, len(INPUT), 2):
@@ -467,91 +668,303 @@ if FUNCTION == "plot_coverage":
         filename = INPUT[in_index+1]
         samfile = pysam.AlignmentFile(filename, 'rb')
 
-        for row_index, row in matches.df.iterrows():
-            # DEBUGGING
-            print(index)
-            # if i == num_matches:
-            #     break
-
-            # TODO: if two genes are close to each other, then this doesn't discern for only reads mapped to our gene of interest
-            # so we can end up with weird lumps in the 5' end
-            # a, c, t, g = samfile.count_coverage(
-            #     contig=row['seq_id'], 
-            #     start=row['start'], 
-            #     stop=row['end'], 
-            #     quality_threshold=MIN_PHRED
-            # )
-            # c = numpy.add(numpy.add(a, c), numpy.add(g, t))
-
-            # This is the correct way to get gene coverage, since we can filter for reads of low mapping quality
+        # iterate through each gene/transcript
+        for row_index, row in matches.iterrows():
             # It does not check the read is on the correct strand, and it does not check that the read mapped primarily
             # to the gene of interest (in the case two genes are close together, and some transcript overhand from one
             # gene bleeds into another gene coverage)
-            c = [0] * (row['end'] - row['start'])
-            j = 0
-            for column in samfile.pileup(
-                contig=row['seq_id'], 
-                start=row['start'], 
-                stop=row['end'], 
-                min_mapping_quality=MIN_MAPQ,
-                truncate = True
-            ):
-                # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
-                read_depth = len(list(filter(None, column.get_query_sequences())))
-                c[j] = read_depth
-                j += 1
-                
+            print("getting coverage for {} ({}bp)...".format(row['ID'], row['end'] - row['start']), end='')
 
-            if (row["strand"] == "-"):
-                c = list(reversed(c))
+    # -------- COVERAGE AS % THROUGH SUBFEATURES -------- #
+            if COVERAGE_TYPE == "subfeature":
+                # plasmodium specific thing? drop exons, keep only CDS and UTR
+                # exons seem to overlap with UTR regions in plasmodium gff
+                row_subfeatures = annotation_file.get_feature_by_attribute("Parent", [row['ID']])
+                row_subfeatures = row_subfeatures.df.sort_values(by=['start'])
+                row_subfeatures = row_subfeatures[row_subfeatures.type != "exon"]
 
-            # resample coverage into an array of size num_bins
-            x = numpy.arange(0, len(c), len(c) / num_bins)
-            resampled_coverage = numpy.interp(x, range(len(c)), c)
-            coverage_lists[index] = resampled_coverage
-
-            if resampled_coverage.max() > 0:
-                normalised_resampled_coverage = resampled_coverage * (1.0 / resampled_coverage.max())
-                normalised_coverage_lists[index] = normalised_resampled_coverage
+            elif COVERAGE_TYPE == "gene":
+                row_subfeatures = matches.iloc[index:index+1]
+                print(row_subfeatures)
+                row_subfeatures = row_subfeatures.drop(columns=['ID', 'Name', 'description', 'ebi_biotype'])
             else:
-                normalised_coverage_lists[index] = resampled_coverage
+                print("WARNING: unknown coverage type: {}".format(COVERAGE_TYPE))
+
+            num_subfeatures = len(row_subfeatures)
+
+            # if only one subfeature, add % through on x axis
+            # if num_subfeatures == 1:
+            if PLOT_BP_UPSTREAM_DOWNSTREAM:
+                num_subfeatures += 2
+
+            subfeature_base_coverages = [None] * num_subfeatures
+            subfeature_mod_coverages = [None] * num_subfeatures
+            subfeature_site_coverages = [None] * num_subfeatures
+
+            # ensure
+            if not subfeature_names:
+                if PLOT_BP_UPSTREAM_DOWNSTREAM:
+                    subfeature_names.append("{}bp".format(PLOT_BP_UPSTREAM_DOWNSTREAM))
+                    subfeature_names += (row_subfeatures['type'].to_list())
+                    subfeature_names.append("{}bp".format(PLOT_BP_UPSTREAM_DOWNSTREAM))
+                    
+                else:
+                    subfeature_names = row_subfeatures['type'].to_list()
+
+            else:
+                if set(subfeature_names) != set(row_subfeatures['type'].to_list()) or len(subfeature_names) != num_subfeatures:
+                    print("WARNING - TRANSCRIPT CONTAINS DIFFERENT AMOUNT OF CHILDREN TO OTHERS IN INPUT: {} has {} children".format(row['ID'], num_subfeatures) )
+            
+            subfeature_index = 0
+            # manually add upstream/downstream rows to the subfeature df
+            # cannot assume 3' UTR occurs before the 5' UTR in the annotation file? But we just sorted by start so should be fine
+            if PLOT_BP_UPSTREAM_DOWNSTREAM:
+                first_feature = row_subfeatures.loc[row_subfeatures.index[0]]
+                last_feature = row_subfeatures.loc[row_subfeatures.index[-1]]
+                max_index = max(row_subfeatures.index)
+                row_subfeatures.loc[max_index + 1] = [
+                    first_feature['seq_id'],
+                    "",
+                    "{}bp".format(PLOT_BP_UPSTREAM_DOWNSTREAM),
+                    first_feature['start'] - PLOT_BP_UPSTREAM_DOWNSTREAM,
+                    first_feature['start'],
+                    0,
+                    first_feature['strand'],
+                    "",
+                    ""
+                ]
+                row_subfeatures.loc[max_index + 2] = [
+                    last_feature['seq_id'],
+                    "",
+                    "{}bp".format(PLOT_BP_UPSTREAM_DOWNSTREAM),
+                    last_feature['end'],
+                    last_feature['end'] + PLOT_BP_UPSTREAM_DOWNSTREAM,
+                    0,
+                    last_feature['strand'],
+                    "",
+                    ""
+                ]
+                row_subfeatures = row_subfeatures.sort_values(by=['start'])
+
+            # iterate through each subfeature of the current gene/transcript
+            for _, subfeature in row_subfeatures.iterrows():
+                subfeature_length = subfeature['end'] - subfeature['start'] + 1
+                subfeature_base_coverages[subfeature_index] = numpy.zeros(subfeature_length)
+                subfeature_mod_coverages[subfeature_index] = numpy.zeros(subfeature_length)
+                subfeature_site_coverages[subfeature_index] = numpy.zeros(subfeature_length)
+
+                # -------- BASE COVERAGE
+                # pysam indexes are zero indexed but gff are 1-indexed, so pysam index = gffindex-1
+                for column in samfile.pileup(
+                    contig=subfeature['seq_id'], 
+                    start=subfeature['start'] - 1, 
+                    stop=subfeature['end'],
+                    min_mapping_quality=MIN_MAPQ,
+                    max_depth=PYSAM_PILEUP_MAX_DEPTH,
+                    truncate = True
+                ):
+                    # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
+                    read_depth = len(list(filter(None, column.get_query_sequences())))
+                    # reference pos is 0 indexed, gff (subfeature) is 1 indexed, add one to bring it back to zero
+                    subfeature_base_coverages[subfeature_index][column.reference_pos - subfeature['start'] + 1] = read_depth
+                
+                # -------- MOD COVERAGE 
+                mod_matches = mods_file_df[
+                    (mods_file_df.contig == subfeature['seq_id']) & 
+                    (mods_file_df.start > subfeature['start']) & 
+                    (mods_file_df.start < subfeature['end']) & 
+                    (mods_file_df.strand == subfeature['strand'])
+                ]
+                # convert from genome to transcript space
+                subfeature_mod_positions = mod_matches['start'].to_numpy() - subfeature['start']
+                num_mods_at_pos = mod_matches['num_mod'].to_list()
+
+                for mod_pos_index in range(len(num_mods_at_pos)):
+                    subfeature_mod_coverages[subfeature_index][subfeature_mod_positions[mod_pos_index]] = num_mods_at_pos[mod_pos_index]
+
+                # -------- SITE COVERAGE
+                site_matches = site_file_df[
+                    (site_file_df.contig == subfeature['seq_id']) & 
+                    (site_file_df.start > subfeature['start']) & 
+                    (site_file_df.start < subfeature['end']) & 
+                    (site_file_df.strand == subfeature['strand'])
+                ]
+                # convert from genome to transcript space
+                subfeature_site_positions = site_matches['start'].to_numpy() - subfeature['start']
+
+                for site_pos_index in subfeature_site_positions:
+                    subfeature_site_coverages[subfeature_index][site_pos_index] = 1
+
+                subfeature_index += 1
+
+            # resample base, mod and site coverage for each subfeature into evenly sized bins
+            sf_bin_size = int(num_bins / num_subfeatures)
+            sf_base_coverage_list = [None] * num_subfeatures
+            sf_mod_coverage_list = [None] * num_subfeatures
+            sf_site_coverage_list = [None] * num_subfeatures
+
+            # implicitly reset subfeature_index
+            for subfeature_index in range(num_subfeatures):
+                sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, METHOD)
+                sf_resampled_mod_coverage = resample_coverage(subfeature_mod_coverages[subfeature_index], sf_bin_size, METHOD)
+                sf_resampled_site_coverage = resample_coverage(subfeature_site_coverages[subfeature_index], sf_bin_size, METHOD)
+                
+                sf_base_coverage_list[subfeature_index] = sf_resampled_coverage
+                sf_mod_coverage_list[subfeature_index] = sf_resampled_mod_coverage
+                sf_site_coverage_list[subfeature_index] = sf_resampled_site_coverage
+
+            # flatten resampled subfeature coverages into a single array
+            resampled_base_coverage = numpy.concatenate(sf_base_coverage_list).ravel()
+            resampled_mod_count_coverage = numpy.concatenate(sf_mod_coverage_list).ravel()
+            resampled_site_positions = numpy.concatenate(sf_site_coverage_list).ravel()
+
+    # -------- COVERAGE AS % THROUGH GENE -------- #
+            # elif COVERAGE_TYPE == "gene":
+            #     tx_length = row['end'] - row['start']
+            #     tx_lengths[index] = tx_length
+                
+            #     base_coverage = numpy.zeros(tx_length)
+            #     mod_counts = numpy.zeros(tx_length)
+            #     site_positions = numpy.zeros(tx_length)
+
+            #     # -------- BASE COVERAGE
+            #     for column in samfile.pileup(
+            #         contig=row['seq_id'], 
+            #         start=row['start'], 
+            #         stop=row['end'],
+            #         min_mapping_quality=MIN_MAPQ,
+            #         truncate = True
+            #     ):
+            #         # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
+            #         read_depth = len(list(filter(None, column.get_query_sequences())))
+            #         base_coverage[column.reference_pos - row['start']] = read_depth
+
+            #     # -------- MOD COVERAGE
+            #     PERCENT_MOD_THRESHOLD = 0
+            #     mod_matches = mods_file_df[
+            #         (mods_file_df.contig == row['seq_id']) & 
+            #         (mods_file_df.start > row['start']) & 
+            #         (mods_file_df.start < row['end']) & 
+            #         (mods_file_df.strand == row['strand'])
+            #     ]
+            #     tx_mod_positions = mod_matches['start'].to_numpy() - row['start']
+            #     num_mods_at_pos = mod_matches['num_mod'].to_list()
+
+            #     for mod_pos_index in range(len(tx_mod_positions)):
+            #         mod_counts[tx_mod_positions[mod_pos_index]] = num_mods_at_pos[mod_pos_index]
+
+            #     # -------- SITE COVERAGE
+            #     site_matches = site_file_df[
+            #         (site_file_df.contig == row['seq_id']) & 
+            #         (site_file_df.start > row['start']) & 
+            #         (site_file_df.start < row['end']) & 
+            #         (site_file_df.strand == row['strand'])
+            #     ]
+
+            #     # convert DRACH sites to transcript space
+            #     tx_site_positions = site_matches['start'].to_numpy() - row['start']
+
+            #     for site_pos_index in range(len(tx_site_positions)):
+            #         site_positions[tx_site_positions[site_pos_index]] = 1
+
+            #     # resample coverage into an array of size num_bins
+            #     resampled_base_coverage = resample_coverage(base_coverage, num_bins, METHOD)
+
+            #     # resample mods
+            #     resampled_mod_count_coverage = resample_coverage(mod_counts, num_bins, METHOD)
+
+            #     # resample site positions
+            #     resampled_site_positions = resample_coverage(site_positions, num_bins, METHOD)
+
+            # else:
+            #     print("WARNING: unknown coverage type: {}".format(COVERAGE_TYPE))
+
+            # reverse coverages if necessary
+            if (row["strand"] == "-"):
+                resampled_base_coverage = numpy.flip(resampled_base_coverage)
+                resampled_mod_count_coverage = numpy.flip(resampled_mod_count_coverage)
+                resampled_site_positions = numpy.flip(resampled_site_positions)
+
+            print("\tmax coverage: {}".format(int(max(resampled_base_coverage))))
+
+            # add coverages for this gene/transcript to our lists
+            coverage_lists[index] = resampled_base_coverage
+            normalised_coverage_lists[index] = normalise_coverage(resampled_base_coverage)
+            mod_coverage_lists[index] = resampled_mod_count_coverage
+            normalised_mod_coverage_lists[index] = numpy.nan_to_num(resampled_mod_count_coverage / resampled_base_coverage)
+            sites_of_interest_lists[index] = resampled_site_positions
 
             index += 1
 
         samfile.close()
 
-    total_coverage = numpy.array([sum(i) for i in zip(*coverage_lists)])
+    # -------- AGGREGATE AND PLOT COVERAGES -------- #
 
+    # finalised coverage
+    total_coverage = numpy.array([sum(i) for i in zip(*coverage_lists)])
     all_normalised_total_coverage = numpy.array([sum(i) for i in zip(*normalised_coverage_lists)])
     normalised_total_coverage = all_normalised_total_coverage * (1.0 / all_normalised_total_coverage.max())
+
+    # finalised mod coverage
+    total_mod_coverage = numpy.array([sum(i) for i in zip(*mod_coverage_lists)])
+    all_normalised_total_mod_coverage = numpy.array([sum(i) for i in zip(*normalised_mod_coverage_lists)])
+    normalised_total_mod_coverage = all_normalised_total_mod_coverage * (1.0 / all_normalised_total_mod_coverage.max())
+
+    # finalised site of interest coverage
+    total_site_coverage = numpy.array([sum(i) for i in zip(*sites_of_interest_lists)])
+    sites_of_interest = total_site_coverage
 
     # this looks at coverage for each gene, resamples and normalises the coverage and adds it to a list
     # then takes the average of all those resampled and normalised coverages
     # this smooths out the cases where some genes might have read depth in the 1000's, and others in the 10's
-    # so our data isn't skewed toward genes that are higher expressed 
-    fig, axes = plt.subplots()
-    plt.plot(total_coverage, color="red")
-    axes.set_ylabel("total read depth (nt)", color="red")
-    axes.set_ylim(ymin=0)
+    # so our data isn't skewed toward genes that are higher expressed
+    # coverage: dict of read depths of transcript: eg {'sample1': [coverage...], 'sample2': [coverage...]}
+    # mod_coverage: dict of mod coverages to plot: eg {'sample1m6As': [coverage...], 'sample2m6as': [coverage...], 'sample1pseU': [coverage...]}
+    # sites_of_interest: dict of sites of interest to plot as vertical lines??? But how to do this for aggregate transcript searches?
+    #       Maybe plot vlines for individual transcript plots and areas shaded with intensity according to how often motifs appear
 
-    axes.set_xlabel("% through gene")
+    coverages = {
+        "coverage": total_coverage,
+        "mod_coverage": total_mod_coverage,
+        "sites_of_interest": sites_of_interest,
+        
+        "method": METHOD,
+        "num_samples": num_samples,
+        "num_matches": num_matches,
+        "num_subfeatures": num_subfeatures,
+        "num_bins": num_bins,
+        "tx_lengths_mean": int(tx_lengths.mean()),
+        "y_label": "count (nt)"
+    }
 
-    # this looks at the coverage for each gene and resamples it, then takes the sum of all those resampled coverages and plots it
-    # this can be skewed towards genes which have greater read depth
-    axes_2 = axes.twinx()
-    axes_2.set_ylabel("normalised read depth", color="blue")
-    axes_2.plot(normalised_total_coverage, color="blue")
-    axes_2.set_ylim(ymin=0)
-    # axes_2.set_xlim(xmin=0, xmax=100)
+    # SECOND PLOT
+    # if COVERAGE_TYPE == "gene":
+    #     plot_gene_coverage(coverages)
 
-    # plt.title("read depth for {}".format(feature_id))
-    fig.tight_layout()
+    #     coverages['coverage'] = normalised_total_coverage
+    #     coverages['mod_coverage'] = normalised_total_mod_coverage
+    #     coverages['y_label'] = "normalised coverage (au)"
+
+    #     plot_gene_coverage(coverages)
+
+    # elif COVERAGE_TYPE == "subfeature":
+    plot_subfeature_coverage(coverages)
+
+    coverages['coverage'] = normalised_total_coverage
+    coverages['mod_coverage'] = normalised_total_mod_coverage
+    coverages['y_label'] = "normalised coverage (au)"
+
+    plot_subfeature_coverage(coverages)
+
     plt.show()
 
     if (OUTFILE):
         plt.savefig("coverage_{}".format(OUTFILE))
 
-if FUNCTION == "plot":
+
+
+
+if COMMAND == "plot":
     print("plotting...")
     process_bamfiles()
 
@@ -571,16 +984,14 @@ if FUNCTION == "plot":
 
 
 
-if FUNCTION == "de":
+if COMMAND == "de":
     de = pandas.read_csv(INPUT[0], sep='\t')
     # print(de.head())
 
     de_filtered = de[de["adj.P.Val"] < 0.05]
     print(de_filtered)
 
-import seaborn
-
-if FUNCTION == "plot_dmr":
+if COMMAND == "plot_dmr":
     # plot transcript against dmr score
 
     d = {}
@@ -609,7 +1020,7 @@ if FUNCTION == "plot_dmr":
     plt.show()
 
 
-if FUNCTION == "find_dmr":
+if COMMAND == "find_dmr":
     # we'll consider a region differentially methylated as a result of METTL3 knock sideways if
     # - the average scores across C1,2 vs K1,2 is above 1 likelihood
     # AND the average score across c1vsc2 and k1vsk2 is below 1 likelihood
@@ -646,7 +1057,7 @@ if FUNCTION == "find_dmr":
     # write dataframe to file
     df.to_csv(OUTFILE, sep='\t')
         
-if FUNCTION == "logo":
+if COMMAND == "logo":
     import logomaker
 
     filename = INPUT[0]
@@ -663,7 +1074,7 @@ if FUNCTION == "logo":
     l.ax.set_ylabel('count')
     plt.show()
 
-if FUNCTION == "plot_entropy":
+if COMMAND == "plot_entropy":
     # read in an entropy regions bed file and plot a pdf histogram for mean entropy 
     column = INPUT[0]
     filename = INPUT[1]

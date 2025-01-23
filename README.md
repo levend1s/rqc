@@ -3,6 +3,11 @@
 RQC helps you analyse the quality of your BAM files. Input BAM files must be sorted and indexed. RQC can do the following:
 
 * Summarise read PHRED scores for one or multiple BAM files
+* Summarise read MAPQ scores for one or multiple BAM files
+* Generate transcript coverage plots (for all genes or specified genes)
+* Mapping % bar graphs against multiple genomes
+* Sequence logos
+* Violin plots for read lengths
 
 
 ## SETUP
@@ -10,6 +15,12 @@ RQC helps you analyse the quality of your BAM files. Input BAM files must be sor
 # set up and enter virtual environment
 $ python3 -m venv .venv
 $ source .venv/bin/activate
+$ pip install -r requirements.txt
+
+or
+
+$ virtualenv env
+$ source env/bin/activate
 $ pip install -r requirements.txt
 
 # run rqc
@@ -61,4 +72,21 @@ sample	count	total_bases_read	mean	median	Q1	Q3	min	max	N10	N50	N90
 You might then like to find information on a specific read
 ```
 $ python rqc.py inspect ed3f5afc-5154-42aa-b71c-ebfaeb361bbc $(cat samples.txt)
+```
+
+## Usage
+
+# plot_coverage
+
+The plot_coverage command takes in an annotation file, a bam file and a list of gene/transcript ids to generate coverage plots for. It generates a plot with total coverage and normalised coverage against % through gene, 0% 5' -> 3' 100%. Normalised coverage means the sequencing depth is scaled from a true number (like 1000 bases) to a number between 0 and 1. This reduces the impact a highly expressed gene has on the curve and gives a less bias comparison of coverage across the selected genes.
+
+```
+# By type...
+python rqc.py -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff plot_coverage tRNA $(head -n 1 samples.txt)
+
+# By list of gene ids...
+python rqc.py -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff plot_coverage "['PF3D7_0209800']" $(head -n 1 samples.txt)
+
+# if you have a json file you can extract an entry (must be list of gene/transcript ids) with jq in a subshell
+python rqc.py -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff plot_coverage "$(cat /Users/joshualevendis/Documents/RNA/rqc/pfal_mRNA_exon_counts.json | jq -r '."25"')" $(head -n 1 samples.txt)
 ```
