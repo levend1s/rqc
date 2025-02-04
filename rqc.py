@@ -568,12 +568,28 @@ def plot_subfeature_coverage(coverages):
 
     fig.tight_layout()
 
+import time
+
+gff_tree = {}
+annotation_file = gffpandas.read_gff3(ANNOTATION_FILE)
+gff_df = annotation_file.attributes_to_columns()
+
+for row_index, row in gff_df.iterrows():
+    if row['Parent'] in gff_tree:
+        gff_tree[row['Parent']].append(row_index)
+    else:
+        gff_tree[row['Parent']] = [row_index]
+
+
 def getSubfeatures(id, coverage_type, coverage_padding):
+
     if coverage_type == "subfeature":
         # plasmodium specific thing? drop exons, keep only CDS and UTR
         # exons seem to overlap with UTR regions in plasmodium gff
-        row_subfeatures = annotation_file.get_feature_by_attribute("Parent", [id])
-        row_subfeatures = row_subfeatures.df.sort_values(by=['start'])
+
+        # row_subfeatures = annotation_file.get_feature_by_attribute("Parent", [id])
+        row_subfeatures = annotation_file.df.iloc[gff_tree[id]]
+        row_subfeatures = row_subfeatures.sort_values(by=['start'])
         row_subfeatures = row_subfeatures[row_subfeatures.type != "exon"]
 
         # EDGE CASE: collapse multiple UTR's into a single UTR # eg utr_PF3D7_1105800.1_1
@@ -588,12 +604,11 @@ def getSubfeatures(id, coverage_type, coverage_padding):
             row_subfeatures.at[first_utr_index, 'end'] = (row_subfeatures.loc[last_utr_index])['end']
             row_subfeatures.drop(index=last_utr_index, inplace=True)
 
-
     elif coverage_type == "gene":
         # row_subfeatures = matches.iloc[index:index+1]
-        row_subfeatures = annotation_file.get_feature_by_attribute("ID", [id]).df
+        row_subfeatures = gff_df[gff_df.ID == id]
         # drop everything after attributes
-        # row_subfeatures = row_subfeatures.drop(columns=row_subfeatures.columns[9:])
+        row_subfeatures = row_subfeatures.drop(columns=row_subfeatures.columns[9:])
     else:
         print("WARNING: unknown coverage type: {}".format(coverage_type))
 
@@ -628,6 +643,7 @@ def getSubfeatures(id, coverage_type, coverage_padding):
         row_subfeatures = row_subfeatures.sort_values(by=['start'])
 
     return row_subfeatures
+
 
 if COMMAND == "plot_coverage":
     # load annotation file
@@ -692,7 +708,7 @@ if COMMAND == "plot_coverage":
         for row_index, row in matches.iterrows():
             # find subfeatures
             row_subfeatures = getSubfeatures(row['ID'], COVERAGE_TYPE, COVERAGE_PADDING)
-    
+
             if not subfeature_names:
                 subfeature_names = row_subfeatures['type'].to_list()
 
@@ -771,8 +787,9 @@ if COMMAND == "plot_coverage":
             normalised_feature_coverages[feature_index] = normalise_coverage(resampled_base_coverage)
 
             feature_index += 1
-           
+
             print("{}\t {}\t max coverage: {}\t tx length: {}".format(label, row['ID'], int(max(resampled_base_coverage)), row['end'] - row['start']))
+
 
         if type == "bam":
             samfile.close()
