@@ -43,7 +43,7 @@ NUM_RESULTS = args.num_results
 REVERSE_SEARCH = args.reverse_search
 SORT_BY = args.sort_by
 FEATURE = args.feature
-ANNOTATION_FILE= args.annotation_file
+ANNOTATION_FILE_PATH= args.annotation_file
 COVERAGE_TYPE= args.coverage_type
 COVERAGE_PADDING=args.coverage_padding
 COVERAGE_BINS=args.coverage_bins
@@ -53,6 +53,10 @@ d_phred = {}
 d_mapq = {}
 d_tlen = {}
 d_read_ids = {}
+dataframes = {}
+
+GFF_DF = None
+GFF_PARENT_TREE = {}
 
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
@@ -224,7 +228,6 @@ def plot_read_distribution(tlens, read_summaries):
     if (OUTFILE):
         plt.savefig("allreadlengths_{}".format(OUTFILE))
 
-
 def find_multi_reference_alignments(d_reads):
     keys = list(d_reads.keys())
     d_intersects = {}
@@ -263,8 +266,6 @@ def find_multi_reference_alignments(d_reads):
 
     # extra newline :_)
     print()
-
-dataframes = {}
 
 def process_bamfiles():
     for i in range(0, len(INPUT), 2):
@@ -306,137 +307,6 @@ def process_bamfiles():
         })
 
         samfile.close()
-
-if COMMAND == "search":
-    print("searching...")
-    process_bamfiles()
-
-    for sample in dataframes.keys():
-        print(sample)
-
-        if (SORT_BY):
-            dataframes[sample].sort_values(SORT_BY, inplace=True, ascending=(not REVERSE_SEARCH))
-
-        if (NUM_RESULTS):
-            print(dataframes[sample].head(NUM_RESULTS))
-            # print(len(dataframes[sample].cigar_tuples))
-        else:
-            print(dataframes[sample])
-
-    if CHECK_DUPLICATE_READS:
-        find_multi_reference_alignments(d_read_ids)
-
-
-    df = calc_tlen_distribution(d_tlen)
-    print(df)
-
-
-if COMMAND == "inspect":
-    print("inspecting...")
-
-    read_id = INPUT[0]
-    alignments = []
-
-
-    for i in range(1, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
-
-
-
-        samfile = pysam.AlignmentFile(filename, 'rb')
-        iter = samfile.fetch()
-
-        for x in iter:
-            if (x.query_name == read_id):
-                alignments.append(x)
-
-
-        samfile.close()
-
-    for a in alignments:
-        print(a)
-
-if COMMAND == "base_coverage":
-    # load annotation file
-    feature_id = INPUT[0]
-    print("summarising base coverage for {}...".format(feature_id))
-
-    annotation_file = gffpandas.read_gff3(ANNOTATION_FILE)
-
-    if feature_id == "chromosome":
-        matches = pandas.DataFrame(columns = ["seq_id", "start", "end"])
-        i = 0
-        for line in annotation_file.header.splitlines():
-            if "sequence-region" in line:
-                s = line.split(" ")
-
-                matches.loc[i] = [s[1]] + [int(s[2])] + [int(s[3])]
-                i += 1
-        num_matches = len(matches)
-
-
-    else:
-        matches = annotation_file.filter_feature_of_type([feature_id])
-        if len(matches.df) == 0:
-            print("WARNING: no matches of type {}".format(feature_id))
-            matches = annotation_file.get_feature_by_attribute("ID", [feature_id])
-
-            if len(matches.df) > 1:
-                print("ERROR: multiple entries for {} found in gff file. exiting...".format(feature_id))
-                sys.exit()
-
-        num_matches = len(matches.df)
-        matches = matches.df
-
-    print("FOUND {} MATCHES FOR {}".format(num_matches, feature_id))
-
-
-    for i in range(1, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
-        samfile = pysam.AlignmentFile(filename, 'rb')
-
-        output = pandas.DataFrame(columns = ["seq_id", "start", "end", "count_a", "count_c", "count_g", "count_t"])
-
-        for index, row in matches.iterrows():
-            # DEBUGGING
-            print(index)
-            # if i == num_matches:
-            #     break
-
-            # TODO: if two genes are close to each other, then this doesn't discern for only reads mapped to our gene of interest
-            # so we can end up with weird lumps in the 5' end
-            a, c, g, t = samfile.count_coverage(
-                contig=row['seq_id'], 
-                start=row['start'], 
-                stop=row['end'],
-                quality_threshold=0
-            )
-            # for column in samfile.pileup(
-            #     contig=row['seq_id'], 
-            #     start=row['start'], 
-            #     stop=row['end'], 
-            #     min_mapping_quality=MIN_MAPQ,
-            #     truncate = True
-            # ):
-            #     print(column)
-
-            sum_a = sum(a)
-            sum_c = sum(c)
-            sum_g = sum(g)
-            sum_t = sum(t)
-
-            output.loc[index] = [row['seq_id']] + [row['start']] + [row['end']] + [sum_a] + [sum_c] + [sum_g] + [sum_t]
-
-
-        print(output)
-        print("total {} {} {} {}".format(
-            output['count_a'].sum(),
-            output['count_c'].sum(),
-            output['count_g'].sum(),
-            output['count_t'].sum()
-        ))
 
 # options: total, average, max
 def resample_coverage(cov, bins, method):
@@ -568,27 +438,13 @@ def plot_subfeature_coverage(coverages):
 
     fig.tight_layout()
 
-import time
-
-gff_tree = {}
-annotation_file = gffpandas.read_gff3(ANNOTATION_FILE)
-gff_df = annotation_file.attributes_to_columns()
-
-for row_index, row in gff_df.iterrows():
-    if row['Parent'] in gff_tree:
-        gff_tree[row['Parent']].append(row_index)
-    else:
-        gff_tree[row['Parent']] = [row_index]
-
-
 def getSubfeatures(id, coverage_type, coverage_padding):
 
     if coverage_type == "subfeature":
         # plasmodium specific thing? drop exons, keep only CDS and UTR
         # exons seem to overlap with UTR regions in plasmodium gff
 
-        # row_subfeatures = annotation_file.get_feature_by_attribute("Parent", [id])
-        row_subfeatures = annotation_file.df.iloc[gff_tree[id]]
+        row_subfeatures = ANNOTATION_FILE.df.iloc[GFF_PARENT_TREE[id]]
         row_subfeatures = row_subfeatures.sort_values(by=['start'])
         row_subfeatures = row_subfeatures[row_subfeatures.type != "exon"]
 
@@ -606,7 +462,7 @@ def getSubfeatures(id, coverage_type, coverage_padding):
 
     elif coverage_type == "gene":
         # row_subfeatures = matches.iloc[index:index+1]
-        row_subfeatures = gff_df[gff_df.ID == id]
+        row_subfeatures = GFF_DF[GFF_DF.ID == id]
         # drop everything after attributes
         row_subfeatures = row_subfeatures.drop(columns=row_subfeatures.columns[9:])
     else:
@@ -644,6 +500,139 @@ def getSubfeatures(id, coverage_type, coverage_padding):
 
     return row_subfeatures
 
+# ------------------- COMMANDS -------------------  #
+# ------------------- COMMANDS -------------------  #
+# ------------------- COMMANDS -------------------  #
+
+if COMMAND == "search":
+    print("searching...")
+    process_bamfiles()
+
+    for sample in dataframes.keys():
+        print(sample)
+
+        if (SORT_BY):
+            dataframes[sample].sort_values(SORT_BY, inplace=True, ascending=(not REVERSE_SEARCH))
+
+        if (NUM_RESULTS):
+            print(dataframes[sample].head(NUM_RESULTS))
+            # print(len(dataframes[sample].cigar_tuples))
+        else:
+            print(dataframes[sample])
+
+    if CHECK_DUPLICATE_READS:
+        find_multi_reference_alignments(d_read_ids)
+
+
+    df = calc_tlen_distribution(d_tlen)
+    print(df)
+
+if COMMAND == "inspect":
+    print("inspecting...")
+
+    read_id = INPUT[0]
+    alignments = []
+
+
+    for i in range(1, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+
+
+
+        samfile = pysam.AlignmentFile(filename, 'rb')
+        iter = samfile.fetch()
+
+        for x in iter:
+            if (x.query_name == read_id):
+                alignments.append(x)
+
+
+        samfile.close()
+
+    for a in alignments:
+        print(a)
+
+if COMMAND == "base_coverage":
+    # load annotation file
+    feature_id = INPUT[0]
+    print("summarising base coverage for {}...".format(feature_id))
+
+    annotation_file = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+
+    if feature_id == "chromosome":
+        matches = pandas.DataFrame(columns = ["seq_id", "start", "end"])
+        i = 0
+        for line in annotation_file.header.splitlines():
+            if "sequence-region" in line:
+                s = line.split(" ")
+
+                matches.loc[i] = [s[1]] + [int(s[2])] + [int(s[3])]
+                i += 1
+        num_matches = len(matches)
+
+
+    else:
+        matches = annotation_file.filter_feature_of_type([feature_id])
+        if len(matches.df) == 0:
+            print("WARNING: no matches of type {}".format(feature_id))
+            matches = annotation_file.get_feature_by_attribute("ID", [feature_id])
+
+            if len(matches.df) > 1:
+                print("ERROR: multiple entries for {} found in gff file. exiting...".format(feature_id))
+                sys.exit()
+
+        num_matches = len(matches.df)
+        matches = matches.df
+
+    print("FOUND {} MATCHES FOR {}".format(num_matches, feature_id))
+
+
+    for i in range(1, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+        samfile = pysam.AlignmentFile(filename, 'rb')
+
+        output = pandas.DataFrame(columns = ["seq_id", "start", "end", "count_a", "count_c", "count_g", "count_t"])
+
+        for index, row in matches.iterrows():
+            # DEBUGGING
+            print(index)
+            # if i == num_matches:
+            #     break
+
+            # TODO: if two genes are close to each other, then this doesn't discern for only reads mapped to our gene of interest
+            # so we can end up with weird lumps in the 5' end
+            a, c, g, t = samfile.count_coverage(
+                contig=row['seq_id'], 
+                start=row['start'], 
+                stop=row['end'],
+                quality_threshold=0
+            )
+            # for column in samfile.pileup(
+            #     contig=row['seq_id'], 
+            #     start=row['start'], 
+            #     stop=row['end'], 
+            #     min_mapping_quality=MIN_MAPQ,
+            #     truncate = True
+            # ):
+            #     print(column)
+
+            sum_a = sum(a)
+            sum_c = sum(c)
+            sum_g = sum(g)
+            sum_t = sum(t)
+
+            output.loc[index] = [row['seq_id']] + [row['start']] + [row['end']] + [sum_a] + [sum_c] + [sum_g] + [sum_t]
+
+
+        print(output)
+        print("total {} {} {} {}".format(
+            output['count_a'].sum(),
+            output['count_c'].sum(),
+            output['count_g'].sum(),
+            output['count_t'].sum()
+        ))
 
 if COMMAND == "plot_coverage":
     # load annotation file
@@ -659,13 +648,21 @@ if COMMAND == "plot_coverage":
             if not INPUT[in_index].startswith("#"):
                 input_files[INPUT[in_index]] = (INPUT[in_index+1], INPUT[in_index+2])
 
-    annotation_file = gffpandas.read_gff3(ANNOTATION_FILE)
+    # load annotation file and find indexes for all parent children
+    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+
+    for row_index, row in GFF_DF.iterrows():
+        if row['Parent'] in GFF_PARENT_TREE:
+            GFF_PARENT_TREE[row['Parent']].append(row_index)
+        else:
+            GFF_PARENT_TREE[row['Parent']] = [row_index]
 
     # Try to find matches of provided type, if not, assume that input is a list of IDs
-    matches = annotation_file.filter_feature_of_type([feature_id])
+    matches = ANNOTATION_FILE.filter_feature_of_type([feature_id])
     if len(matches.df) == 0:
         evaluated_input = ast.literal_eval(feature_id)
-        matches = annotation_file.get_feature_by_attribute("ID", evaluated_input)
+        matches = ANNOTATION_FILE.get_feature_by_attribute("ID", evaluated_input)
         print("Looking for {} IDs, found {} matches. Plotting gene coverage for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
     else:
         print("Found {} matches for type {}. Plotting gene coverage...".format(len(matches.df), feature_id))
@@ -833,11 +830,8 @@ if COMMAND == "plot_coverage":
 
     plt.show()
 
-    # if (OUTFILE):
-    #     plt.savefig("coverage_{}".format(OUTFILE))
-
-
-
+    if (OUTFILE):
+        plt.savefig("coverage_{}".format(OUTFILE))
 
 if COMMAND == "plot":
     print("plotting...")
@@ -849,15 +843,10 @@ if COMMAND == "plot":
     read_summaries = calc_tlen_distribution(d_tlen)
     plot_read_distribution(d_tlen, read_summaries)
 
-
-
-
     try:
         plt.show()
     except:
         pass
-
-
 
 if COMMAND == "de":
     de = pandas.read_csv(INPUT[0], sep='\t')
@@ -893,7 +882,6 @@ if COMMAND == "plot_dmr":
     # plt.imshow([high_dmr_scores, high_dmr_scores], cmap='hot', interpolation='nearest')
     plt.plot(high_dmr_scores)
     plt.show()
-
 
 if COMMAND == "find_dmr":
     # we'll consider a region differentially methylated as a result of METTL3 knock sideways if
@@ -990,7 +978,4 @@ if COMMAND == "plot_entropy":
 
 
     plt.show()
-
-    
-
 
