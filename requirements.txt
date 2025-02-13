@@ -3,6 +3,7 @@ cycler==0.12.1
 fonttools==4.55.3
 gffpandas==1.2.0
 kiwisolver==1.4.7
+logomaker==0.8.6
 matplotlib==3.10.0
 numpy==2.2.0
 packaging==24.2
