@@ -4,7 +4,22 @@ RQC helps you analyse the quality of your BAM files. Input BAM files must be sor
 
 * Summarise read PHRED scores for one or multiple BAM files
 * Summarise read MAPQ scores for one or multiple BAM files
-* Generate transcript coverage plots (for all genes or specified genes)
+* Generate transcript coverage plots
+    * Accepts bedmethyl and BAM files for coverage plots
+    * Can specify padding
+    * Can show coverage for: 
+        * Genomic regions
+        * Genomic regions split by UTR and CDS
+        * Subfeatures (Exon and UTR boundaries) NOTE all input genes must have the same number of subfeatures for this to work accurately.
+    * Can show frequncy plot of DRACH sites (locations specified by bed file)
+    * Can generate normalised coverage plots, which average normalised individual gene coverage
+    * Can show raw proportion of mod coverage against read depth, or relative abundance
+    * Can calculate locations of 'mod peaks' if given a read depth and mod proportion threshold. If mod abundance exceeds this threshold it's considered a peak, or 'cannonical modification'.
+    * TODO: separate_plots_by_label_prefix
+    * TODO: specify colours in samples.txt
+    * TODO: coverage smoothing
+
+
 * Mapping % bar graphs against multiple genomes
 * Sequence logos
 * Violin plots for read lengths

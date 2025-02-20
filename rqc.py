@@ -66,6 +66,19 @@ PADDING_RATIO = args.padding_ratio
 DEBUG = args.debug
 MOD_NORMALISATION = args.mod_normalisation
 
+# read unmapped (0x4)
+# read reverse strand (0x10)
+# not primary alignment (0x100)
+# read fails platform/vendor quality checks (0x200)
+# read is PCR or optical duplicate (0x400)
+# https://broadinstitute.github.io/picard/explain-flags.html
+BAM_UNMAPPED = 0x4
+BAM_REVERSE_STRAND = 0x10
+BAM_SECONDARY_ALIGNMENT = 0x100
+BAM_FAIL_QC = 0x200
+BAM_DUPLICATE = 0x400
+
+BAM_PILEUP_DEFAULT_FLAGS = BAM_UNMAPPED | BAM_SECONDARY_ALIGNMENT | BAM_FAIL_QC | BAM_DUPLICATE
 
 d_phred = {}
 d_mapq = {}
@@ -760,11 +773,21 @@ if COMMAND == "plot_coverage":
     feature_coverages = {}
     normalised_feature_coverages = {}
     tx_lengths = {}
+    mod_peaks = {}
+
+
+    logfile = open("rqc_plot_coverage_stats.log", "w")
+    logfile_header = "label\tid\tdepth\tlength\tAUC\tnum peaks\tpeak locations"
+    print(logfile_header)
+    logfile.write(logfile_header + "\n")
+
 
     for label, file in input_files.items():
         type, path = file
         feature_coverages[label] = [None] * len(matches.index)
         normalised_feature_coverages[label] = [None] * len(matches.index)
+
+        mod_peaks[label] = {}
 
         if type == "bam":
             samfile = pysam.AlignmentFile(path, 'rb')
@@ -801,6 +824,8 @@ if COMMAND == "plot_coverage":
             num_subfeatures = len(row_subfeatures.index)
             subfeature_base_coverages = [None] * num_subfeatures
 
+            mod_peaks[label][row['ID']] = []
+
             if num_subfeatures > 1:
                 if 'UTR' in subfeature_names[0]:
                     subfeature_names[0] = "5'UTR"
@@ -834,6 +859,17 @@ if COMMAND == "plot_coverage":
                     (site_file_df.strand == row['strand'])
                 ]
 
+            additional_info = ""
+
+            row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS
+            row_flags_requires = 0
+
+            if row['strand'] == '+':
+                row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS | BAM_REVERSE_STRAND
+            else:
+                row_flags_requires = BAM_REVERSE_STRAND
+
+
             for _, subfeature in row_subfeatures.iterrows():
                 subfeature_length = subfeature['end'] - subfeature['start'] + 1
                 subfeature_base_coverages[subfeature_index] = numpy.zeros(subfeature_length)
@@ -846,13 +882,15 @@ if COMMAND == "plot_coverage":
                         stop=subfeature['end'],
                         # min_mapping_quality=MIN_MAPQ,
                         max_depth=PYSAM_PILEUP_MAX_DEPTH,
+                        flag_require=row_flags_requires,
+                        flag_filter=row_flag_filters,
                         truncate = True
                     ):
                         # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
                         read_depth = len(list(filter(None, column.get_query_sequences())))
+                        print(column.get_query_sequences(mark_matches=True, mark_ends=True, add_indels=True))
                         # reference pos is 0 indexed, gff (subfeature) is 1 indexed, add one to bring it back to zero
                         # TODO: this method of read depth shows only aligned bases. For reads which have mismatches/indels those bases do not contribute to read depth.
-
                         subfeature_base_coverages[subfeature_index][column.reference_pos - subfeature['start'] + 1] = read_depth
 
                 elif type == "bedmethyl":
@@ -867,6 +905,20 @@ if COMMAND == "plot_coverage":
 
                     for mod_pos_index in range(len(num_mods_at_pos)):
                         subfeature_base_coverages[subfeature_index][subfeature_mod_positions[mod_pos_index]] = num_mods_at_pos[mod_pos_index]
+
+                    # valid_cov and percent_mod determine 'cannonical mods'
+                    if MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
+                        mod_peak_matches = mod_matches[
+                            (mod_matches.percent_mod >= (MOD_PROP_THRESHOLD * 100)) & 
+                            (mod_matches.valid_cov >= READ_DEPTH_THRESHOLD)
+                        ]
+
+                        peak_positions = mod_peak_matches['end'].to_numpy() - row['start']
+
+                        if (row["strand"] == "-"):
+                            peak_positions = tx_lengths[row['ID']] - peak_positions
+
+                        mod_peaks[label][row['ID']] += peak_positions.tolist()
 
                 elif type == "bed":
                     site_matches = row_site_matches_df[
@@ -926,13 +978,21 @@ if COMMAND == "plot_coverage":
             if (row["strand"] == "-"):
                 resampled_base_coverage = numpy.flip(resampled_base_coverage)
 
-            additional_info = ""
+            # # find out how many mod peaks there are based off thresholds
+            # if MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
+            #     num_prop_threshold_peaks = 0
+            #     for i in range(len(feature_coverages[read_cov_label][feature_index])):
+            #         if feature_coverages[read_cov_label][feature_index][i] >= READ_DEPTH_THRESHOLD and mod_base_proportion[i] >= MOD_PROP_THRESHOLD:
+            #             num_prop_threshold_peaks += 1
+
+            #     additional_info += "\tmod peaks: {}".format(num_prop_threshold_peaks)
 
             STOP_CLOCK("row_start", "resample_subfeature_stop")
 
             # if this is modification coverage, we'll 'normalise' it against the gene read depth coverage
             if type == "bedmethyl":
                 read_cov_label = label.split("_")[0] + "_read_depth"
+                additional_info += "{}\t{}".format(len(mod_peaks[label][row['ID']]), ",".join(str(x) for x in mod_peaks[label][row['ID']]))
 
                 # weighted probability of m6A function
                 # for each given site, we have P(m6A) = num_m6A / read_depth
@@ -961,16 +1021,6 @@ if COMMAND == "plot_coverage":
                     normalised_feature_coverages[label][feature_index] = mod_base_proportion
                 else:
                     normalised_feature_coverages[label][feature_index] = mod_base_proportion * normalised_feature_coverages[read_cov_label][feature_index]
-                
-
-                # find out how many mod peaks there are based off thresholds
-                if MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
-                    num_prop_threshold_peaks = 0
-                    for i in range(len(feature_coverages[read_cov_label][feature_index])):
-                        if feature_coverages[read_cov_label][feature_index][i] >= READ_DEPTH_THRESHOLD and mod_base_proportion[i] >= MOD_PROP_THRESHOLD:
-                            num_prop_threshold_peaks += 1
-
-                    additional_info += "\tmod peaks: {}".format(num_prop_threshold_peaks)
             else:
                 normalised_feature_coverages[label][feature_index] = normalise_coverage(resampled_base_coverage)
 
@@ -980,7 +1030,10 @@ if COMMAND == "plot_coverage":
 
             STOP_CLOCK("row_start", "row_end")
 
-            print("{}\t {}\t max coverage: {}\t tx length: {}\t AUC: {}{}".format(label, row['ID'], int(max(resampled_base_coverage)), row['end'] - row['start'], AUC, additional_info))
+            # label, gene id, max coverage, gene length, auc, num mod peaks, mod peaks
+            row_coverage_summary = "{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], int(max(resampled_base_coverage)), row['end'] - row['start'], AUC, additional_info)
+            print(row_coverage_summary)
+            logfile.write(row_coverage_summary + "\n")
 
         if type == "bam":
             samfile.close()
@@ -1004,6 +1057,7 @@ if COMMAND == "plot_coverage":
     print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
     additional_text = "num transcripts: {}\naverage transcript length: {}".format(len(tx_lengths.keys()), int(sum(tx_lengths.values()) / len(tx_lengths.values())))
     print(additional_text)
+    logfile.close()
 
     # plot coverages
     # this looks at coverage for each gene, resamples and normalises the coverage and adds it to a list
