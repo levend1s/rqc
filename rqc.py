@@ -1,3 +1,4 @@
+import sklearn.neighbors
 import pysam
 import matplotlib.pyplot as plt
 import argparse
@@ -8,7 +9,13 @@ import sys
 import scipy
 import ast
 import math
+import time
+from pprint import pprint
+import sys
+import itertools
 
+
+numpy.set_printoptions(threshold=sys.maxsize)
 numpy.seterr(divide='ignore', invalid='ignore')
 
 parser = argparse.ArgumentParser(description="filter bam file by qscores / mapqs")
@@ -31,12 +38,13 @@ parser.add_argument('--coverage_bins', type=int, default = 100)
 parser.add_argument('--coverage_method', type=str, default = "max")
 parser.add_argument('--separate_plots_by_label_prefix', type=bool, default=False)
 parser.add_argument('--read_depth_threshold', type=int, default=0)
-parser.add_argument('--mod_prop_threshold', type=float, default=0)
+parser.add_argument('--cannonical_mod_prop_threshold', type=float, default=0)
+parser.add_argument('--cannonical_mod_read_depth_threshold', type=float, default=0)
 parser.add_argument('--padding_ratio', type=float, default=0.1)
 parser.add_argument('--debug', type=bool, default=False)
 parser.add_argument('--mod_normalisation', type=str, default="default")
-
-
+parser.add_argument('--calculate_poly_a', type=bool, default=False)
+parser.add_argument('--show_cannonical_m6a', type=bool, default=False)
 
 
 
@@ -60,11 +68,17 @@ COVERAGE_PADDING=args.coverage_padding
 COVERAGE_BINS=args.coverage_bins
 COVERAGE_METHOD=args.coverage_method
 SEPARATE_PLOTS_BY_LABEL_PREFIX = args.separate_plots_by_label_prefix
-MOD_PROP_THRESHOLD = args.mod_prop_threshold
+CANNONICAL_MOD_PROP_THRESHOLD = args.cannonical_mod_prop_threshold
+CANNONICAL_MOD_READ_DEPTH_THRESHOLD = args.cannonical_mod_read_depth_threshold
 READ_DEPTH_THRESHOLD = args.read_depth_threshold
 PADDING_RATIO = args.padding_ratio
 DEBUG = args.debug
 MOD_NORMALISATION = args.mod_normalisation
+CALCULATE_POLY_A = args.calculate_poly_a
+SHOW_CANNONICAL_M6A = args.show_cannonical_m6a
+
+if CANNONICAL_MOD_READ_DEPTH_THRESHOLD == 0:
+    CANNONICAL_MOD_READ_DEPTH_THRESHOLD = READ_DEPTH_THRESHOLD
 
 # read unmapped (0x4)
 # read reverse strand (0x10)
@@ -88,6 +102,7 @@ dataframes = {}
 
 GFF_DF = None
 GFF_PARENT_TREE = {}
+CLOCKS = {}
 
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
@@ -339,10 +354,6 @@ def process_bamfiles():
 
         samfile.close()
 
-from pprint import pprint
-import sys
-numpy.set_printoptions(threshold=sys.maxsize)
-
 # options: sum, average, max
 def resample_coverage(cov, bins, method):
 
@@ -436,8 +447,12 @@ def plot_subfeature_coverage(coverages):
 
         for label in v:
             cov = coverages['coverages'][label]
-            this_axes.plot(cov, label= ' '.join(label.split("_")[1:]))
-            this_axes.fill_between(x_ticks, cov, alpha=0.2)
+            if 'm6A' in label:
+                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color='red')
+                this_axes.fill_between(x_ticks, cov, alpha=0.2, color='red')
+            else:
+                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]))
+                this_axes.fill_between(x_ticks, cov, alpha=0.2)
 
         this_axes.legend(loc="upper left", title=k)
         this_axes.set_ylabel(coverages['y_label'], color="black")
@@ -578,10 +593,6 @@ def getSubfeatures(id, coverage_type, coverage_padding):
         row_subfeatures = row_subfeatures.sort_values(by=['start'])
 
     return row_subfeatures
-
-import time
-
-CLOCKS = {}
 
 def START_CLOCK(name):
     if DEBUG:
@@ -727,19 +738,500 @@ if COMMAND == "base_coverage":
             output['count_t'].sum()
         ))
 
+if COMMAND == "tes_analysis":
+    # load annotation file
+    feature_id = INPUT[0]
+
+    # process input file. Each line contains a label, the type of file, and the filepath
+    # label group type path
+    input_files = {}
+    # if len(INPUT[1:]) % 4 != 0:
+    #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
+    #     sys.exit()
+    # else:
+    in_index = 1
+    while in_index < len(INPUT):
+        if not INPUT[in_index].startswith("#"):
+            input_files[INPUT[in_index]] = {
+                'group': INPUT[in_index+1], 
+                'type': INPUT[in_index+2], 
+                'path': INPUT[in_index+3]
+            }
+        in_index += 4
+
+    # load annotation file and find indexes for all parent children
+    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+
+    for row_index, row in GFF_DF.iterrows():
+        if row['Parent'] in GFF_PARENT_TREE:
+            GFF_PARENT_TREE[row['Parent']].append(row_index)
+        else:
+            GFF_PARENT_TREE[row['Parent']] = [row_index]
+
+    # Try to find matches of provided type, if not, assume that input is a list of IDs
+    matches = ANNOTATION_FILE.filter_feature_of_type([feature_id])
+    if len(matches.df) == 0:
+        evaluated_input = ast.literal_eval(feature_id)
+        matches = ANNOTATION_FILE.get_feature_by_attribute("ID", evaluated_input)
+        print("Looking for {} IDs, found {} matches. TES analysis for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+    else:
+        print("Found {} matches for type {}. Calculating TES variance...".format(len(matches.df), feature_id))
+
+    matches = matches.attributes_to_columns()
+
+    num_bams = 0
+
+    d_poly_a_lengths = {}
+    d_tts = {}
+    
+    d_not_beyond_3p = {}
+    d_not_in_feature_counts = {}
+
+
+
+    logfile_df_index = 0
+
+    bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
+    bam_labels_control = [l for l in bam_labels if input_files[l]['group'] == 'control']
+    bam_labels_treatment = [l for l in bam_labels if input_files[l]['group'] == 'knock-sideways']
+
+    summary_header = ["gene_id", "test", "p_inter_treatment", "p_same_treatment", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
+    summary_df = pandas.DataFrame(columns=summary_header)
+
+    gene_length = 0
+
+    d_cannonical_mod_locations = {}
+    d_cannonical_mod_locations['PF3D7_1338100.1'] = [3683,3754]
+    d_cannonical_mod_locations['PF3D7_1338200.1'] = [2543,2531,2471,2429]
+    d_cannonical_mod_locations['PF3D7_1420000.1'] = [2534,2526,2516,2383,2365]
+
+    print("label\tgene id\tnum reads\tincorrectly assigned (fc)\tnot assigned (fc)")
+
+    for label in bam_labels:
+        samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
+        num_bams += 1
+        d_poly_a_lengths[label] = {}
+        d_tts[label] = {}
+        
+        d_not_beyond_3p[label] = {}
+        d_not_in_feature_counts[label] = {}
+
+
+        # attempt to find the relevent featureCounts file in input_files
+        feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
+        featurecounts_header = [
+            "read_id", "status", "number of targets", "targets"
+        ]
+        feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=featurecounts_header)
+
+        # generate coverage for all matches in this bam file
+        for row_index, row in matches.iterrows():
+            # find subfeatures
+            START_CLOCK("row_start")
+
+            # ---------- START POLY AAAAAAA
+            summary_df_index = 0
+
+            gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
+
+            reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
+            gene_length = row['end'] - row['start']
+            row_name = row['ID']
+
+            # !!!!! START NANOPORE SPECIFIC !!!!!
+            # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
+            row_subfeatures = getSubfeatures(row['ID'], "subfeature", 0)
+            num_reads_bam = 0
+
+            throw_ref_starts = []
+            read_indexes_to_process = []
+
+            for r in reads_in_region:
+                num_reads_bam += 1
+
+                # keep only reads in the same direction as this strand
+                if (row['strand'] == "+" and r.is_forward) or (row['strand'] == "-" and r.is_reverse):
+                    if row['strand'] == "-":
+                        read_3p_end = r.reference_start
+                        most_3p_subfeature = row_subfeatures.iloc[0]
+                        # print(most_3p_subfeature)
+                        # print("{}-{}".format(r.reference_start, r.reference_end))
+
+                        if read_3p_end <= most_3p_subfeature.end:
+                            # read_indexes_to_process.append(this_index)
+                            read_indexes_to_process.append(r)
+
+                    else:
+                        read_3p_end = r.reference_end
+                        most_3p_subfeature = row_subfeatures.iloc[-1]
+
+                        if read_3p_end >= most_3p_subfeature.start:
+                            # read_indexes_to_process.append(this_index)
+                            read_indexes_to_process.append(r)
+
+            # print("REMOVED: {} reads that did not start in the last feature of target gene...".format(num_reads_bam - len(read_indexes_to_process)))
+            # !!!!! END NANOPORE SPECIFIC !!!!!
+
+            gene_read_ids_fc = gene_reads['read_id'].to_list()
+            # print(gene_read_ids_fc)
+            found = 0
+            not_found = 0
+            no_poly_a = 0
+            poly_a_lengths = []
+            
+            # tx length or TTS?
+            tts_sites = []
+
+            for r in read_indexes_to_process:
+                # print(r.qname)
+                # r = reads_in_region[idx]
+                if r.qname in gene_read_ids_fc:
+                    if row['strand'] == "-":
+                        tts_sites.append(row['end'] - r.reference_start)
+                    else:
+                        tts_sites.append(r.reference_end - row['start'])
+
+                    if r.has_tag('pt:i'):
+                        poly_a_length = r.get_tag('pt:i')
+                        poly_a_lengths.append(poly_a_length)
+                    else:
+                        # print("WARNING: {} does not have poly a tag".format(r.qname))
+                        no_poly_a += 1
+                        poly_a_lengths.append(0)
+
+                    found += 1
+                else:
+                    # print("WARNING {} NOT found in featureCounts".format(r.qname))
+                    not_found += 1
+                    
+            d_poly_a_lengths[label][row['ID']] = poly_a_lengths
+            d_tts[label][row['ID']] = tts_sites
+
+            d_not_beyond_3p[label][row['ID']] = num_reads_bam - len(read_indexes_to_process)
+            d_not_in_feature_counts[label][row['ID']] = not_found
+
+            print("{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(d_tts[label][row['ID']]), num_reads_bam - len(read_indexes_to_process), not_found))
+
+
+    # We are interested if the TES has multiple end sites 
+    # OR
+    # if the intratretment samples are the same (p > 0.05) and the intertreatment samples are different (p < 0.05) after correcting bonferri
+    pairwise_combinations_same_treatment = list(itertools.combinations(bam_labels_control, 2)) + list(itertools.combinations(bam_labels_treatment, 2))
+    
+    pairwise_combinations_inter_treatment = list(itertools.combinations(bam_labels, 2))
+    pairwise_combinations_inter_treatment = [c for c in pairwise_combinations_inter_treatment if c not in pairwise_combinations_same_treatment]
+
+    # print("\t".join([str(x) for x in summary_header]))
+    summary_df_index = 0
+    for row_index, row in matches.iterrows():
+        # add stats to row
+        # score = log(p_same_treatment / p_inter_treatment), above zero means more different between treatments AND same treatment had same score
+        # p_inter_treatment p_same_treatment score tests_passed
+        average_expression = 0
+        average_not_beyond_3p = 0
+        average_not_in_feature_counts = 0
+
+        for label in bam_labels:
+            average_expression += len(d_tts[label][row['ID']])
+            average_not_beyond_3p += d_not_beyond_3p[label][row['ID']]
+            average_not_in_feature_counts += d_not_in_feature_counts[label][row['ID']]
+
+        average_expression = math.floor(average_expression / len(bam_labels))
+        average_not_beyond_3p = math.floor(average_not_beyond_3p / len(bam_labels))
+        average_not_in_feature_counts = math.floor(average_not_in_feature_counts / len(bam_labels))
+
+        # calculate histograms for this gene
+        max_hist_count = 0
+        max_hist_count_tts = 0
+        max_poly_a = 0
+        min_tts = 0
+        max_tts = 0
+        max_density = 0
+
+        d_poly_a_length_hists = {}
+        d_tts_hist = {}
+        d_cdfs = {}
+        d_kdes = {}
+
+        gene_id = row['ID']
+
+        # find min, maxs, 
+        for label in bam_labels:
+            if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
+                min_tts = min(d_tts[label][gene_id])
+
+            if max_tts < max(d_tts[label][gene_id]):
+                max_tts = max(d_tts[label][gene_id])
+
+            if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
+                max_poly_a = max(d_poly_a_lengths[label][gene_id])
+
+
+        # calculate hists
+        for label in bam_labels:
+            np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
+            poly_a_hist = [0] * (np_poly_as.max() + 1)
+            tts_hist = [0] * (max_tts + 1)
+
+            for i in range(1, np_poly_as.max() + 1):
+                poly_a_hist[i] = len([x for x in np_poly_as if x == i])
+
+            for i in range(1, max_tts + 1):
+                tts_hist[i] = len([x for x in d_tts[label][gene_id] if x == i])
+
+            if max_hist_count < max(poly_a_hist):
+                max_hist_count = max(poly_a_hist)
+
+            if max_hist_count_tts < max(tts_hist):
+                max_hist_count_tts = max(tts_hist)
+
+            d_poly_a_length_hists[label] = poly_a_hist
+            d_tts_hist[label] = tts_hist
+
+        x_ticks = range(min_tts, max_tts)
+
+        # generate dennsity plots
+        for label in bam_labels:
+            kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id])
+            smoothed_tts_hist = kernel(x_ticks)
+            cdf = numpy.cumsum(smoothed_tts_hist)
+
+            d_kdes[label] = smoothed_tts_hist
+            d_cdfs[label] = cdf
+
+            if max_density < max(smoothed_tts_hist):
+                max_density = max(smoothed_tts_hist)
+
+
+        tes_variance_tests = ["x2"]#, "x2", "mw-u"]
+
+        for test in tes_variance_tests:
+            if average_expression < READ_DEPTH_THRESHOLD:
+                p_inter_treatment = -1
+                p_same_treatment = -1
+                score = -1
+                tests_passed = -1
+            else:
+
+                same_treatment_p_vals = []
+                inter_treatment_p_vals = []
+
+                # compare statistical tests
+                # ks test
+                # man whitney u test
+                # chi squared test comparing KDEs
+
+                for s1, s2 in pairwise_combinations_inter_treatment:
+                    # two-sided: The null hypothesis is that the two distributions are identical, F(x)=G(x) for all x; the alternative is that they are not identical.
+                    
+                    # ks test
+                    if test == "ks":
+                        r = scipy.stats.ks_2samp(d_tts[s1][row['ID']], d_tts[s2][row['ID']])
+                    if test == "x2":
+                        print("{} and {}".format(len(d_tts_hist[s1]), len(d_tts_hist[s2])))
+                        print("{} and {}".format(d_tts_hist[s1], d_tts_hist[s2]))
+
+                        r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
+                    
+                    # chi squared test
+                    # print("{} and {}".format(len(d_tts[s1][row['ID']]), len(d_tts[s2][row['ID']])))
+                    # r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
+                    inter_treatment_p_vals.append(r.pvalue)
+
+                for s1, s2 in pairwise_combinations_same_treatment:
+                    # two-sided: The null hypothesis is that the two distributions are identical, F(x)=G(x) for all x; the alternative is that they are not identical.
+                        
+                    # plt.scatter(d_kdes[s1], d_kdes[s2], s=1)
+                    # plt.show()
+                    if test == "ks":
+                        r = scipy.stats.ks_2samp(d_tts[s1][row['ID']], d_tts[s2][row['ID']])
+                    if test == "x2":
+                        r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
+
+                    same_treatment_p_vals.append(r.pvalue)
+
+                # this is a debuious assumption of intratreatment ordering (idx = 0 and -1)
+                alpha = 0.05
+                num_pairs = 4
+                bonferri_adjusted_alpha = alpha / num_pairs
+
+                p_inter_treatment = scipy.stats.combine_pvalues(inter_treatment_p_vals).pvalue
+                p_same_treatment = scipy.stats.combine_pvalues(same_treatment_p_vals).pvalue
+
+                score = math.log(p_same_treatment / p_inter_treatment, 10)
+                tests_passed = 0
+                if p_inter_treatment < (alpha / len(inter_treatment_p_vals)):
+                    tests_passed += 1
+                if p_same_treatment > (alpha / len(inter_treatment_p_vals)):
+                    tests_passed += 1
+
+            row_summary = [row['ID'], test, p_inter_treatment, p_same_treatment, score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
+
+            summary_df.loc[summary_df_index] = row_summary
+            summary_df_index += 1
+        # print("\t".join([str(x) for x in row_summary]))
+
+
+    TES_SUMMARY_PATH = "./tes_summary.tsv"
+    print(summary_df)
+    summary_df.to_csv(TES_SUMMARY_PATH, sep='\t', index=False)
+
+
+
+
+    # --------- PLOT ---------- #
+    if len(matches) == 1:
+        gene_id = matches.iloc[0]['ID']
+
+        max_hist_count = 0
+        max_hist_count_tts = 0
+        max_poly_a = 0
+        min_tts = 0
+        max_tts = 0
+        max_density = 0
+
+        d_poly_a_length_hists = {}
+        d_tts_hist = {}
+        d_cdfs = {}
+        d_kdes = {}
+
+        # find min, maxs, calculate hists
+        for label in bam_labels:
+            np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
+            poly_a_hist = [0] * (np_poly_as.max() + 1)
+            tts_hist = [0] * (max(d_tts[label][gene_id]) + 1)
+
+            for i in range(1, np_poly_as.max() + 1):
+                poly_a_hist[i] = len([x for x in np_poly_as if x == i])
+
+            for i in range(1, (max(d_tts[label][gene_id])) + 1):
+                tts_hist[i] = len([x for x in d_tts[label][gene_id] if x == i])
+
+            if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
+                min_tts = min(d_tts[label][gene_id])
+
+            if max_tts < max(d_tts[label][gene_id]):
+                max_tts = max(d_tts[label][gene_id])
+
+            if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
+                max_poly_a = max(d_poly_a_lengths[label][gene_id])
+
+            d_poly_a_length_hists[label] = poly_a_hist
+            d_tts_hist[label] = tts_hist
+
+            if max_hist_count < max(poly_a_hist):
+                max_hist_count = max(poly_a_hist)
+
+            if max_hist_count_tts < max(tts_hist):
+                max_hist_count_tts = max(tts_hist)
+
+        x_ticks = range(min_tts, max_tts)
+
+        # generate dennsity plots
+        for label in bam_labels:
+            kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id])
+            smoothed_tts_hist = kernel(x_ticks)
+            cdf = numpy.cumsum(smoothed_tts_hist)
+
+            d_kdes[label] = smoothed_tts_hist
+            d_cdfs[label] = cdf
+
+            if max_density < max(smoothed_tts_hist):
+                max_density = max(smoothed_tts_hist)
+
+
+        NUM_VERT_PLOTS = 3
+        fig, axes = plt.subplots(NUM_VERT_PLOTS, num_bams)
+        axes_index = 0
+        for label in bam_labels:
+            # scatter plot tts vs poly-a length
+            axes[0, axes_index].scatter(d_tts[label][gene_id], d_poly_a_lengths[label][gene_id], s=1)
+            axes[0, axes_index].set_ylim(ymin=0, ymax=max_poly_a*1.1)
+            axes[0, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
+            axes[0, axes_index].get_xaxis().set_visible(False)
+            
+            axes[1, axes_index].plot(d_tts_hist[label])
+            axes[1, axes_index].set_ylim(ymin=0, ymax=max_hist_count_tts*1.1)
+            axes[1, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
+            axes[1, axes_index].get_xaxis().set_visible(False)
+
+            # axes[2, axes_index].plot(d_poly_a_length_hists[label])
+            # axes[2, axes_index].set_ylim(ymin=0, ymax=max_hist_count*1.1)
+            # axes[2, axes_index].set_xlim(xmin=0, xmax=max_poly_a)
+            # axes[2, axes_index].get_xaxis().set_visible(False)
+
+            axes[2, axes_index].plot(x_ticks, d_kdes[label])
+            axes[2, axes_index].set_ylim(ymin=0, ymax=max_density*1.1)
+            axes[2, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
+            axes[2, axes_index].set(xlabel='transcription end site (nt)')
+
+
+            # PLOT GENE END AS VERT LINE
+            axes[0, axes_index].axvline(x= gene_length, color='darkgray', ls="--", linewidth=1.0)
+            axes[1, axes_index].axvline(x= gene_length, color='darkgray', ls="--", linewidth=1.0)
+            axes[2, axes_index].axvline(x= gene_length, color='darkgray', ls="--", linewidth=1.0)
+
+            if SHOW_CANNONICAL_M6A:
+                # # PLOT MOD LOCATION AS VERT LINES
+                for mod_location in d_cannonical_mod_locations[row_name]:
+                    axes[0, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+                    axes[1, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+                    axes[2, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+
+            # add axis labels
+            if axes_index == 0:
+                axes[0, axes_index].set(ylabel='poly-A length (nt)')
+                axes[1, axes_index].set(ylabel='count')
+                # axes[2, axes_index].set(xlabel='poly a length (nt)', ylabel='count')
+                axes[2, axes_index].set(xlabel='transcription end site (nt)', ylabel='cumulative density (au)')
+            else:
+                axes[0, axes_index].get_yaxis().set_visible(False)
+                axes[1, axes_index].get_yaxis().set_visible(False)
+                # axes[2, axes_index].get_yaxis().set_visible(False)
+                axes[2, axes_index].get_yaxis().set_visible(False)
+
+
+            axes_index += 1
+
+        fig.subplots_adjust(hspace=0, wspace=0.1)
+
+        # TODO: also plot density violin plot of poly-A lengths. Violin plot of transcript termination sites
+        # poly_a_labels = ["{}\nn={}".format(key, len(d_poly_a_lengths[key])) for key in d_poly_a_lengths.keys()]
+        # fig, axes = plt.subplots(1, 1)
+        # d_violins = axes.violinplot(d_poly_a_lengths.values())
+        # axes.set_xticks(range(1,len(d_poly_a_lengths.keys())+1))
+        # axes.set_xticklabels(poly_a_labels)
+        # axes.set_ylabel('poly-A length (nt)')
+
+        # tts_labels = ["{}\nn={}".format(key, len(d_tts[key])) for key in d_tts.keys()]
+        # fig, axes = plt.subplots(1, 1)
+        # axes.violinplot(d_tts.values())
+        # axes.set_xticks(range(1,len(d_tts.keys())+1))
+        # axes.set_xticklabels(tts_labels)
+        # axes.set_ylabel('TTS (nt)')
+
+        plt.show()
+
 if COMMAND == "plot_coverage":
     # load annotation file
     feature_id = INPUT[0]
 
     # process input file. Each line contains a label, the type of file, and the filepath
     input_files = {}
-    if len(INPUT[1:]) % 3 != 0:
-        print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
-        sys.exit()
-    else:
-        for in_index in range(1, len(INPUT), 3):
-            if not INPUT[in_index].startswith("#"):
-                input_files[INPUT[in_index]] = (INPUT[in_index+1], INPUT[in_index+2])
+    # if len(INPUT[1:]) % 4 != 0:
+    #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
+    #     sys.exit()
+    # else:
+    in_index = 1
+    while in_index < len(INPUT):
+        if not INPUT[in_index].startswith("#"):
+            input_files[INPUT[in_index]] = {
+                'group': INPUT[in_index+1], 
+                'type': INPUT[in_index+2], 
+                'path': INPUT[in_index+3]
+            }
+        in_index += 4
 
     # load annotation file and find indexes for all parent children
     ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
@@ -776,288 +1268,415 @@ if COMMAND == "plot_coverage":
     mod_peaks = {}
 
 
-    logfile = open("rqc_plot_coverage_stats.log", "w")
-    logfile_header = "label\tid\tdepth\tlength\tAUC\tnum peaks\tpeak locations"
-    print(logfile_header)
-    logfile.write(logfile_header + "\n")
+    LOGFILE_PATH = "rqc_plot_coverage_stats.log"
+    log_header = ["label", "type", "id", "depth", "length", "AUC", "num peaks", "peak locations"]
+    print("\t".join(log_header))
+    logfile_df = pandas.DataFrame(columns=log_header)
+    logfile_df_index = 0
 
+    max_num_subfeatures = 0
 
-    for label, file in input_files.items():
-        type, path = file
-        feature_coverages[label] = [None] * len(matches.index)
-        normalised_feature_coverages[label] = [None] * len(matches.index)
+    for label in input_files.keys():
+        type = input_files[label]['type']
+        path = input_files[label]['path']
 
-        mod_peaks[label] = {}
+        if type in ['bam', 'bedmethyl', 'bed']:
 
-        if type == "bam":
-            samfile = pysam.AlignmentFile(path, 'rb')
-        elif type == "bedmethyl":
-            modkit_bedmethyl_header = [
-                "contig", "start", "end", "code", "score", "strand", 
-                "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
-                "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
-            ]
-            mods_file_df = pandas.read_csv(path, sep='\t', names=modkit_bedmethyl_header)
-        elif type == "bed":
-            modkit_bedmethyl_header = [
-                "contig", "start", "end", "code", "score", "strand", 
-                "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
-                "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
-            ]
-            site_file_df = pandas.read_csv(path, sep='\t', names=modkit_bedmethyl_header)
-        else:
-            print("ERROR UNKNOWN FILE TYPE {}".format(type))
+            feature_coverages[label] = {}
+            normalised_feature_coverages[label] = {}
 
-        # generate coverage for all matches in this bam file
-        feature_index = 0
-        for row_index, row in matches.iterrows():
-            # find subfeatures
-            START_CLOCK("row_start")
+            mod_peaks[label] = {}
 
-            row_subfeatures = getSubfeatures(row['ID'], COVERAGE_TYPE, COVERAGE_PADDING)
-
-            if not subfeature_names:
-                subfeature_names = row_subfeatures['type'].to_list()
-
-            # gen coverage for each subfeature in a gene
-            subfeature_index = 0
-            num_subfeatures = len(row_subfeatures.index)
-            subfeature_base_coverages = [None] * num_subfeatures
-
-            mod_peaks[label][row['ID']] = []
-
-            if num_subfeatures > 1:
-                if 'UTR' in subfeature_names[0]:
-                    subfeature_names[0] = "5'UTR"
-                if 'UTR' in subfeature_names[1]:
-                    subfeature_names[1] = "5'UTR"
-                if 'UTR' in subfeature_names[-1]:
-                    subfeature_names[-1] = "3'UTR"
-                if 'UTR' in subfeature_names[-2]:
-                    subfeature_names[-2] = "3'UTR"
-
-            exon_idx = 1
-            for i in range(num_subfeatures):
-                if subfeature_names[i] == 'CDS':
-                    subfeature_names[i] = "E{}".format(exon_idx)
-                    exon_idx += 1
-
-            tx_lengths[row['ID']] = (row['end'] - row['start'])
-
-            if type == "bedmethyl":
-                row_mods_file_df = mods_file_df[
-                    (mods_file_df.contig == row['seq_id']) & 
-                    (mods_file_df.start > (row['start']) - COVERAGE_PADDING) & 
-                    (mods_file_df.start < (row['end']) + COVERAGE_PADDING) & 
-                    (mods_file_df.strand == row['strand'])
+            if type == "bam":
+                samfile = pysam.AlignmentFile(path, 'rb')
+            elif type == "bedmethyl":
+                modkit_bedmethyl_header = [
+                    "contig", "start", "end", "code", "score", "strand", 
+                    "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
+                    "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
                 ]
+                mods_file_df = pandas.read_csv(path, sep='\t', names=modkit_bedmethyl_header)
             elif type == "bed":
-                row_site_matches_df = site_file_df[
-                    (site_file_df.contig == row['seq_id']) & 
-                    (site_file_df.start > (row['start']) - COVERAGE_PADDING) & 
-                    (site_file_df.start < (row['end']) + COVERAGE_PADDING) & 
-                    (site_file_df.strand == row['strand'])
+                modkit_bedmethyl_header = [
+                    "contig", "start", "end", "code", "score", "strand", 
+                    "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
+                    "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
                 ]
+                site_file_df = pandas.read_csv(path, sep='\t', names=modkit_bedmethyl_header)
+            # else:
+            #     print("ERROR UNKNOWN FILE TYPE {}".format(type))
 
-            additional_info = ""
+            # generate coverage for all matches in this bam file
+            for row_index, row in matches.iterrows():
+                # find subfeatures
+                START_CLOCK("row_start")
 
-            row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS
-            row_flags_requires = 0
+                row_subfeatures = getSubfeatures(row['ID'], COVERAGE_TYPE, COVERAGE_PADDING)
 
-            if row['strand'] == '+':
-                row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS | BAM_REVERSE_STRAND
-            else:
-                row_flags_requires = BAM_REVERSE_STRAND
+                if not subfeature_names:
+                    subfeature_names = row_subfeatures['type'].to_list()
 
+                # gen coverage for each subfeature in a gene
+                subfeature_index = 0
+                num_subfeatures = len(row_subfeatures.index)
+                subfeature_base_coverages = [None] * num_subfeatures
 
-            for _, subfeature in row_subfeatures.iterrows():
-                subfeature_length = subfeature['end'] - subfeature['start'] + 1
-                subfeature_base_coverages[subfeature_index] = numpy.zeros(subfeature_length)
+                if max_num_subfeatures == 0:
+                    max_num_subfeatures = num_subfeatures
+                else:
+                    if num_subfeatures != max_num_subfeatures:
+                        print("ERROR: trying to calculate subfeature coverage for genes with different number of subfeatures")
+                        print("{} has {} subfeatures, but previous genes had {} subfeatures. Exiting...".format(row['ID'], num_subfeatures, max_num_subfeatures))
 
-                if type == "bam":
-                    # pysam indexes are zero indexed but gff are 1-indexed, so pysam index = gffindex-1
-                    for column in samfile.pileup(
-                        contig=subfeature['seq_id'], 
-                        start=subfeature['start'] - 1, 
-                        stop=subfeature['end'],
-                        # min_mapping_quality=MIN_MAPQ,
-                        max_depth=PYSAM_PILEUP_MAX_DEPTH,
-                        flag_require=row_flags_requires,
-                        flag_filter=row_flag_filters,
-                        truncate = True
-                    ):
-                        # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
-                        read_depth = len(list(filter(None, column.get_query_sequences())))
-                        print(column.get_query_sequences(mark_matches=True, mark_ends=True, add_indels=True))
-                        # reference pos is 0 indexed, gff (subfeature) is 1 indexed, add one to bring it back to zero
-                        # TODO: this method of read depth shows only aligned bases. For reads which have mismatches/indels those bases do not contribute to read depth.
-                        subfeature_base_coverages[subfeature_index][column.reference_pos - subfeature['start'] + 1] = read_depth
+                mod_peaks[label][row['ID']] = []
 
-                elif type == "bedmethyl":
-                    mod_matches = row_mods_file_df[
-                        (row_mods_file_df.end >= subfeature['start']) & 
-                        (row_mods_file_df.end <= subfeature['end'])
+                if num_subfeatures > 1:
+                    if 'UTR' in subfeature_names[0]:
+                        subfeature_names[0] = "5'UTR"
+                    if 'UTR' in subfeature_names[1]:
+                        subfeature_names[1] = "5'UTR"
+                    if 'UTR' in subfeature_names[-1]:
+                        subfeature_names[-1] = "3'UTR"
+                    if 'UTR' in subfeature_names[-2]:
+                        subfeature_names[-2] = "3'UTR"
+
+                exon_idx = 1
+                for i in range(num_subfeatures):
+                    if subfeature_names[i] == 'CDS':
+                        subfeature_names[i] = "E{}".format(exon_idx)
+                        exon_idx += 1
+
+                tx_lengths[row['ID']] = (row['end'] - row['start'])
+
+                if type == "bedmethyl":
+                    row_mods_file_df = mods_file_df[
+                        (mods_file_df.contig == row['seq_id']) & 
+                        (mods_file_df.start > (row['start']) - COVERAGE_PADDING) & 
+                        (mods_file_df.start < (row['end']) + COVERAGE_PADDING) & 
+                        (mods_file_df.strand == row['strand'])
                     ]
-                    # convert from genome to transcript space
-                    # in a bedmethyl file, the end position is the gff exact position
-                    subfeature_mod_positions = mod_matches['end'].to_numpy() - subfeature['start']
-                    num_mods_at_pos = mod_matches['num_mod'].to_list()
-
-                    for mod_pos_index in range(len(num_mods_at_pos)):
-                        subfeature_base_coverages[subfeature_index][subfeature_mod_positions[mod_pos_index]] = num_mods_at_pos[mod_pos_index]
-
-                    # valid_cov and percent_mod determine 'cannonical mods'
-                    if MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
-                        mod_peak_matches = mod_matches[
-                            (mod_matches.percent_mod >= (MOD_PROP_THRESHOLD * 100)) & 
-                            (mod_matches.valid_cov >= READ_DEPTH_THRESHOLD)
-                        ]
-
-                        peak_positions = mod_peak_matches['end'].to_numpy() - row['start']
-
-                        if (row["strand"] == "-"):
-                            peak_positions = tx_lengths[row['ID']] - peak_positions
-
-                        mod_peaks[label][row['ID']] += peak_positions.tolist()
-
                 elif type == "bed":
-                    site_matches = row_site_matches_df[
-                        ((row_site_matches_df.start - 3) >= subfeature['start']) & 
-                        ((row_site_matches_df.start + 3) <= subfeature['end'])
+                    row_site_matches_df = site_file_df[
+                        (site_file_df.contig == row['seq_id']) & 
+                        (site_file_df.start > (row['start']) - COVERAGE_PADDING) & 
+                        (site_file_df.start < (row['end']) + COVERAGE_PADDING) & 
+                        (site_file_df.strand == row['strand'])
                     ]
-                    # convert from genome to transcript space
-                    # start position is the 0-indexed start position of the 5mer, so add 3 to get the gff exact position of the central A to DRACH motif. 
-                    subfeature_site_positions = site_matches['start'].to_numpy() - subfeature['start'] + 3
 
-                    for site_pos_index in subfeature_site_positions:
-                        subfeature_base_coverages[subfeature_index][site_pos_index] = 1
+                row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS
+                row_flags_requires = 0
+
+                if row['strand'] == '+':
+                    row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS | BAM_REVERSE_STRAND
                 else:
-                    print("WARNING: unknown type: {}".format(type))
+                    row_flags_requires = BAM_REVERSE_STRAND
 
-                subfeature_index += 1
+                # ---------- START POLY AAAAAAA
+                if CALCULATE_POLY_A:
+                    summary_df_index = 0
+                    # load the relevant featureCounts for this bam file
+                    featureCountsFile = "/Users/joshualevendis/Downloads/featureCounts/28K1_to_pfal.50MAPQ.sorted.bam.featureCounts"
 
-            sf_base_coverage_list = [None] * num_subfeatures
-            STOP_CLOCK("row_start", "coverage_stop")
+                    featurecounts_header = [
+                        "read_id", "status", "number of targets", "targets"
+                    ]
 
-            if COVERAGE_PADDING:
-                num_bins_cds = int(COVERAGE_BINS * (1 - (2 * PADDING_RATIO)))
-                num_bins_padding = int(COVERAGE_BINS * PADDING_RATIO)
-            else:
-                num_bins_cds = COVERAGE_BINS
-                num_bins_padding = 0
+                    feature_counts_df = pandas.read_csv(featureCountsFile, sep='\t', names=featurecounts_header)
+                    gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
 
-            running_sf_bin_count = 0
+                    reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
 
-            # implicitly reset subfeature_index
-            for subfeature_index in range(num_subfeatures):
-                # resample coverage
-                if subfeature_index == 0 and COVERAGE_PADDING:
-                    sf_bin_size = num_bins_padding
-                elif subfeature_index == (num_subfeatures - 1):
-                    # sf_bin_size = num_bins_cds - (math.floor(num_bins_cds / num_subfeatures) * (num_subfeatures-1))
-                    sf_bin_size = COVERAGE_BINS - running_sf_bin_count
-                elif COVERAGE_PADDING:
-                    sf_bin_size = math.floor(num_bins_cds / (num_subfeatures - 2))
+                    gene_read_ids_fc = gene_reads['read_id'].to_list()
+                    found = 0
+                    not_found = 0
+                    no_poly_a = 0
+                    poly_a_lengths = []
+                    
+                    # tx length or TTS?
+                    tts_sites = []
+
+
+                    # compare the 
+                    for r in reads_in_region:
+                        # print(r.qname)
+                        if r.qname in gene_read_ids_fc:
+                            print("{} found in featureCounts".format(r.qname))
+
+                            if row['strand'] == "-":
+                                tts_sites.append(r.reference_start)
+                            else:
+                                tts_sites.append(r.reference_end)
+
+                            if r.has_tag('pt:i'):
+                                poly_a_length = r.get_tag('pt:i')
+                                poly_a_lengths.append(poly_a_length)
+                            else:
+                                print("WARNING: {} does not have poly a tag".format(r.qname))
+                                no_poly_a += 1
+                                poly_a_lengths.append(0)
+
+                            found += 1
+                        else:
+                            print("WARNING {} NOT found in featureCounts".format(r.qname))
+                            not_found += 1
+                            
+                    print("{} found, {} not found, {} found but no poly a, len featureCounts reads: {}".format(found, not_found, no_poly_a, len(gene_read_ids_fc)))
+
+                    np_poly_as = numpy.array(poly_a_lengths)
+                    poly_a_hist = [0] * np_poly_as.max()
+                    for i in range(np_poly_as.max()):
+                        poly_a_hist[i] = len([x for x in np_poly_as if x == i])
+
+                    summary_header = ["label", "num transcripts", "gene id", "poly_a_mean", "poly_a_var", "poly_a_min", "poly_a_max", "poly_a_median", "poly_a_q1", "poly_a_q3"]
+                    print("\t".join(summary_header))
+                    summary_df = pandas.DataFrame(columns=summary_header)
+                    # interested in: num, min, max, mean, variance
+
+                    row_summary = [label, found, row['ID'], np_poly_as.mean(), np_poly_as.var(), np_poly_as.min(), np_poly_as.max(), numpy.median(np_poly_as), numpy.quantile(np_poly_as, 0.25), numpy.quantile(np_poly_as, 0.75)]
+
+                    print("\t".join([str(x) for x in row_summary]))
+                    summary_df.loc[logfile_df_index] = row_summary
+                    summary_df_index += 1
+
+                    plt.scatter(tts_sites, poly_a_lengths)
+                    
+                    plt.show()
+                    print("calculating poly A and TTS variances")
+                # ---------- END POLY AAAAAA
+
+
+                for _, subfeature in row_subfeatures.iterrows():
+                    subfeature_length = subfeature['end'] - subfeature['start'] + 1
+                    subfeature_base_coverages[subfeature_index] = numpy.zeros(subfeature_length)
+
+                    if type == "bam":
+                        # pysam indexes are zero indexed but gff are 1-indexed, so pysam index = gffindex-1
+                        for column in samfile.pileup(
+                            contig=subfeature['seq_id'], 
+                            start=subfeature['start'] - 1, 
+                            stop=subfeature['end'],
+                            # min_mapping_quality=MIN_MAPQ,
+                            max_depth=PYSAM_PILEUP_MAX_DEPTH,
+                            flag_require=row_flags_requires,
+                            flag_filter=row_flag_filters,
+                            truncate = True
+                        ):
+                            # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
+                            read_depth = len(list(filter(None, column.get_query_sequences())))
+                            # print(column.get_query_sequences(mark_matches=True, mark_ends=True, add_indels=True))
+                            # reference pos is 0 indexed, gff (subfeature) is 1 indexed, add one to bring it back to zero
+                            # TODO: this method of read depth shows only aligned bases. For reads which have mismatches/indels those bases do not contribute to read depth.
+                            subfeature_base_coverages[subfeature_index][column.reference_pos - subfeature['start'] + 1] = read_depth
+
+                    elif type == "bedmethyl":
+                        mod_matches = row_mods_file_df[
+                            (row_mods_file_df.end >= subfeature['start']) & 
+                            (row_mods_file_df.end <= subfeature['end'])
+                        ]
+                        # convert from genome to transcript space
+                        # in a bedmethyl file, the end position is the gff exact position
+                        subfeature_mod_positions = mod_matches['end'].to_numpy() - subfeature['start']
+                        num_mods_at_pos = mod_matches['num_mod'].to_list()
+
+                        for mod_pos_index in range(len(num_mods_at_pos)):
+                            subfeature_base_coverages[subfeature_index][subfeature_mod_positions[mod_pos_index]] = num_mods_at_pos[mod_pos_index]
+
+                        # valid_cov and percent_mod determine 'cannonical mods'
+                        if CANNONICAL_MOD_PROP_THRESHOLD > 0 and CANNONICAL_MOD_READ_DEPTH_THRESHOLD > 0:
+                            mod_peak_matches = mod_matches[
+                                (mod_matches.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
+                                (mod_matches.valid_cov >= CANNONICAL_MOD_READ_DEPTH_THRESHOLD)
+                            ]
+
+                            peak_positions = mod_peak_matches['end'].to_numpy() - row['start']
+
+                            if (row["strand"] == "-"):
+                                peak_positions = tx_lengths[row['ID']] - peak_positions
+
+                            mod_peaks[label][row['ID']] += peak_positions.tolist()
+
+                    elif type == "bed":
+                        site_matches = row_site_matches_df[
+                            ((row_site_matches_df.start - 3) >= subfeature['start']) & 
+                            ((row_site_matches_df.start + 3) <= subfeature['end'])
+                        ]
+                        # convert from genome to transcript space
+                        # start position is the 0-indexed start position of the 5mer, so add 3 to get the gff exact position of the central A to DRACH motif. 
+                        subfeature_site_positions = site_matches['start'].to_numpy() - subfeature['start'] + 3
+
+                        for site_pos_index in subfeature_site_positions:
+                            subfeature_base_coverages[subfeature_index][site_pos_index] = 1
+                    # else:
+                    #     print("WARNING: unknown type: {}".format(type))
+
+
+                    subfeature_index += 1
+
+                sf_base_coverage_list = [None] * num_subfeatures
+                STOP_CLOCK("row_start", "coverage_stop")
+
+                if COVERAGE_PADDING:
+                    num_bins_cds = int(COVERAGE_BINS * (1 - (2 * PADDING_RATIO)))
+                    num_bins_padding = int(COVERAGE_BINS * PADDING_RATIO)
                 else:
-                    sf_bin_size = math.floor(num_bins_cds / num_subfeatures)
+                    num_bins_cds = COVERAGE_BINS
+                    num_bins_padding = 0
 
-                subfeature_info[subfeature_names[subfeature_index]] = sf_bin_size
+                running_sf_bin_count = 0
 
-                if type == "bed":
-                    sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, "sum")
+                # implicitly reset subfeature_index
+                for subfeature_index in range(num_subfeatures):
+                    # resample coverage
+                    if subfeature_index == 0 and COVERAGE_PADDING:
+                        sf_bin_size = num_bins_padding
+                    elif subfeature_index == (num_subfeatures - 1):
+                        # sf_bin_size = num_bins_cds - (math.floor(num_bins_cds / num_subfeatures) * (num_subfeatures-1))
+                        sf_bin_size = COVERAGE_BINS - running_sf_bin_count
+                    elif COVERAGE_PADDING:
+                        sf_bin_size = math.floor(num_bins_cds / (num_subfeatures - 2))
+                    else:
+                        sf_bin_size = math.floor(num_bins_cds / num_subfeatures)
+
+                    subfeature_info[subfeature_names[subfeature_index]] = sf_bin_size
+
+                    if type == "bed":
+                        sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, "sum")
+                    else:
+                        sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, COVERAGE_METHOD)
+
+                    sf_base_coverage_list[subfeature_index] = sf_resampled_coverage
+
+                    running_sf_bin_count += sf_bin_size
+
+                # flatten resampled subfeature coverages into a single array
+                resampled_base_coverage = numpy.concatenate(sf_base_coverage_list).ravel()
+                # reverse coverages if necessary
+                if (row["strand"] == "-"):
+                    resampled_base_coverage = numpy.flip(resampled_base_coverage)
+
+                # # find out how many mod peaks there are based off thresholds
+                # if MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
+                #     num_prop_threshold_peaks = 0
+                #     for i in range(len(feature_coverages[read_cov_label][feature_index])):
+                #         if feature_coverages[read_cov_label][feature_index][i] >= READ_DEPTH_THRESHOLD and mod_base_proportion[i] >= MOD_PROP_THRESHOLD:
+                #             num_prop_threshold_peaks += 1
+
+                #     additional_info += "\tmod peaks: {}".format(num_prop_threshold_peaks)
+
+                STOP_CLOCK("row_start", "resample_subfeature_stop")
+                additional_info = [len(mod_peaks[label][row['ID']]), ",".join(str(x) for x in mod_peaks[label][row['ID']])]
+
+
+                # if this is modification coverage, we'll 'normalise' it against the gene read depth coverage
+                if type == "bedmethyl":
+                    read_cov_label = label.split("_")[0] + "_read_depth"
+
+                    # weighted probability of m6A function
+                    # for each given site, we have P(m6A) = num_m6A / read_depth
+                    # P(m6A) prior = 0.05, which is the abundance of m6A / A in entire RNA-seq
+                    # formula for weighted probability is P_weighted = (N * P_observed) + (Weight_prior * P_prior) / (N + Weight_prior)
+                    # Weight_prior = feature_coverages[read_cov_label][feature_index].max()
+                    # P_prior = 0.01
+
+                    # resampled_base_coverage = feature_coverages[read_cov_label][feature_index] / 2
+                    # denom = (feature_coverages[read_cov_label][feature_index] + Weight_prior)
+                    # normalised_feature_coverages[feature_index] = numpy.nan_to_num( (resampled_base_coverage + (Weight_prior * P_prior)) / denom)
+
+                    # normalise against itself
+                    #normalised_feature_coverages[feature_index] = normalise_coverage(resampled_base_coverage)
+
+                    # normalise against read depth (fraction of bases methylated * normalised coverage)
+                    mod_base_proportion = numpy.nan_to_num(resampled_base_coverage / feature_coverages[read_cov_label][row['ID']])
+
+                    # NOTE: this is due to how we calculate read depth, mentioned in the bam section above
+                    # There are cases where a read may have indels/mismatches (which do not contribute to read depth) but within those sections a mod is detected
+                    # this leads to numbers greater than 1 when calculating mod proportion
+                    # So for now we'll just clamp those numbers down to 1
+                    mod_base_proportion[mod_base_proportion > 1.0] = 1.0
+
+                    if MOD_NORMALISATION == "raw":
+                        normalised_feature_coverages[label][row['ID']] = mod_base_proportion
+                    else:
+                        normalised_feature_coverages[label][row['ID']] = mod_base_proportion * normalised_feature_coverages[read_cov_label][row['ID']]
                 else:
-                    sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, COVERAGE_METHOD)
+                    normalised_feature_coverages[label][row['ID']] = normalise_coverage(resampled_base_coverage)
 
-                sf_base_coverage_list[subfeature_index] = sf_resampled_coverage
+                feature_coverages[label][row['ID']] = resampled_base_coverage
+                AUC = round(numpy.sum(normalised_feature_coverages[label][row['ID']]) / COVERAGE_BINS, 2) # gives score between 0 and 1
 
-                running_sf_bin_count += sf_bin_size
+                STOP_CLOCK("row_start", "row_end")
 
-            # flatten resampled subfeature coverages into a single array
-            resampled_base_coverage = numpy.concatenate(sf_base_coverage_list).ravel()
-            # reverse coverages if necessary
-            if (row["strand"] == "-"):
-                resampled_base_coverage = numpy.flip(resampled_base_coverage)
+                # label, gene id, max coverage, gene length, auc, num mod peaks, mod peaks
+                row_coverage_summary = [label, type, row['ID'], int(max(resampled_base_coverage)), row['end'] - row['start'], AUC]
 
-            # # find out how many mod peaks there are based off thresholds
-            # if MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
-            #     num_prop_threshold_peaks = 0
-            #     for i in range(len(feature_coverages[read_cov_label][feature_index])):
-            #         if feature_coverages[read_cov_label][feature_index][i] >= READ_DEPTH_THRESHOLD and mod_base_proportion[i] >= MOD_PROP_THRESHOLD:
-            #             num_prop_threshold_peaks += 1
+                if additional_info:
+                    row_coverage_summary += additional_info
 
-            #     additional_info += "\tmod peaks: {}".format(num_prop_threshold_peaks)
+                print("\t".join([str(x) for x in row_coverage_summary]))
+                logfile_df.loc[logfile_df_index] = row_coverage_summary
+                logfile_df_index += 1
 
-            STOP_CLOCK("row_start", "resample_subfeature_stop")
+            if type == "bam":
+                samfile.close()
 
-            # if this is modification coverage, we'll 'normalise' it against the gene read depth coverage
+    # drop all coverages which don't meet a coverage threshold across ALL samples
+    # this could be AUC or read depth
+
+    # for each gene, get how many rows 
+    if READ_DEPTH_THRESHOLD > 0:
+        bam_labels = []
+        for label in input_files.keys():
+            type = input_files[label]['type']
+
+            if type == "bam":
+                bam_labels.append(label)
+
+        num_low_coverage = 0
+
+        for row_index, row in matches.iterrows():
+            gene_matches_below_read_threshold = logfile_df[
+                (logfile_df.id == row['ID']) & 
+                (logfile_df.depth < READ_DEPTH_THRESHOLD) &
+                (logfile_df.type == "bam")]
+            
+            if len(gene_matches_below_read_threshold) > 0:
+                # print("ignoring {} since it has low read depth (<{})...".format(row['ID'], READ_DEPTH_THRESHOLD))
+                # print(gene_matches_below_read_threshold)
+
+                for label, file in input_files.items():
+                    # print(feature_coverages[label][row['ID']])
+                    feature_coverages[label].pop(row['ID'], None)
+                    normalised_feature_coverages[label].pop(row['ID'], None)
+
+                num_low_coverage += 1 
+
+        print("REMOVED {} DUE TO LOW COVERAGE (<{})".format(num_low_coverage, READ_DEPTH_THRESHOLD))
+        print("REMAINING ID's: {}".format(feature_coverages[label].keys()))
+
+
+    for label in input_files.keys():
+        type = input_files[label]['type']
+        if type in ['bam', 'bedmethyl', 'bed']:
+
+            # flatten down all resampled coverages for this label and store dict under label
+            total_coverage = numpy.array([sum(i) for i in zip(*list(feature_coverages[label].values()))])
+            all_normalised_total_coverage = numpy.array([sum(i) for i in zip(*list(normalised_feature_coverages[label].values()))])
+
+            # normalised mod coverage is the average weighted proportion of a modification against read depth across all genes
             if type == "bedmethyl":
-                read_cov_label = label.split("_")[0] + "_read_depth"
-                additional_info += "{}\t{}".format(len(mod_peaks[label][row['ID']]), ",".join(str(x) for x in mod_peaks[label][row['ID']]))
-
-                # weighted probability of m6A function
-                # for each given site, we have P(m6A) = num_m6A / read_depth
-                # P(m6A) prior = 0.05, which is the abundance of m6A / A in entire RNA-seq
-                # formula for weighted probability is P_weighted = (N * P_observed) + (Weight_prior * P_prior) / (N + Weight_prior)
-                # Weight_prior = feature_coverages[read_cov_label][feature_index].max()
-                # P_prior = 0.01
-
-                # resampled_base_coverage = feature_coverages[read_cov_label][feature_index] / 2
-                # denom = (feature_coverages[read_cov_label][feature_index] + Weight_prior)
-                # normalised_feature_coverages[feature_index] = numpy.nan_to_num( (resampled_base_coverage + (Weight_prior * P_prior)) / denom)
-
-                # normalise against itself
-                #normalised_feature_coverages[feature_index] = normalise_coverage(resampled_base_coverage)
-
-                # normalise against read depth (fraction of bases methylated * normalised coverage)
-                mod_base_proportion = numpy.nan_to_num(resampled_base_coverage / feature_coverages[read_cov_label][feature_index])
-
-                # NOTE: this is due to how we calculate read depth, mentioned in the bam section above
-                # There are cases where a read may have indels/mismatches (which do not contribute to read depth) but within those sections a mod is detected
-                # this leads to numbers greater than 1 when calculating mod proportion
-                # So for now we'll just clamp those numbers down to 1
-                mod_base_proportion[mod_base_proportion > 1.0] = 1.0
-
-                if MOD_NORMALISATION == "raw":
-                    normalised_feature_coverages[label][feature_index] = mod_base_proportion
-                else:
-                    normalised_feature_coverages[label][feature_index] = mod_base_proportion * normalised_feature_coverages[read_cov_label][feature_index]
+                normalised_total_coverage = all_normalised_total_coverage / len(normalised_feature_coverages[label].keys())
             else:
-                normalised_feature_coverages[label][feature_index] = normalise_coverage(resampled_base_coverage)
+                normalised_total_coverage = normalise_coverage(all_normalised_total_coverage)
 
-            feature_coverages[label][feature_index] = resampled_base_coverage
-            AUC = round(numpy.sum(normalised_feature_coverages[label][feature_index]) / COVERAGE_BINS, 2) # gives score between 0 and 1
-            feature_index += 1
+            if type == "bed":
+                sites_of_interest = total_coverage # normalised_total_coverage
+            else:
+                coverages[label] = total_coverage
+                normalised_coverages[label] = normalised_total_coverage
 
-            STOP_CLOCK("row_start", "row_end")
-
-            # label, gene id, max coverage, gene length, auc, num mod peaks, mod peaks
-            row_coverage_summary = "{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], int(max(resampled_base_coverage)), row['end'] - row['start'], AUC, additional_info)
-            print(row_coverage_summary)
-            logfile.write(row_coverage_summary + "\n")
-
-        if type == "bam":
-            samfile.close()
-
-        # flatten down all resampled coverages for this label and store dict under label
-        total_coverage = numpy.array([sum(i) for i in zip(*feature_coverages[label])])
-        all_normalised_total_coverage = numpy.array([sum(i) for i in zip(*normalised_feature_coverages[label])])
-
-        # normalised mod coverage is the average weighted proportion of a modification against read depth across all genes
-        if type == "bedmethyl":
-            normalised_total_coverage = all_normalised_total_coverage / len(normalised_feature_coverages[label])
-        else:
-            normalised_total_coverage = normalise_coverage(all_normalised_total_coverage)
-
-        if type == "bed":
-            sites_of_interest = total_coverage#normalised_total_coverage
-        else:
-            coverages[label] = total_coverage
-            normalised_coverages[label] = normalised_total_coverage
-
-    print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
+    # print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
     additional_text = "num transcripts: {}\naverage transcript length: {}".format(len(tx_lengths.keys()), int(sum(tx_lengths.values()) / len(tx_lengths.values())))
-    print(additional_text)
-    logfile.close()
+    logfile_df.to_csv(LOGFILE_PATH, sep='\t', index=False)
 
     # plot coverages
     # this looks at coverage for each gene, resamples and normalises the coverage and adds it to a list

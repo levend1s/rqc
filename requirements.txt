@@ -17,3 +17,4 @@ scipy==1.14.1
 setuptools==75.6.0
 six==1.17.0
 tzdata==2024.2
+scikit-learn==1.6.1
