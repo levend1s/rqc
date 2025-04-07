@@ -37,14 +37,19 @@ parser.add_argument('--coverage_padding', type=int, default = 0)
 parser.add_argument('--coverage_bins', type=int, default = 100)
 parser.add_argument('--coverage_method', type=str, default = "max")
 parser.add_argument('--separate_plots_by_label_prefix', type=bool, default=False)
-parser.add_argument('--read_depth_threshold', type=int, default=0)
-parser.add_argument('--cannonical_mod_prop_threshold', type=float, default=0)
-parser.add_argument('--cannonical_mod_read_depth_threshold', type=float, default=0)
+parser.add_argument('--read_depth_threshold', type=int, default=20)
+parser.add_argument('--cannonical_mod_prop_threshold', type=float, default=0.7)
+parser.add_argument('--cannonical_mod_read_depth_threshold', type=float, default=20)
 parser.add_argument('--padding_ratio', type=float, default=0.1)
 parser.add_argument('--debug', type=bool, default=False)
 parser.add_argument('--mod_normalisation', type=str, default="default")
 parser.add_argument('--calculate_poly_a', type=bool, default=False)
 parser.add_argument('--show_cannonical_m6a', type=bool, default=False)
+parser.add_argument('--filter_for_m6A', type=str, default="[]")
+parser.add_argument('--filter_out_m6A', type=str, default="[]")
+parser.add_argument('--generate_filtered_bam', type=bool, default=False)
+
+
 
 
 
@@ -76,9 +81,9 @@ DEBUG = args.debug
 MOD_NORMALISATION = args.mod_normalisation
 CALCULATE_POLY_A = args.calculate_poly_a
 SHOW_CANNONICAL_M6A = args.show_cannonical_m6a
-
-if CANNONICAL_MOD_READ_DEPTH_THRESHOLD == 0:
-    CANNONICAL_MOD_READ_DEPTH_THRESHOLD = READ_DEPTH_THRESHOLD
+GENERATE_FILTERED_BAM = args.generate_filtered_bam
+FILTER_FOR_M6A = args.filter_for_m6A
+FILTER_OUT_M6A = args.filter_out_m6A
 
 # read unmapped (0x4)
 # read reverse strand (0x10)
@@ -788,8 +793,6 @@ if COMMAND == "tes_analysis":
     d_not_beyond_3p = {}
     d_not_in_feature_counts = {}
 
-
-
     logfile_df_index = 0
 
     bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
@@ -801,12 +804,26 @@ if COMMAND == "tes_analysis":
 
     gene_length = 0
 
-    d_cannonical_mod_locations = {}
-    d_cannonical_mod_locations['PF3D7_1338100.1'] = [3683,3754]
-    d_cannonical_mod_locations['PF3D7_1338200.1'] = [2543,2531,2471,2429]
-    d_cannonical_mod_locations['PF3D7_1420000.1'] = [2534,2526,2516,2383,2365]
+    # d_cannonical_mod_locations = {}
+    # d_cannonical_mod_locations['PF3D7_1338100.1'] = [3683,3754]
+    # d_cannonical_mod_locations['PF3D7_1338200.1'] = [2543,2531,2471,2429]
+    # d_cannonical_mod_locations['PF3D7_1420000.1'] = [2534,2526,2516,2383,2365]
 
-    print("label\tgene id\tnum reads\tincorrectly assigned (fc)\tnot assigned (fc)")
+    print("label\tgene id\ttotal reads\tnum reads after filter\tnot assigned (fc)\toutside 3p end\tmissing cannonical mod")
+
+    cannonical_mods_genome_space = []
+
+    if FILTER_FOR_M6A != "[]":
+        cannonical_mods_genome_space = ast.literal_eval(FILTER_FOR_M6A)
+        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
+    if FILTER_OUT_M6A != "[]":
+        cannonical_mods_genome_space = ast.literal_eval(FILTER_OUT_M6A)
+        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
+
+    if len(cannonical_mods_genome_space):
+        FILTER_READS_FOR_CANNONICAL_MODS = True
+    else:
+        FILTER_READS_FOR_CANNONICAL_MODS = False
 
     for label in bam_labels:
         samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
@@ -825,6 +842,25 @@ if COMMAND == "tes_analysis":
         ]
         feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=featurecounts_header)
 
+
+
+        # TODO load cannonical mod positions into array and convert to tx space
+        prefix = label.split("_")[0]
+        mod_label = "{}_m6A_0.95".format(prefix)
+
+        modkit_bedmethyl_header = [
+            "contig", "start", "end", "code", "score", "strand", 
+            "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
+            "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
+        ]
+        mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=modkit_bedmethyl_header)
+
+        # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
+        mods_file_df = mods_file_df[
+            (mods_file_df.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
+            (mods_file_df.valid_cov >= READ_DEPTH_THRESHOLD)
+        ]
+
         # generate coverage for all matches in this bam file
         for row_index, row in matches.iterrows():
             # find subfeatures
@@ -839,6 +875,24 @@ if COMMAND == "tes_analysis":
             gene_length = row['end'] - row['start']
             row_name = row['ID']
 
+            row_mods = mods_file_df[
+                (mods_file_df.start >= (row['start'] - COVERAGE_PADDING)) &
+                (mods_file_df.end <= (row['end'] + COVERAGE_PADDING)) &
+                (mods_file_df.strand == row['strand']) &
+                (mods_file_df.contig == row['seq_id'])
+            ]
+
+            # if row['strand'] == "-":
+            #     cannonical_mods_tx_space = row['end'] - numpy.array(row_mods['end'].to_list())
+            # else:
+            #     cannonical_mods_tx_space = numpy.array(row_mods['end'].to_list()) - row['start']
+
+            # print(row_mods)
+            # # print(row_mods['start'].to_list())
+            # cannonical_mods_genome_space = row_mods['start'].to_list()
+            # cannonical_mods_genome_space = cannonical_mods_genome_space
+            # print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
+
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
             row_subfeatures = getSubfeatures(row['ID'], "subfeature", 0)
@@ -846,6 +900,21 @@ if COMMAND == "tes_analysis":
 
             throw_ref_starts = []
             read_indexes_to_process = []
+
+            pysam_mod_tuples = {
+                'm6A': ('A', 1, 'a'),
+                'm6A_inosine': ('A', 1, 17596),
+                'pseU': ('T', 1, 17802),
+                'm5C': ('C', 1, 'm')
+            }
+
+            mod_of_interest = 'm6A'
+
+            missing_cannonical_mods = []
+            read_outside_3p_end = []
+
+            MOD_PROB_THRESHOLD = 0.95
+            pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD)
 
             for r in reads_in_region:
                 num_reads_bam += 1
@@ -855,12 +924,39 @@ if COMMAND == "tes_analysis":
                     if row['strand'] == "-":
                         read_3p_end = r.reference_start
                         most_3p_subfeature = row_subfeatures.iloc[0]
-                        # print(most_3p_subfeature)
-                        # print("{}-{}".format(r.reference_start, r.reference_end))
 
                         if read_3p_end <= most_3p_subfeature.end:
                             # read_indexes_to_process.append(this_index)
-                            read_indexes_to_process.append(r)
+
+                            if FILTER_READS_FOR_CANNONICAL_MODS:
+                                # this is [(read index, 256 * mod_prob)...]
+                                mods_probs = r.modified_bases.get(pysam_mod_tuples['m6A'])
+                                if mods_probs:
+                                    # keep only mod positions which are above mod prob threshold
+                                    ref_pos = numpy.array(r.get_reference_positions(full_length=True))
+                                    read_mod_positions = [x[0] for x in mods_probs if x[1] >= pysam_mod_threshold]
+                                    
+                                    # read mod positions is the position from the start of the read
+                                    # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
+                                    # print(ref_pos[read_mod_positions])
+
+                                    if set(cannonical_mods_genome_space).issubset(ref_pos[read_mod_positions]):
+                                        # print("READ HAD ALL CANNONICAL MODS\n")
+                                        if FILTER_FOR_M6A != "[]":
+                                            read_indexes_to_process.append(r)
+                                        if FILTER_OUT_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                    else:
+                                        # print("READ DID NOT HAVE ALL CANNONICAL MODS: id={}".format(r.query_name))
+                                        if FILTER_FOR_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                        if FILTER_OUT_M6A != "[]":
+                                            read_indexes_to_process.append(r)
+                            else:
+                                read_indexes_to_process.append(r)
+                        else:
+                            read_outside_3p_end.append(r.query_name)
+                            
 
                     else:
                         read_3p_end = r.reference_end
@@ -870,7 +966,28 @@ if COMMAND == "tes_analysis":
                             # read_indexes_to_process.append(this_index)
                             read_indexes_to_process.append(r)
 
-            # print("REMOVED: {} reads that did not start in the last feature of target gene...".format(num_reads_bam - len(read_indexes_to_process)))
+            # print("- REMOVED: {} reads that did not start in the last feature of target gene...".format(len(read_outside_3p_end)))
+            
+            # if FILTER_READS_FOR_CANNONICAL_MODS:
+                # print("- REMOVED: {} reads that did not contain all cannonical mods...".format(len(missing_cannonical_mods)))
+            # print("{} reads after filter".format(len(read_indexes_to_process)))
+
+            if GENERATE_FILTERED_BAM:
+                
+                if FILTER_FOR_M6A != "[]":
+                    fs_str = "FILTER_FOR_M6A"
+                else:
+                    fs_str = "FILTER_OUT_M6A"
+
+                filtered_bam_filename = "{}_rqc_{}_{}.bam".format(label, fs_str, str(cannonical_mods_genome_space))
+                print("GENERATING FILTERED BAM: {}".format(filtered_bam_filename))
+
+                rqc_filtered = pysam.AlignmentFile(filtered_bam_filename, "wb", template=samfile)
+                for read in read_indexes_to_process:
+                    rqc_filtered.write(read)
+
+                rqc_filtered.close()
+
             # !!!!! END NANOPORE SPECIFIC !!!!!
 
             gene_read_ids_fc = gene_reads['read_id'].to_list()
@@ -911,7 +1028,9 @@ if COMMAND == "tes_analysis":
             d_not_beyond_3p[label][row['ID']] = num_reads_bam - len(read_indexes_to_process)
             d_not_in_feature_counts[label][row['ID']] = not_found
 
-            print("{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(d_tts[label][row['ID']]), num_reads_bam - len(read_indexes_to_process), not_found))
+            print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], num_reads_bam, len(d_tts[label][row['ID']]), not_found, len(read_outside_3p_end), len(missing_cannonical_mods)))
+        
+        samfile.close()
 
 
     # We are interested if the TES has multiple end sites 
@@ -1004,7 +1123,7 @@ if COMMAND == "tes_analysis":
                 max_density = max(smoothed_tts_hist)
 
 
-        tes_variance_tests = ["x2"]#, "x2", "mw-u"]
+        tes_variance_tests = ["ks"]#, "x2", "mw-u"]
 
         for test in tes_variance_tests:
             if average_expression < READ_DEPTH_THRESHOLD:
@@ -1184,7 +1303,7 @@ if COMMAND == "tes_analysis":
                 axes[0, axes_index].set(ylabel='poly-A length (nt)')
                 axes[1, axes_index].set(ylabel='count')
                 # axes[2, axes_index].set(xlabel='poly a length (nt)', ylabel='count')
-                axes[2, axes_index].set(xlabel='transcription end site (nt)', ylabel='cumulative density (au)')
+                axes[2, axes_index].set(xlabel='transcription end site (nt)', ylabel='density (au)')
             else:
                 axes[0, axes_index].get_yaxis().set_visible(False)
                 axes[1, axes_index].get_yaxis().set_visible(False)
