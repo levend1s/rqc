@@ -887,7 +887,7 @@ if COMMAND == "tes_analysis":
             # else:
             #     cannonical_mods_tx_space = numpy.array(row_mods['end'].to_list()) - row['start']
 
-            # print(row_mods)
+            print(row_mods)
             # # print(row_mods['start'].to_list())
             # cannonical_mods_genome_space = row_mods['start'].to_list()
             # cannonical_mods_genome_space = cannonical_mods_genome_space
@@ -1147,6 +1147,9 @@ if COMMAND == "tes_analysis":
                     # ks test
                     if test == "ks":
                         r = scipy.stats.ks_2samp(d_tts[s1][row['ID']], d_tts[s2][row['ID']])
+                        print("{} vs {}: {}".format(s1, s2, r.pvalue))
+                        print("{} vs {}".format(numpy.array(d_tts[s1][row['ID']]).mean(), numpy.array(d_tts[s2][row['ID']]).mean()))
+
                     if test == "x2":
                         print("{} and {}".format(len(d_tts_hist[s1]), len(d_tts_hist[s2])))
                         print("{} and {}".format(d_tts_hist[s1], d_tts_hist[s2]))
@@ -1165,6 +1168,10 @@ if COMMAND == "tes_analysis":
                     # plt.show()
                     if test == "ks":
                         r = scipy.stats.ks_2samp(d_tts[s1][row['ID']], d_tts[s2][row['ID']])
+                        print("{} vs {}: {}".format(s1, s2, r.pvalue))
+
+                        print("{} vs {}".format(numpy.array(d_tts[s1][row['ID']]).mean(), numpy.array(d_tts[s2][row['ID']]).mean()))
+
                     if test == "x2":
                         r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
 
