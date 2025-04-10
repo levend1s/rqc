@@ -1122,7 +1122,6 @@ if COMMAND == "tes_analysis":
             if max_density < max(smoothed_tts_hist):
                 max_density = max(smoothed_tts_hist)
 
-
         tes_variance_tests = ["ks"]#, "x2", "mw-u"]
 
         for test in tes_variance_tests:
@@ -1321,6 +1320,43 @@ if COMMAND == "tes_analysis":
             axes_index += 1
 
         fig.subplots_adjust(hspace=0, wspace=0.1)
+
+        from kneed import KneeLocator
+
+        NUM_VERT_PLOTS = 2
+        fig, axes = plt.subplots(NUM_VERT_PLOTS, num_bams)
+        axes_index = 0
+
+        for label in bam_labels:
+            # scatter plot tts vs poly-a length
+            tes = list(range(1, max(d_tts[label][gene_id]) + 1))
+            paired_tes_hist = list(zip(d_tts_hist[label], tes))
+            elbow = sorted([x for x in paired_tes_hist if x[0] > 0], key=lambda a: a[0], reverse=True)
+            print(elbow)
+
+            e1 = [x[0] for x in elbow]
+
+            kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
+            cannonical_tes = elbow[0:kneedle.knee]
+            
+            max_cannonical_tes = 0
+            for t in cannonical_tes:
+                if t[1] > max_cannonical_tes:
+                    max_cannonical_tes = t[1]
+
+            print(max_cannonical_tes)
+            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_cannonical_tes])
+            num_normal = len([x for x in d_tts[label][gene_id] if x <= max_cannonical_tes])
+
+            print("read throughs: {}, normal: {}".format(num_read_throughs, num_normal))
+
+            axes[0, axes_index].plot(e1)
+
+            axes_index += 1
+
+            # axes[0, axes_index].set_ylim(ymin=0, ymax=max_poly_a*1.1)
+            # axes[0, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
+            # axes[0, axes_index].get_xaxis().set_visible(False)
 
         # TODO: also plot density violin plot of poly-A lengths. Violin plot of transcript termination sites
         # poly_a_labels = ["{}\nn={}".format(key, len(d_poly_a_lengths[key])) for key in d_poly_a_lengths.keys()]
