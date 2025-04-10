@@ -14,6 +14,8 @@ from pprint import pprint
 import sys
 import itertools
 
+from kneed import KneeLocator
+from statsmodels.stats.proportion import proportions_ztest
 
 numpy.set_printoptions(threshold=sys.maxsize)
 numpy.seterr(divide='ignore', invalid='ignore')
@@ -1122,7 +1124,34 @@ if COMMAND == "tes_analysis":
             if max_density < max(smoothed_tts_hist):
                 max_density = max(smoothed_tts_hist)
 
-        tes_variance_tests = ["ks"]#, "x2", "mw-u"]
+        tes_variance_tests = ["z"]#, "x2", "mw-u", "ks"]
+
+        d_read_through_counts = {}
+        d_normal_read_counts = {}
+
+        for label in bam_labels:
+            # scatter plot tts vs poly-a length
+            tes = list(range(1, max(d_tts[label][gene_id]) + 1))
+            paired_tes_hist = list(zip(d_tts_hist[label], tes))
+            elbow = sorted([x for x in paired_tes_hist if x[0] > 0], key=lambda a: a[0], reverse=True)
+            # print(elbow)
+
+            e1 = [x[0] for x in elbow]
+
+            kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
+            cannonical_tes = elbow[0:kneedle.knee]
+            
+            max_cannonical_tes = 0
+            for t in cannonical_tes:
+                if t[1] > max_cannonical_tes:
+                    max_cannonical_tes = t[1]
+
+            # print(max_cannonical_tes)
+            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_cannonical_tes])
+            num_normal = len([x for x in d_tts[label][gene_id] if x <= max_cannonical_tes])
+
+            d_read_through_counts[label] = num_read_throughs
+            d_normal_read_counts[label] = num_normal
 
         for test in tes_variance_tests:
             if average_expression < READ_DEPTH_THRESHOLD:
@@ -1148,17 +1177,27 @@ if COMMAND == "tes_analysis":
                         r = scipy.stats.ks_2samp(d_tts[s1][row['ID']], d_tts[s2][row['ID']])
                         print("{} vs {}: {}".format(s1, s2, r.pvalue))
                         print("{} vs {}".format(numpy.array(d_tts[s1][row['ID']]).mean(), numpy.array(d_tts[s2][row['ID']]).mean()))
+                        pvalue = r.pvalue
 
                     if test == "x2":
                         print("{} and {}".format(len(d_tts_hist[s1]), len(d_tts_hist[s2])))
                         print("{} and {}".format(d_tts_hist[s1], d_tts_hist[s2]))
 
                         r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
+                        pvalue = r.pvalue
                     
+                    if test == "z":
+                        stat, pvalue = proportions_ztest(
+                            count=[d_read_through_counts[s1], d_read_through_counts[s2]],
+                            nobs=[d_normal_read_counts[s1], d_normal_read_counts[s2]],
+                            alternative='two-sided'
+                        )
+                        # print("{} vs {}: {}".format(s1, s2, pvalue))
+
                     # chi squared test
                     # print("{} and {}".format(len(d_tts[s1][row['ID']]), len(d_tts[s2][row['ID']])))
                     # r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
-                    inter_treatment_p_vals.append(r.pvalue)
+                    inter_treatment_p_vals.append(pvalue)
 
                 for s1, s2 in pairwise_combinations_same_treatment:
                     # two-sided: The null hypothesis is that the two distributions are identical, F(x)=G(x) for all x; the alternative is that they are not identical.
@@ -1170,11 +1209,22 @@ if COMMAND == "tes_analysis":
                         print("{} vs {}: {}".format(s1, s2, r.pvalue))
 
                         print("{} vs {}".format(numpy.array(d_tts[s1][row['ID']]).mean(), numpy.array(d_tts[s2][row['ID']]).mean()))
+                        pvalue = r.pvalue
 
                     if test == "x2":
                         r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
+                        pvalue = r.pvalue
 
-                    same_treatment_p_vals.append(r.pvalue)
+                    if test == "z":
+                        stat, pvalue = proportions_ztest(
+                            count=[d_read_through_counts[s1], d_read_through_counts[s2]],
+                            nobs=[d_normal_read_counts[s1], d_normal_read_counts[s2]],
+                            alternative='two-sided'
+                        )
+
+                        # print("{} vs {}: {}".format(s1, s2, pvalue))
+
+                    same_treatment_p_vals.append(pvalue)
 
                 # this is a debuious assumption of intratreatment ordering (idx = 0 and -1)
                 alpha = 0.05
@@ -1321,38 +1371,38 @@ if COMMAND == "tes_analysis":
 
         fig.subplots_adjust(hspace=0, wspace=0.1)
 
-        from kneed import KneeLocator
+        # from kneed import KneeLocator
 
-        NUM_VERT_PLOTS = 2
-        fig, axes = plt.subplots(NUM_VERT_PLOTS, num_bams)
-        axes_index = 0
+        # NUM_VERT_PLOTS = 2
+        # fig, axes = plt.subplots(NUM_VERT_PLOTS, num_bams)
+        # axes_index = 0
 
-        for label in bam_labels:
-            # scatter plot tts vs poly-a length
-            tes = list(range(1, max(d_tts[label][gene_id]) + 1))
-            paired_tes_hist = list(zip(d_tts_hist[label], tes))
-            elbow = sorted([x for x in paired_tes_hist if x[0] > 0], key=lambda a: a[0], reverse=True)
-            print(elbow)
+        # for label in bam_labels:
+        #     # scatter plot tts vs poly-a length
+        #     tes = list(range(1, max(d_tts[label][gene_id]) + 1))
+        #     paired_tes_hist = list(zip(d_tts_hist[label], tes))
+        #     elbow = sorted([x for x in paired_tes_hist if x[0] > 0], key=lambda a: a[0], reverse=True)
+        #     print(elbow)
 
-            e1 = [x[0] for x in elbow]
+        #     e1 = [x[0] for x in elbow]
 
-            kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
-            cannonical_tes = elbow[0:kneedle.knee]
+        #     kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
+        #     cannonical_tes = elbow[0:kneedle.knee]
             
-            max_cannonical_tes = 0
-            for t in cannonical_tes:
-                if t[1] > max_cannonical_tes:
-                    max_cannonical_tes = t[1]
+        #     max_cannonical_tes = 0
+        #     for t in cannonical_tes:
+        #         if t[1] > max_cannonical_tes:
+        #             max_cannonical_tes = t[1]
 
-            print(max_cannonical_tes)
-            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_cannonical_tes])
-            num_normal = len([x for x in d_tts[label][gene_id] if x <= max_cannonical_tes])
+        #     print(max_cannonical_tes)
+        #     num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_cannonical_tes])
+        #     num_normal = len([x for x in d_tts[label][gene_id] if x <= max_cannonical_tes])
 
-            print("read throughs: {}, normal: {}".format(num_read_throughs, num_normal))
+        #     print("read throughs: {}, normal: {}".format(num_read_throughs, num_normal))
 
-            axes[0, axes_index].plot(e1)
+        #     axes[0, axes_index].plot(e1)
 
-            axes_index += 1
+        #     axes_index += 1
 
             # axes[0, axes_index].set_ylim(ymin=0, ymax=max_poly_a*1.1)
             # axes[0, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
