@@ -801,7 +801,7 @@ if COMMAND == "tes_analysis":
     bam_labels_control = [l for l in bam_labels if input_files[l]['group'] == 'control']
     bam_labels_treatment = [l for l in bam_labels if input_files[l]['group'] == 'knock-sideways']
 
-    summary_header = ["gene_id", "test", "p_inter_treatment", "p_same_treatment", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
+    summary_header = ["gene_id", "test", "p_inter_treatment", "p_same_treatment", "TES split", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
     summary_df = pandas.DataFrame(columns=summary_header)
 
     gene_length = 0
@@ -1274,7 +1274,7 @@ if COMMAND == "tes_analysis":
                 if p_same_treatment > (alpha / len(inter_treatment_p_vals)):
                     tests_passed += 1
 
-            row_summary = [row['ID'], test, p_inter_treatment, p_same_treatment, score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
+            row_summary = [row['ID'], test, p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
 
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
