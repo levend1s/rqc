@@ -889,7 +889,8 @@ if COMMAND == "tes_analysis":
             # else:
             #     cannonical_mods_tx_space = numpy.array(row_mods['end'].to_list()) - row['start']
 
-            print(row_mods)
+            if DEBUG:
+                print(row_mods)
             # # print(row_mods['start'].to_list())
             # cannonical_mods_genome_space = row_mods['start'].to_list()
             # cannonical_mods_genome_space = cannonical_mods_genome_space
@@ -1128,30 +1129,60 @@ if COMMAND == "tes_analysis":
 
         d_read_through_counts = {}
         d_normal_read_counts = {}
+        d_cannonical_tes = {}
+        d_max_can_tes = {}
 
         for label in bam_labels:
             # scatter plot tts vs poly-a length
             tes = list(range(1, max(d_tts[label][gene_id]) + 1))
             paired_tes_hist = list(zip(d_tts_hist[label], tes))
             elbow = sorted([x for x in paired_tes_hist if x[0] > 0], key=lambda a: a[0], reverse=True)
-            # print(elbow)
 
             e1 = [x[0] for x in elbow]
 
             kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
             cannonical_tes = elbow[0:kneedle.knee]
-            
-            max_cannonical_tes = 0
-            for t in cannonical_tes:
-                if t[1] > max_cannonical_tes:
-                    max_cannonical_tes = t[1]
 
-            # print(max_cannonical_tes)
-            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_cannonical_tes])
-            num_normal = len([x for x in d_tts[label][gene_id] if x <= max_cannonical_tes])
+            d_cannonical_tes[label] = cannonical_tes
+            d_max_can_tes[label] = elbow[0]
+
+        # if splitting the reads at this site gives a bigger proportion of read throughs than normals,
+        # it's not a good TES. We can't have more read throughs than normals
+        # go to the next one
+        READTHROUGH_PROP_THRESHOLD = 0.5
+        first_label = bam_labels[0]
+        max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][0]
+
+        for i in range(len(d_cannonical_tes[first_label])):
+            this_tuple = d_cannonical_tes[first_label][i]
+            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > this_tuple[1]])
+            num_normal = len([x for x in d_tts[label][gene_id] if x <= this_tuple[1]])
+            
+            if (num_read_throughs / num_normal) < READTHROUGH_PROP_THRESHOLD:
+                max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][i]
+                break
+               
+        # verify the max cannonical tes is consistent across samples
+        # if not, set the max common tes to the sample which has the biggest 3'UTR most tes
+        # for label in bam_labels:
+        #     sample_max_tes_tuple = d_cannonical_tes[label][0]
+        #     if sample_max_tes_tuple[1] > max_common_cannonical_tes_tuple[1]:
+        #         max_common_cannonical_tes_tuple = sample_max_tes_tuple
+
+        for label in bam_labels:
+            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_common_cannonical_tes_tuple[1]])
+            num_normal = len([x for x in d_tts[label][gene_id] if x <= max_common_cannonical_tes_tuple[1]])
 
             d_read_through_counts[label] = num_read_throughs
             d_normal_read_counts[label] = num_normal
+
+
+        if DEBUG:
+            print(d_cannonical_tes)
+            print(d_max_can_tes)
+            print(d_read_through_counts)
+            print(d_normal_read_counts)
+            print("max_common_cannonical_tes_tuple: {}".format(max_common_cannonical_tes_tuple))
 
         for test in tes_variance_tests:
             if average_expression < READ_DEPTH_THRESHOLD:
@@ -1192,7 +1223,8 @@ if COMMAND == "tes_analysis":
                             nobs=[d_normal_read_counts[s1], d_normal_read_counts[s2]],
                             alternative='two-sided'
                         )
-                        # print("{} vs {}: {}".format(s1, s2, pvalue))
+                        if DEBUG:
+                            print("{} vs {}: {}".format(s1, s2, pvalue))
 
                     # chi squared test
                     # print("{} and {}".format(len(d_tts[s1][row['ID']]), len(d_tts[s2][row['ID']])))
@@ -1222,7 +1254,8 @@ if COMMAND == "tes_analysis":
                             alternative='two-sided'
                         )
 
-                        # print("{} vs {}: {}".format(s1, s2, pvalue))
+                        if DEBUG:
+                            print("{} vs {}: {}".format(s1, s2, pvalue))
 
                     same_treatment_p_vals.append(pvalue)
 
