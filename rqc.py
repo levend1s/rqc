@@ -791,6 +791,7 @@ if COMMAND == "tes_analysis":
 
     d_poly_a_lengths = {}
     d_tts = {}
+    d_mod_info = {}
     
     d_not_beyond_3p = {}
     d_not_in_feature_counts = {}
@@ -832,6 +833,7 @@ if COMMAND == "tes_analysis":
         num_bams += 1
         d_poly_a_lengths[label] = {}
         d_tts[label] = {}
+        d_mod_info[label] = {}
         
         d_not_beyond_3p[label] = {}
         d_not_in_feature_counts[label] = {}
@@ -884,17 +886,25 @@ if COMMAND == "tes_analysis":
                 (mods_file_df.contig == row['seq_id'])
             ]
 
-            # if row['strand'] == "-":
-            #     cannonical_mods_tx_space = row['end'] - numpy.array(row_mods['end'].to_list())
-            # else:
-            #     cannonical_mods_tx_space = numpy.array(row_mods['end'].to_list()) - row['start']
+            d_mod_info[label][row['ID']] = {}
+            d_mod_info[label][row['ID']]['valid_cov'] = {}
+            d_mod_info[label][row['ID']]['num_mod'] = {}
+
+            for mod_index, mod in row_mods.iterrows():
+                d_mod_info[label][row['ID']]['valid_cov'][mod['start']] = mod['valid_cov']
+                d_mod_info[label][row['ID']]['num_mod'][mod['start']] = mod['num_mod']
+
+            # CALCULTE METHYLATION CHANGE
+            # d_mod_info
+            # can calculate % difference in cannonical modified sites
+            # can calculate the log ratio
 
             if DEBUG:
                 print(row_mods)
-            # # print(row_mods['start'].to_list())
-            # cannonical_mods_genome_space = row_mods['start'].to_list()
-            # cannonical_mods_genome_space = cannonical_mods_genome_space
-            # print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
+                # # print(row_mods['start'].to_list())
+                cannonical_mods_genome_space = row_mods['start'].to_list()
+                # cannonical_mods_genome_space = cannonical_mods_genome_space
+                print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
 
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
@@ -905,10 +915,14 @@ if COMMAND == "tes_analysis":
             read_indexes_to_process = []
 
             pysam_mod_tuples = {
-                'm6A': ('A', 1, 'a'),
-                'm6A_inosine': ('A', 1, 17596),
-                'pseU': ('T', 1, 17802),
-                'm5C': ('C', 1, 'm')
+                'm6A_rev': ('A', 1, 'a'),
+                'm6A_inosine_rev': ('A', 1, 17596),
+                'pseU_rev': ('T', 1, 17802),
+                'm5C_rev': ('C', 1, 'm'),
+                'm6A_for': ('A', 0, 'a'),
+                'm6A_inosine_for': ('A', 0, 17596),
+                'pseU_for': ('T', 0, 17802),
+                'm5C_for': ('C', 0, 'm')
             }
 
             mod_of_interest = 'm6A'
@@ -933,7 +947,7 @@ if COMMAND == "tes_analysis":
 
                             if FILTER_READS_FOR_CANNONICAL_MODS:
                                 # this is [(read index, 256 * mod_prob)...]
-                                mods_probs = r.modified_bases.get(pysam_mod_tuples['m6A'])
+                                mods_probs = r.modified_bases.get(pysam_mod_tuples['m6A_rev'])
                                 if mods_probs:
                                     # keep only mod positions which are above mod prob threshold
                                     ref_pos = numpy.array(r.get_reference_positions(full_length=True))
@@ -942,7 +956,6 @@ if COMMAND == "tes_analysis":
                                     # read mod positions is the position from the start of the read
                                     # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
                                     # print(ref_pos[read_mod_positions])
-
                                     if set(cannonical_mods_genome_space).issubset(ref_pos[read_mod_positions]):
                                         # print("READ HAD ALL CANNONICAL MODS\n")
                                         if FILTER_FOR_M6A != "[]":
@@ -967,7 +980,33 @@ if COMMAND == "tes_analysis":
 
                         if read_3p_end >= most_3p_subfeature.start:
                             # read_indexes_to_process.append(this_index)
-                            read_indexes_to_process.append(r)
+                            if FILTER_READS_FOR_CANNONICAL_MODS:
+                                # this is [(read index, 256 * mod_prob)...]
+                                mods_probs = r.modified_bases.get(pysam_mod_tuples['m6A_for'])
+                                if mods_probs:
+                                    # keep only mod positions which are above mod prob threshold
+                                    ref_pos = numpy.array(r.get_reference_positions(full_length=True))
+                                    read_mod_positions = [x[0] for x in mods_probs if x[1] >= pysam_mod_threshold]
+                                    
+                                    # read mod positions is the position from the start of the read
+                                    # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
+                                    # print(ref_pos[read_mod_positions])
+                                    if set(cannonical_mods_genome_space).issubset(ref_pos[read_mod_positions]):
+                                        # print("READ HAD ALL CANNONICAL MODS\n")
+                                        if FILTER_FOR_M6A != "[]":
+                                            read_indexes_to_process.append(r)
+                                        if FILTER_OUT_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                    else:
+                                        # print("READ DID NOT HAVE ALL CANNONICAL MODS: id={}".format(r.query_name))
+                                        if FILTER_FOR_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                        if FILTER_OUT_M6A != "[]":
+                                            read_indexes_to_process.append(r)
+                            else:
+                                read_indexes_to_process.append(r)
+                        else:
+                            read_outside_3p_end.append(r.query_name)
 
             # print("- REMOVED: {} reads that did not start in the last feature of target gene...".format(len(read_outside_3p_end)))
             
@@ -992,7 +1031,6 @@ if COMMAND == "tes_analysis":
                 rqc_filtered.close()
 
             # !!!!! END NANOPORE SPECIFIC !!!!!
-
             gene_read_ids_fc = gene_reads['read_id'].to_list()
             # print(gene_read_ids_fc)
             found = 0
@@ -1132,6 +1170,8 @@ if COMMAND == "tes_analysis":
         d_cannonical_tes = {}
         d_max_can_tes = {}
 
+        # !!!! start of TES analysis, decide where the readthrough split point is
+        # First, calculate the elbow for TES sites by count/frequency 
         for label in bam_labels:
             # scatter plot tts vs poly-a length
             tes = list(range(1, max(d_tts[label][gene_id]) + 1))
@@ -1146,9 +1186,12 @@ if COMMAND == "tes_analysis":
             d_cannonical_tes[label] = cannonical_tes
             d_max_can_tes[label] = elbow[0]
 
+        # We're trying to find a good TES to split readthroughs and normal reads
+        # We'll start by taking the TES with the highest frequency for the first sample
+
         # if splitting the reads at this site gives a bigger proportion of read throughs than normals,
         # it's not a good TES. We can't have more read throughs than normals
-        # go to the next one
+        # Go to the next most frequent TES
         READTHROUGH_PROP_THRESHOLD = 0.5
         first_label = bam_labels[0]
         max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][0]
@@ -1162,13 +1205,7 @@ if COMMAND == "tes_analysis":
                 max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][i]
                 break
                
-        # verify the max cannonical tes is consistent across samples
-        # if not, set the max common tes to the sample which has the biggest 3'UTR most tes
-        # for label in bam_labels:
-        #     sample_max_tes_tuple = d_cannonical_tes[label][0]
-        #     if sample_max_tes_tuple[1] > max_common_cannonical_tes_tuple[1]:
-        #         max_common_cannonical_tes_tuple = sample_max_tes_tuple
-
+        # split into readthroughs and normals based on our TES
         for label in bam_labels:
             num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_common_cannonical_tes_tuple[1]])
             num_normal = len([x for x in d_tts[label][gene_id] if x <= max_common_cannonical_tes_tuple[1]])
