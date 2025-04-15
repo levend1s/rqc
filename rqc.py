@@ -814,19 +814,56 @@ if COMMAND == "tes_analysis":
 
     print("label\tgene id\ttotal reads\tnum reads after filter\tnot assigned (fc)\toutside 3p end\tmissing cannonical mod")
 
-    cannonical_mods_genome_space = []
+    cannonical_mods_genome_space_filter = []
 
     if FILTER_FOR_M6A != "[]":
-        cannonical_mods_genome_space = ast.literal_eval(FILTER_FOR_M6A)
-        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
+        cannonical_mods_genome_space_filter = ast.literal_eval(FILTER_FOR_M6A)
+        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space_filter))
     if FILTER_OUT_M6A != "[]":
-        cannonical_mods_genome_space = ast.literal_eval(FILTER_OUT_M6A)
-        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
+        cannonical_mods_genome_space_filter = ast.literal_eval(FILTER_OUT_M6A)
+        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space_filter))
 
-    if len(cannonical_mods_genome_space):
+    if len(cannonical_mods_genome_space_filter):
         FILTER_READS_FOR_CANNONICAL_MODS = True
     else:
         FILTER_READS_FOR_CANNONICAL_MODS = False
+
+    # START CANNONICAL MOD IDENTIFICATION
+    cannonical_mods_start_pos = {}
+    for label in bam_labels:
+        prefix = label.split("_")[0]
+        mod_label = "{}_m6A_0.95".format(prefix)
+
+        modkit_bedmethyl_header = [
+            "contig", "start", "end", "code", "score", "strand", 
+            "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
+            "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
+        ]
+        mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=modkit_bedmethyl_header)
+
+        # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
+        mods_file_df = mods_file_df[
+            (mods_file_df.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
+            (mods_file_df.valid_cov >= READ_DEPTH_THRESHOLD)
+        ]
+
+        for row_index, row in matches.iterrows():
+
+            if row['ID'] not in cannonical_mods_start_pos:
+                cannonical_mods_start_pos[row['ID']] = []
+
+            row_mods = mods_file_df[
+                (mods_file_df.start >= (row['start'] - COVERAGE_PADDING)) &
+                (mods_file_df.end <= (row['end'] + COVERAGE_PADDING)) &
+                (mods_file_df.strand == row['strand']) &
+                (mods_file_df.contig == row['seq_id'])
+            ]
+
+            for mod_index, mod in row_mods.iterrows():
+                if mod['start'] not in cannonical_mods_start_pos[row['ID']]:
+                    cannonical_mods_start_pos[row['ID']].append(mod['start'])
+
+    # END CANNONICAL MOD IDENTIFICATION
 
     for label in bam_labels:
         samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
@@ -860,10 +897,10 @@ if COMMAND == "tes_analysis":
         mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=modkit_bedmethyl_header)
 
         # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
-        mods_file_df = mods_file_df[
-            (mods_file_df.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
-            (mods_file_df.valid_cov >= READ_DEPTH_THRESHOLD)
-        ]
+        # mods_file_df = mods_file_df[
+        #     (mods_file_df.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
+        #     (mods_file_df.valid_cov >= READ_DEPTH_THRESHOLD)
+        # ]
 
         # generate coverage for all matches in this bam file
         for row_index, row in matches.iterrows():
@@ -880,8 +917,7 @@ if COMMAND == "tes_analysis":
             row_name = row['ID']
 
             row_mods = mods_file_df[
-                (mods_file_df.start >= (row['start'] - COVERAGE_PADDING)) &
-                (mods_file_df.end <= (row['end'] + COVERAGE_PADDING)) &
+                (mods_file_df['start'].isin(cannonical_mods_start_pos[row['ID']])) &
                 (mods_file_df.strand == row['strand']) &
                 (mods_file_df.contig == row['seq_id'])
             ]
@@ -893,18 +929,6 @@ if COMMAND == "tes_analysis":
             for mod_index, mod in row_mods.iterrows():
                 d_mod_info[label][row['ID']]['valid_cov'][mod['start']] = mod['valid_cov']
                 d_mod_info[label][row['ID']]['num_mod'][mod['start']] = mod['num_mod']
-
-            # CALCULTE METHYLATION CHANGE
-            # d_mod_info
-            # can calculate % difference in cannonical modified sites
-            # can calculate the log ratio
-
-            if DEBUG:
-                print(row_mods)
-                # # print(row_mods['start'].to_list())
-                cannonical_mods_genome_space = row_mods['start'].to_list()
-                # cannonical_mods_genome_space = cannonical_mods_genome_space
-                print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space))
 
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
@@ -956,7 +980,7 @@ if COMMAND == "tes_analysis":
                                     # read mod positions is the position from the start of the read
                                     # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
                                     # print(ref_pos[read_mod_positions])
-                                    if set(cannonical_mods_genome_space).issubset(ref_pos[read_mod_positions]):
+                                    if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
                                         # print("READ HAD ALL CANNONICAL MODS\n")
                                         if FILTER_FOR_M6A != "[]":
                                             read_indexes_to_process.append(r)
@@ -991,7 +1015,7 @@ if COMMAND == "tes_analysis":
                                     # read mod positions is the position from the start of the read
                                     # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
                                     # print(ref_pos[read_mod_positions])
-                                    if set(cannonical_mods_genome_space).issubset(ref_pos[read_mod_positions]):
+                                    if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
                                         # print("READ HAD ALL CANNONICAL MODS\n")
                                         if FILTER_FOR_M6A != "[]":
                                             read_indexes_to_process.append(r)
@@ -1021,7 +1045,7 @@ if COMMAND == "tes_analysis":
                 else:
                     fs_str = "FILTER_OUT_M6A"
 
-                filtered_bam_filename = "{}_rqc_{}_{}.bam".format(label, fs_str, str(cannonical_mods_genome_space))
+                filtered_bam_filename = "{}_rqc_{}_{}.bam".format(label, fs_str, str(cannonical_mods_genome_space_filter))
                 print("GENERATING FILTERED BAM: {}".format(filtered_bam_filename))
 
                 rqc_filtered = pysam.AlignmentFile(filtered_bam_filename, "wb", template=samfile)
@@ -1081,6 +1105,60 @@ if COMMAND == "tes_analysis":
     
     pairwise_combinations_inter_treatment = list(itertools.combinations(bam_labels, 2))
     pairwise_combinations_inter_treatment = [c for c in pairwise_combinations_inter_treatment if c not in pairwise_combinations_same_treatment]
+
+    ### CALCULTE METHYLATION CHANGE
+    # d_mod_info
+    # can calculate % difference in cannonical modified sites
+    # can calculate the log ratio
+    first_label = bam_labels[0]
+
+    weighted_mod_ratios_before = {}
+    weighted_mod_ratios_after = {}
+    groups = [(bam_labels_control, weighted_mod_ratios_before), (bam_labels_treatment, weighted_mod_ratios_after)]
+    d_wam_change = {}
+
+    # for c1, c2
+    for row_index, row in matches.iterrows():
+        gene_id = row['ID']
+        weighted_mod_ratios_before[gene_id] = []
+        weighted_mod_ratios_after[gene_id] = []
+
+        cannonical_mod_keys = d_mod_info[first_label][gene_id]['valid_cov'].keys()
+
+        # calculate sum of total cannonical mods read depth across all samples for weighting
+        for group_labels, group_weighted_outputs in groups:
+            valid_cov_total = 0
+            for label in group_labels:
+                for cannonical_mod in cannonical_mod_keys:
+                    valid_cov_total += d_mod_info[label][gene_id]['valid_cov'][cannonical_mod]
+
+            for label in group_labels:            
+                for cannonical_mod in cannonical_mod_keys:
+                    num_valid = d_mod_info[label][gene_id]['valid_cov'][cannonical_mod]
+                    num_mods = d_mod_info[label][gene_id]['num_mod'][cannonical_mod]
+                    weight = num_valid / valid_cov_total
+
+                    this_weighted_mod_proportion = (num_mods / num_valid) * weight
+                    group_weighted_outputs[gene_id].append(this_weighted_mod_proportion)
+
+    for gene in weighted_mod_ratios_before:
+        wam_before = sum(weighted_mod_ratios_before[gene])# / (len(weighted_mod_ratios_before[gene]))
+        wam_after = sum(weighted_mod_ratios_after[gene])# / (len(weighted_mod_ratios_after[gene]))
+        print("gene {}: before {}, after: {}".format(gene, wam_before, wam_after))
+
+        wam_change = wam_after / wam_before
+        d_wam_change[gene] = wam_change
+
+    from pprint import pprint
+
+    pprint("d_mod_info: {}".format(d_mod_info))
+    pprint("weighted_mod_ratios_before: {}".format(weighted_mod_ratios_before))
+    pprint("weighted_mod_ratios_after: {}".format(weighted_mod_ratios_after))
+    pprint("d_wam_change: {}".format(d_wam_change))
+    ### END METHYLATION CHANGE CALCULATION
+
+    if DEBUG:
+        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space_filter))
 
     # print("\t".join([str(x) for x in summary_header]))
     summary_df_index = 0
