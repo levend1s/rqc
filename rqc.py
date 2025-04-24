@@ -13,9 +13,11 @@ import time
 from pprint import pprint
 import sys
 import itertools
+import os
 
 from kneed import KneeLocator
 from statsmodels.stats.proportion import proportions_ztest
+from pprint import pprint
 
 numpy.set_printoptions(threshold=sys.maxsize)
 numpy.seterr(divide='ignore', invalid='ignore')
@@ -40,7 +42,7 @@ parser.add_argument('--coverage_bins', type=int, default = 100)
 parser.add_argument('--coverage_method', type=str, default = "max")
 parser.add_argument('--separate_plots_by_label_prefix', type=bool, default=False)
 parser.add_argument('--read_depth_threshold', type=int, default=20)
-parser.add_argument('--cannonical_mod_prop_threshold', type=float, default=0.7)
+parser.add_argument('--cannonical_mod_prop_threshold', type=float, default=0.5)
 parser.add_argument('--cannonical_mod_read_depth_threshold', type=float, default=20)
 parser.add_argument('--padding_ratio', type=float, default=0.1)
 parser.add_argument('--debug', type=bool, default=False)
@@ -111,6 +113,11 @@ GFF_DF = None
 GFF_PARENT_TREE = {}
 CLOCKS = {}
 
+if DEBUG:
+    TES_SUMMARY_HEADER = ["gene_id", "test", "p_inter_treatment", "p_same_treatment", "tes", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
+else:
+    TES_SUMMARY_HEADER = ["gene_id", "p_inter_treatment", "p_same_treatment", "tes", "average_expression", "number_cannonical_mods", "wam_before", "wam_after", "wam_change"]
+    
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
 # length which at least 50% or 90% of total nucleotides read belong to
@@ -745,6 +752,36 @@ if COMMAND == "base_coverage":
             output['count_t'].sum()
         ))
 
+if COMMAND == "plot_tes_analysis":
+    tes_tsv_file_path = INPUT[0]
+    print("LOADING: {}".format(tes_tsv_file_path))
+    tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
+
+    # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
+    # drop all genes where wam_change == 0
+    p_same_treatment_cutoff = 0.05
+
+    filtered_genes_tes_wam = tes_file_df[
+        (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
+        (tes_file_df.wam_change != 0)
+    ]
+
+    print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
+
+    filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
+    print(filtered_genes_tes_wam)
+
+    axes = filtered_genes_tes_wam.plot.scatter(
+        x='wam_change', 
+        y='minus_log10_p_inter_treatment',
+        c='p_same_treatment'
+    )
+
+    axes.set_xlim(xmin=0, xmax=1)
+
+    plt.show()
+
+
 if COMMAND == "tes_analysis":
     # load annotation file
     feature_id = INPUT[0]
@@ -777,13 +814,22 @@ if COMMAND == "tes_analysis":
             GFF_PARENT_TREE[row['Parent']] = [row_index]
 
     # Try to find matches of provided type, if not, assume that input is a list of IDs
-    matches = ANNOTATION_FILE.filter_feature_of_type([feature_id])
-    if len(matches.df) == 0:
-        evaluated_input = ast.literal_eval(feature_id)
-        matches = ANNOTATION_FILE.get_feature_by_attribute("ID", evaluated_input)
-        print("Looking for {} IDs, found {} matches. TES analysis for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+    if os.path.isfile(feature_id):
+        lines = []
+        with open(feature_id) as f:
+            lines = f.read().splitlines()
+
+        matches = ANNOTATION_FILE.get_feature_by_attribute("ID", lines)
+
+
     else:
-        print("Found {} matches for type {}. Calculating TES variance...".format(len(matches.df), feature_id))
+        matches = ANNOTATION_FILE.filter_feature_of_type([feature_id])
+        if len(matches.df) == 0:
+            evaluated_input = ast.literal_eval(feature_id)
+            matches = ANNOTATION_FILE.get_feature_by_attribute("ID", evaluated_input)
+            print("Looking for {} IDs, found {} matches. TES analysis for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+        else:
+            print("Found {} matches for type {}. Calculating TES variance...".format(len(matches.df), feature_id))
 
     matches = matches.attributes_to_columns()
 
@@ -802,8 +848,7 @@ if COMMAND == "tes_analysis":
     bam_labels_control = [l for l in bam_labels if input_files[l]['group'] == 'control']
     bam_labels_treatment = [l for l in bam_labels if input_files[l]['group'] == 'knock-sideways']
 
-    summary_header = ["gene_id", "test", "p_inter_treatment", "p_same_treatment", "TES split", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
-    summary_df = pandas.DataFrame(columns=summary_header)
+    summary_df = pandas.DataFrame(columns=TES_SUMMARY_HEADER)
 
     gene_length = 0
 
@@ -834,6 +879,11 @@ if COMMAND == "tes_analysis":
         prefix = label.split("_")[0]
         mod_label = "{}_m6A_0.95".format(prefix)
 
+        if DEBUG:
+                print("CANNONICAL_MOD_PROP_THRESHOLD: {}".format(CANNONICAL_MOD_PROP_THRESHOLD))
+                print("READ_DEPTH_THRESHOLD: {}".format(READ_DEPTH_THRESHOLD))
+
+
         modkit_bedmethyl_header = [
             "contig", "start", "end", "code", "score", "strand", 
             "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
@@ -859,9 +909,15 @@ if COMMAND == "tes_analysis":
                 (mods_file_df.contig == row['seq_id'])
             ]
 
+            if DEBUG:
+                print(row_mods)
+
             for mod_index, mod in row_mods.iterrows():
                 if mod['start'] not in cannonical_mods_start_pos[row['ID']]:
                     cannonical_mods_start_pos[row['ID']].append(mod['start'])
+
+    if DEBUG:
+        print("cannonical_mods_start_pos: {}".format(cannonical_mods_start_pos))
 
     # END CANNONICAL MOD IDENTIFICATION
 
@@ -929,6 +985,13 @@ if COMMAND == "tes_analysis":
             for mod_index, mod in row_mods.iterrows():
                 d_mod_info[label][row['ID']]['valid_cov'][mod['start']] = mod['valid_cov']
                 d_mod_info[label][row['ID']]['num_mod'][mod['start']] = mod['num_mod']
+
+            # make sure all cannonical mod locations exist, so add them as zero if not in bedmethyl
+            for mod in cannonical_mods_start_pos[row['ID']]:
+                if mod not in d_mod_info[label][row['ID']]['valid_cov']:
+                    d_mod_info[label][row['ID']]['valid_cov'][mod] = 0
+                    d_mod_info[label][row['ID']]['num_mod'][mod] = 0
+
 
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
@@ -1114,8 +1177,11 @@ if COMMAND == "tes_analysis":
 
     weighted_mod_ratios_before = {}
     weighted_mod_ratios_after = {}
+    d_wam_before = {}
+    d_wam_after = {}
     groups = [(bam_labels_control, weighted_mod_ratios_before), (bam_labels_treatment, weighted_mod_ratios_after)]
     d_wam_change = {}
+    # pprint("d_mod_info: {}".format(d_mod_info))
 
     # for c1, c2
     for row_index, row in matches.iterrows():
@@ -1130,32 +1196,47 @@ if COMMAND == "tes_analysis":
             valid_cov_total = 0
             for label in group_labels:
                 for cannonical_mod in cannonical_mod_keys:
-                    valid_cov_total += d_mod_info[label][gene_id]['valid_cov'][cannonical_mod]
+                    if cannonical_mod in d_mod_info[label][gene_id]['valid_cov']:
+                        valid_cov_total += d_mod_info[label][gene_id]['valid_cov'][cannonical_mod]
+                    else:
+                        print("WARNING: {} not in {}-{}".format(cannonical_mod, label, gene_id))
+                        print(d_mod_info[label][gene_id])
+                        valid_cov_total += 0
 
             for label in group_labels:            
                 for cannonical_mod in cannonical_mod_keys:
                     num_valid = d_mod_info[label][gene_id]['valid_cov'][cannonical_mod]
-                    num_mods = d_mod_info[label][gene_id]['num_mod'][cannonical_mod]
-                    weight = num_valid / valid_cov_total
 
-                    this_weighted_mod_proportion = (num_mods / num_valid) * weight
-                    group_weighted_outputs[gene_id].append(this_weighted_mod_proportion)
+                    if num_valid > 0:
+                        num_mods = d_mod_info[label][gene_id]['num_mod'][cannonical_mod]
+                        weight = num_valid / valid_cov_total
+
+                        this_weighted_mod_proportion = (num_mods / num_valid) * weight
+                        group_weighted_outputs[gene_id].append(this_weighted_mod_proportion)
+                    else:
+                        group_weighted_outputs[gene_id].append(0)
+
 
     for gene in weighted_mod_ratios_before:
         wam_before = sum(weighted_mod_ratios_before[gene])# / (len(weighted_mod_ratios_before[gene]))
         wam_after = sum(weighted_mod_ratios_after[gene])# / (len(weighted_mod_ratios_after[gene]))
-        print("gene {}: before {}, after: {}".format(gene, wam_before, wam_after))
+        d_wam_before[gene] = wam_before
+        d_wam_after[gene] = wam_after
 
-        wam_change = wam_after / wam_before
-        d_wam_change[gene] = wam_change
+        if wam_after == 0 or wam_before == 0:
+            d_wam_change[gene] = 0
+        else:
+            wam_change = 1 - (wam_after / wam_before)
+            d_wam_change[gene] = wam_change
 
-    from pprint import pprint
+        if DEBUG:
+            print("gene {}: before {}, after: {}, change: {}".format(gene, wam_before, wam_after, d_wam_change[gene]))
 
-    pprint("d_mod_info: {}".format(d_mod_info))
-    pprint("weighted_mod_ratios_before: {}".format(weighted_mod_ratios_before))
-    pprint("weighted_mod_ratios_after: {}".format(weighted_mod_ratios_after))
-    pprint("d_wam_change: {}".format(d_wam_change))
-    ### END METHYLATION CHANGE CALCULATION
+    if DEBUG:
+        pprint("weighted_mod_ratios_before: {}".format(weighted_mod_ratios_before))
+        pprint("weighted_mod_ratios_after: {}".format(weighted_mod_ratios_after))
+        pprint("d_wam_change: {}".format(d_wam_change))
+        ### END METHYLATION CHANGE CALCULATION
 
     if DEBUG:
         print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space_filter))
@@ -1389,7 +1470,11 @@ if COMMAND == "tes_analysis":
                 if p_same_treatment > (alpha / len(inter_treatment_p_vals)):
                     tests_passed += 1
 
-            row_summary = [row['ID'], test, p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
+            if DEBUG:
+                row_summary = [row['ID'], test, p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
+            else:
+                row_summary = [row['ID'], p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
+
 
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
@@ -1399,8 +1484,6 @@ if COMMAND == "tes_analysis":
     TES_SUMMARY_PATH = "./tes_summary.tsv"
     print(summary_df)
     summary_df.to_csv(TES_SUMMARY_PATH, sep='\t', index=False)
-
-
 
 
     # --------- PLOT ---------- #
@@ -1572,6 +1655,10 @@ if COMMAND == "tes_analysis":
         # axes.set_ylabel('TTS (nt)')
 
         plt.show()
+
+    else:
+        print("plotting gene batch methylation changes and transcript end site changes...")
+
 
 if COMMAND == "plot_coverage":
     # load annotation file
