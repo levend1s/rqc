@@ -114,9 +114,9 @@ GFF_PARENT_TREE = {}
 CLOCKS = {}
 
 if DEBUG:
-    TES_SUMMARY_HEADER = ["gene_id", "test", "p_inter_treatment", "p_same_treatment", "tes", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
+    TES_SUMMARY_HEADER = ["gene_id", "test", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
 else:
-    TES_SUMMARY_HEADER = ["gene_id", "p_inter_treatment", "p_same_treatment", "tes", "average_expression", "number_cannonical_mods", "wam_before", "wam_after", "wam_change"]
+    TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "average_expression", "number_cannonical_mods", "wam_before", "wam_after", "wam_change"]
     
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
@@ -1168,22 +1168,19 @@ if COMMAND == "tes_analysis":
     
     pairwise_combinations_inter_treatment = list(itertools.combinations(bam_labels, 2))
     pairwise_combinations_inter_treatment = [c for c in pairwise_combinations_inter_treatment if c not in pairwise_combinations_same_treatment]
+    first_label = bam_labels[0]
 
     ### CALCULTE METHYLATION CHANGE
     # d_mod_info
     # can calculate % difference in cannonical modified sites
     # can calculate the log ratio
-    first_label = bam_labels[0]
-
     weighted_mod_ratios_before = {}
     weighted_mod_ratios_after = {}
     d_wam_before = {}
     d_wam_after = {}
     groups = [(bam_labels_control, weighted_mod_ratios_before), (bam_labels_treatment, weighted_mod_ratios_after)]
     d_wam_change = {}
-    # pprint("d_mod_info: {}".format(d_mod_info))
 
-    # for c1, c2
     for row_index, row in matches.iterrows():
         gene_id = row['ID']
         weighted_mod_ratios_before[gene_id] = []
@@ -1216,7 +1213,6 @@ if COMMAND == "tes_analysis":
                     else:
                         group_weighted_outputs[gene_id].append(0)
 
-
     for gene in weighted_mod_ratios_before:
         wam_before = sum(weighted_mod_ratios_before[gene])# / (len(weighted_mod_ratios_before[gene]))
         wam_after = sum(weighted_mod_ratios_after[gene])# / (len(weighted_mod_ratios_after[gene]))
@@ -1236,7 +1232,7 @@ if COMMAND == "tes_analysis":
         pprint("weighted_mod_ratios_before: {}".format(weighted_mod_ratios_before))
         pprint("weighted_mod_ratios_after: {}".format(weighted_mod_ratios_after))
         pprint("d_wam_change: {}".format(d_wam_change))
-        ### END METHYLATION CHANGE CALCULATION
+    ### END METHYLATION CHANGE CALCULATION
 
     if DEBUG:
         print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space_filter))
@@ -1372,13 +1368,41 @@ if COMMAND == "tes_analysis":
             d_read_through_counts[label] = num_read_throughs
             d_normal_read_counts[label] = num_normal
 
+        # CALCULATE WEIGHTED AVERAGE READTHROUGH RATIO
+        weighted_rt_ratios_before = []
+        weighted_rt_ratios_after = []
+        d_wart_before = {}
+        d_wart_after = {}
+        groups = [(bam_labels_control, weighted_rt_ratios_before), (bam_labels_treatment, weighted_rt_ratios_after)]
+        d_wart_change = {}
 
-        if DEBUG:
-            print(d_cannonical_tes)
-            print(d_max_can_tes)
-            print(d_read_through_counts)
-            print(d_normal_read_counts)
-            print("max_common_cannonical_tes_tuple: {}".format(max_common_cannonical_tes_tuple))
+        # calculate sum of total cannonical mods read depth across all samples for weighting
+        for group_labels, group_weighted_outputs in groups:
+            valid_cov_total = 0
+            for label in group_labels:
+                valid_cov_total += d_normal_read_counts[label] + d_read_through_counts[label]
+
+            for label in group_labels:
+                weight = (d_normal_read_counts[label] + d_read_through_counts[label]) / valid_cov_total
+
+                this_weighted_mod_proportion = (d_read_through_counts[label] / d_normal_read_counts[label]) * weight
+                group_weighted_outputs.append(this_weighted_mod_proportion)
+
+        for gene in weighted_mod_ratios_before:
+            rt_before = sum(weighted_rt_ratios_before)# / (len(weighted_mod_ratios_before[gene]))
+            rt_after = sum(weighted_rt_ratios_after)# / (len(weighted_mod_ratios_after[gene]))
+            d_wart_before[gene] = rt_before
+            d_wart_after[gene] = rt_after
+
+            if rt_after == 0 or rt_before == 0:
+                d_wart_change[gene] = 0
+            else:
+                wart_change = 1 - (rt_before / rt_after)
+                d_wart_change[gene] = wart_change
+
+            if DEBUG:
+                print("gene {}: before {}, after: {}, change: {}".format(gene, rt_before, rt_after, d_wart_change[gene]))
+
 
         for test in tes_variance_tests:
             if average_expression < READ_DEPTH_THRESHOLD:
@@ -1471,9 +1495,9 @@ if COMMAND == "tes_analysis":
                     tests_passed += 1
 
             if DEBUG:
-                row_summary = [row['ID'], test, p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
+                row_summary = [row['ID'], test, d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
             else:
-                row_summary = [row['ID'], p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
+                row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
 
 
             summary_df.loc[summary_df_index] = row_summary
