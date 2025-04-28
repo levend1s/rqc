@@ -772,9 +772,9 @@ if COMMAND == "plot_tes_analysis":
     print(filtered_genes_tes_wam)
 
     axes = filtered_genes_tes_wam.plot.scatter(
-        x='wam_change', 
-        y='minus_log10_p_inter_treatment',
-        c='p_same_treatment'
+        x='wam_change',
+        y='wart_change',
+        c='minus_log10_p_inter_treatment'
     )
 
     axes.set_xlim(xmin=0, xmax=1)
@@ -917,7 +917,7 @@ if COMMAND == "tes_analysis":
                     cannonical_mods_start_pos[row['ID']].append(mod['start'])
 
     if DEBUG:
-        print("cannonical_mods_start_pos: {}".format(cannonical_mods_start_pos))
+        print("cannonical_mods_start_pos: {}".format(cannonical_mods_start_pos[row['ID']]))
 
     # END CANNONICAL MOD IDENTIFICATION
 
@@ -1333,8 +1333,10 @@ if COMMAND == "tes_analysis":
             paired_tes_hist = list(zip(d_tts_hist[label], tes))
             elbow = sorted([x for x in paired_tes_hist if x[0] > 0], key=lambda a: a[0], reverse=True)
 
+            print(elbow)
             e1 = [x[0] for x in elbow]
 
+            # not sure what the S=1.0 does here
             kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
             cannonical_tes = elbow[0:kneedle.knee]
 
@@ -1347,19 +1349,39 @@ if COMMAND == "tes_analysis":
         # if splitting the reads at this site gives a bigger proportion of read throughs than normals,
         # it's not a good TES. We can't have more read throughs than normals
         # Go to the next most frequent TES
-        READTHROUGH_PROP_THRESHOLD = 0.5
+        READTHROUGH_PROP_THRESHOLD = 1.0
         first_label = bam_labels[0]
         max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][0]
+        smallest_rt_prop = 100
+
+        tes_vs_prop = []
 
         for i in range(len(d_cannonical_tes[first_label])):
             this_tuple = d_cannonical_tes[first_label][i]
             num_read_throughs = len([x for x in d_tts[label][gene_id] if x > this_tuple[1]])
             num_normal = len([x for x in d_tts[label][gene_id] if x <= this_tuple[1]])
             
-            if (num_read_throughs / num_normal) < READTHROUGH_PROP_THRESHOLD:
+            rt_prop = num_read_throughs / num_normal
+            print("{} - tes_split: {}, rt_prop: {}".format(row['ID'], this_tuple[1], rt_prop))
+
+            tup = (this_tuple[1], rt_prop)
+            tes_vs_prop.append(tup)
+
+            if (rt_prop) < smallest_rt_prop:
                 max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][i]
-                break
-               
+                smallest_rt_prop = rt_prop
+                # break
+        
+        print(d_cannonical_tes)
+        print("max_common_cannonical_tes_tuple: {}".format(max_common_cannonical_tes_tuple))
+
+        tes_vs_prop = [x for x in tes_vs_prop if x[1] < 1]
+        print(d_cannonical_tes)
+        print(tes_vs_prop)
+        # plt.scatter(*zip(*d_cannonical_tes[first_label]))
+        plt.scatter(*zip(*tes_vs_prop))
+        plt.show()
+
         # split into readthroughs and normals based on our TES
         for label in bam_labels:
             num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_common_cannonical_tes_tuple[1]])
@@ -1388,20 +1410,19 @@ if COMMAND == "tes_analysis":
                 this_weighted_mod_proportion = (d_read_through_counts[label] / d_normal_read_counts[label]) * weight
                 group_weighted_outputs.append(this_weighted_mod_proportion)
 
-        for gene in weighted_mod_ratios_before:
-            rt_before = sum(weighted_rt_ratios_before)# / (len(weighted_mod_ratios_before[gene]))
-            rt_after = sum(weighted_rt_ratios_after)# / (len(weighted_mod_ratios_after[gene]))
-            d_wart_before[gene] = rt_before
-            d_wart_after[gene] = rt_after
+        rt_before = sum(weighted_rt_ratios_before)
+        rt_after = sum(weighted_rt_ratios_after)
+        d_wart_before[row['ID']] = rt_before
+        d_wart_after[row['ID']] = rt_after
 
-            if rt_after == 0 or rt_before == 0:
-                d_wart_change[gene] = 0
-            else:
-                wart_change = 1 - (rt_before / rt_after)
-                d_wart_change[gene] = wart_change
+        if rt_after == 0 or rt_before == 0:
+            d_wart_change[row['ID']] = 0
+        else:
+            wart_change = 1 - (rt_before / rt_after)
+            d_wart_change[row['ID']] = wart_change
 
-            if DEBUG:
-                print("gene {}: before {}, after: {}, change: {}".format(gene, rt_before, rt_after, d_wart_change[gene]))
+        if DEBUG:
+            print("gene {}: before {}, after: {}, change: {}".format(row['ID'], rt_before, rt_after, d_wart_change[row['ID']]))
 
 
         for test in tes_variance_tests:
@@ -1494,15 +1515,21 @@ if COMMAND == "tes_analysis":
                 if p_same_treatment > (alpha / len(inter_treatment_p_vals)):
                     tests_passed += 1
 
-            if DEBUG:
-                row_summary = [row['ID'], test, d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
+            # convert the tes from tx space to genomic space
+            if row['strand'] == "-":
+                genomic_tes_split = row['end'] - max_common_cannonical_tes_tuple[1]
             else:
-                row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, max_common_cannonical_tes_tuple[1], average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
+                genomic_tes_split = row['start'] + max_common_cannonical_tes_tuple[1]
+
+            # print pandas tsv row summary
+            if DEBUG:
+                row_summary = [row['ID'], test, d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, genomic_tes_split, score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
+            else:
+                row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, genomic_tes_split, average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
 
 
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
-        # print("\t".join([str(x) for x in row_summary]))
 
 
     TES_SUMMARY_PATH = "./tes_summary.tsv"
