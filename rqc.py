@@ -1059,7 +1059,6 @@ if COMMAND == "tes_analysis":
                                 read_indexes_to_process.append(r)
                         else:
                             read_outside_3p_end.append(r.query_name)
-                            
 
                     else:
                         read_3p_end = r.reference_end
@@ -1133,9 +1132,9 @@ if COMMAND == "tes_analysis":
                 # r = reads_in_region[idx]
                 if r.qname in gene_read_ids_fc:
                     if row['strand'] == "-":
-                        tts_sites.append(row['end'] - r.reference_start)
+                        tts_sites.append(r.reference_start)
                     else:
-                        tts_sites.append(r.reference_end - row['start'])
+                        tts_sites.append(r.reference_end)
 
                     if r.has_tag('pt:i'):
                         poly_a_length = r.get_tag('pt:i')
@@ -1174,6 +1173,7 @@ if COMMAND == "tes_analysis":
     # d_mod_info
     # can calculate % difference in cannonical modified sites
     # can calculate the log ratio
+    print("{} - Calculating methylation change...".format(row['ID']))
     weighted_mod_ratios_before = {}
     weighted_mod_ratios_after = {}
     d_wam_before = {}
@@ -1234,15 +1234,8 @@ if COMMAND == "tes_analysis":
         pprint("d_wam_change: {}".format(d_wam_change))
     ### END METHYLATION CHANGE CALCULATION
 
-    if DEBUG:
-        print("FILTERING FOR READS CONTAINING: {}".format(cannonical_mods_genome_space_filter))
-
-    # print("\t".join([str(x) for x in summary_header]))
     summary_df_index = 0
     for row_index, row in matches.iterrows():
-        # add stats to row
-        # score = log(p_same_treatment / p_inter_treatment), above zero means more different between treatments AND same treatment had same score
-        # p_inter_treatment p_same_treatment score tests_passed
         average_expression = 0
         average_not_beyond_3p = 0
         average_not_in_feature_counts = 0
@@ -1281,32 +1274,28 @@ if COMMAND == "tes_analysis":
 
             if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
                 max_poly_a = max(d_poly_a_lengths[label][gene_id])
-
+        
+        x_ticks = range(min_tts, max_tts)
 
         # calculate hists
+        print("{} - Generating transcript end site histograms...".format(row['ID']))
         for label in bam_labels:
             np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
             poly_a_hist = [0] * (np_poly_as.max() + 1)
-            tts_hist = [0] * (max_tts + 1)
+            tts_hist = [0] * (max_tts - min_tts + 1)
 
             for i in range(1, np_poly_as.max() + 1):
                 poly_a_hist[i] = len([x for x in np_poly_as if x == i])
 
-            for i in range(1, max_tts + 1):
-                tts_hist[i] = len([x for x in d_tts[label][gene_id] if x == i])
-
-            if max_hist_count < max(poly_a_hist):
-                max_hist_count = max(poly_a_hist)
-
-            if max_hist_count_tts < max(tts_hist):
-                max_hist_count_tts = max(tts_hist)
+            for i in range(min_tts, max_tts + 1): # count, position
+                tts_hist[i - min_tts] = (len([x for x in d_tts[label][gene_id] if x == i]), i)
 
             d_poly_a_length_hists[label] = poly_a_hist
             d_tts_hist[label] = tts_hist
 
-        x_ticks = range(min_tts, max_tts)
 
         # generate dennsity plots
+        print("{} - Generating transcript end site density information...".format(row['ID']))
         for label in bam_labels:
             kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id])
             smoothed_tts_hist = kernel(x_ticks)
@@ -1324,71 +1313,126 @@ if COMMAND == "tes_analysis":
         d_normal_read_counts = {}
         d_cannonical_tes = {}
         d_max_can_tes = {}
+        d_sorted_tes = {}
+        d_knee = {}
+        d_tes_vs_prop = {}
+        readthrough_split_points = {}
 
         # !!!! start of TES analysis, decide where the readthrough split point is
         # First, calculate the elbow for TES sites by count/frequency 
+        print("{} - Finding knee...".format(row['ID']))
         for label in bam_labels:
             # scatter plot tts vs poly-a length
-            tes = list(range(1, max(d_tts[label][gene_id]) + 1))
-            paired_tes_hist = list(zip(d_tts_hist[label], tes))
-            elbow = sorted([x for x in paired_tes_hist if x[0] > 0], key=lambda a: a[0], reverse=True)
-
-            print(elbow)
-            e1 = [x[0] for x in elbow]
+            sorted_tes_counts = sorted([x for x in d_tts_hist[label] if x[0] > 0], key=lambda a: a[0], reverse=True)
+            e1 = [x[0] for x in sorted_tes_counts]
 
             # not sure what the S=1.0 does here
             kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
-            cannonical_tes = elbow[0:kneedle.knee]
+            cannonical_tes = sorted_tes_counts[0:kneedle.knee]
 
-            d_cannonical_tes[label] = cannonical_tes
-            d_max_can_tes[label] = elbow[0]
+            d_sorted_tes[label] = sorted_tes_counts
+            d_knee[label] = kneedle.knee
 
         # We're trying to find a good TES to split readthroughs and normal reads
-        # We'll start by taking the TES with the highest frequency for the first sample
+        readthrough_split_point = d_sorted_tes[first_label][0][0]
+        smallest_rt_prop = math.inf
 
-        # if splitting the reads at this site gives a bigger proportion of read throughs than normals,
-        # it's not a good TES. We can't have more read throughs than normals
-        # Go to the next most frequent TES
-        READTHROUGH_PROP_THRESHOLD = 1.0
-        first_label = bam_labels[0]
-        max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][0]
-        smallest_rt_prop = 100
+        # calculate readthrough proportions for each sample
+        print("{} - Finding max common transcript end site...".format(row['ID']))
 
-        tes_vs_prop = []
-
-        for i in range(len(d_cannonical_tes[first_label])):
-            this_tuple = d_cannonical_tes[first_label][i]
-            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > this_tuple[1]])
-            num_normal = len([x for x in d_tts[label][gene_id] if x <= this_tuple[1]])
+        # exp function 
+        def exp_func(x, a, b, c):
+            return a ** (x - b) + c
             
-            rt_prop = num_read_throughs / num_normal
-            print("{} - tes_split: {}, rt_prop: {}".format(row['ID'], this_tuple[1], rt_prop))
+        # def log_func(x, a, b):
 
-            tup = (this_tuple[1], rt_prop)
-            tes_vs_prop.append(tup)
+        for label in bam_labels:
+            d_tes_vs_prop[label] = []
 
-            if (rt_prop) < smallest_rt_prop:
-                max_common_cannonical_tes_tuple = d_cannonical_tes[first_label][i]
-                smallest_rt_prop = rt_prop
-                # break
-        
-        print(d_cannonical_tes)
-        print("max_common_cannonical_tes_tuple: {}".format(max_common_cannonical_tes_tuple))
+            for c, p in d_sorted_tes[label]:
+                if row['strand'] == "-":
+                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x < p])
+                    num_normal = len([x for x in d_tts[label][gene_id] if x >= p])
+                else:
+                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x > p])
+                    num_normal = len([x for x in d_tts[label][gene_id] if x <= p])
+                
+                rt_prop = num_read_throughs / num_normal
 
-        tes_vs_prop = [x for x in tes_vs_prop if x[1] < 1]
-        print(d_cannonical_tes)
-        print(tes_vs_prop)
-        # plt.scatter(*zip(*d_cannonical_tes[first_label]))
-        plt.scatter(*zip(*tes_vs_prop))
+                # only keep this if there are fewer readthroughs than normals
+                if rt_prop < 1:
+                    d_tes_vs_prop[label].append((p, rt_prop))
+            
+                print("{} - tes_split: {}, rt_prop: {}".format(row['ID'], p, rt_prop))
+
+            # sort by genomic position
+            sorted_tes_prop = sorted(d_tes_vs_prop[label], key=lambda a: a[0], reverse=False)
+            print(sorted_tes_prop)
+
+            pos = [x[0] for x in sorted_tes_prop]
+            prop = [x[1] for x in sorted_tes_prop]
+
+            # fit curve to TES data that will be used to to find the kneedle of the curve
+            # data will have bumps and many false knees/elbows that we want to smooth out
+            # so the kneedle function finds the correct knee
+            # We are assuming that TES sites follow exponential decay
+            # final x_normed pos (x_normed[-1]) is the x shift we'll give to p0 to shift the 
+            # exp curve to the right
+            x_normed = numpy.array(pos) - pos[0]
+            abc, pcov = scipy.optimize.curve_fit(
+                exp_func, 
+                x_normed, 
+                prop,
+                p0=[2, x_normed[-1], 0],
+                bounds=(0, [numpy.inf, numpy.inf, numpy.inf])
+            )
+
+            x_fitted = numpy.linspace(x_normed[0], x_normed[-1], 100)
+            y_fitted = exp_func(x_fitted, *abc)
+
+            # as the genomic position increases, the splitpoint readthrough proportion gets bigger
+            kneedle = KneeLocator(x_fitted, y_fitted, S=1.0, curve='convex', direction='increasing')
+            readthrough_split_points[label] = kneedle.knee+pos[0]
+
+            # print(readthrough_split_points[label])
+            # plt.plot(pos, prop)
+            # plt.plot(x_fitted+pos[0], y_fitted)
+            # plt.axvline(x= readthrough_split_points[label], color='red', ls="--", linewidth=1.0)
+
+            # plt.show()
+
+        print("readthrough_split_points: {}".format(readthrough_split_points))
+
+        # take the average of the control readthrough splitpoints
+        readthrough_split_point = 0
+        for label in bam_labels_control:
+            readthrough_split_point += readthrough_split_points[label]
+
+        readthrough_split_point = int(readthrough_split_point / len(bam_labels_control))
+
+        fig, axes = plt.subplots()
+        for label in bam_labels:
+            axes.scatter(*zip(*d_tes_vs_prop[label]), label=label, s=1)
+
+            axes.axvline(x= readthrough_split_point, color='red', ls="--", linewidth=1.0)
+            axes.legend()
         plt.show()
 
         # split into readthroughs and normals based on our TES
+        print("{} - Finding readthrough proportions...".format(row['ID']))
         for label in bam_labels:
-            num_read_throughs = len([x for x in d_tts[label][gene_id] if x > max_common_cannonical_tes_tuple[1]])
-            num_normal = len([x for x in d_tts[label][gene_id] if x <= max_common_cannonical_tes_tuple[1]])
+            if row['strand'] == "-":
+                num_read_throughs = len([x for x in d_tts[label][gene_id] if x < readthrough_split_point])
+                num_normal = len([x for x in d_tts[label][gene_id] if x >= readthrough_split_point])
+            else:
+                num_read_throughs = len([x for x in d_tts[label][gene_id] if x > readthrough_split_point])
+                num_normal = len([x for x in d_tts[label][gene_id] if x <= readthrough_split_point])
 
             d_read_through_counts[label] = num_read_throughs
             d_normal_read_counts[label] = num_normal
+
+        print(d_read_through_counts[label])
+        print(d_normal_read_counts[label])
 
         # CALCULATE WEIGHTED AVERAGE READTHROUGH RATIO
         weighted_rt_ratios_before = []
@@ -1399,6 +1443,7 @@ if COMMAND == "tes_analysis":
         d_wart_change = {}
 
         # calculate sum of total cannonical mods read depth across all samples for weighting
+        print("{} - Calculating weighted proportion change in readthroughs...".format(row['ID']))
         for group_labels, group_weighted_outputs in groups:
             valid_cov_total = 0
             for label in group_labels:
@@ -1424,7 +1469,7 @@ if COMMAND == "tes_analysis":
         if DEBUG:
             print("gene {}: before {}, after: {}, change: {}".format(row['ID'], rt_before, rt_after, d_wart_change[row['ID']]))
 
-
+        print("{} - Performing statistical test for change in readthrough proportions...".format(row['ID']))
         for test in tes_variance_tests:
             if average_expression < READ_DEPTH_THRESHOLD:
                 p_inter_treatment = -1
@@ -1515,19 +1560,8 @@ if COMMAND == "tes_analysis":
                 if p_same_treatment > (alpha / len(inter_treatment_p_vals)):
                     tests_passed += 1
 
-            # convert the tes from tx space to genomic space
-            if row['strand'] == "-":
-                genomic_tes_split = row['end'] - max_common_cannonical_tes_tuple[1]
-            else:
-                genomic_tes_split = row['start'] + max_common_cannonical_tes_tuple[1]
-
             # print pandas tsv row summary
-            if DEBUG:
-                row_summary = [row['ID'], test, d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, genomic_tes_split, score, tests_passed, average_expression, average_not_beyond_3p, average_not_in_feature_counts]
-            else:
-                row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, genomic_tes_split, average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
-
-
+            row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, readthrough_split_point, average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
 
