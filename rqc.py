@@ -1378,28 +1378,40 @@ if COMMAND == "tes_analysis":
             # We are assuming that TES sites follow exponential decay
             # final x_normed pos (x_normed[-1]) is the x shift we'll give to p0 to shift the 
             # exp curve to the right
+
+            # TODO if strand is positive, p0 and direction in kneedle function are reversed
+            # DOES NOT WORK CURRENTLY
+            
             x_normed = numpy.array(pos) - pos[0]
+            
+            if row['strand'] == "-":
+                curve_guess = [2, x_normed[-1], 0]
+                elbow_direction = "increasing"
+            else:
+                curve_guess = [0.5, x_normed[0], 0]
+                elbow_direction = "decreasing"
+
+
             abc, pcov = scipy.optimize.curve_fit(
                 exp_func, 
                 x_normed, 
                 prop,
-                p0=[2, x_normed[-1], 0],
+                p0=curve_guess,
                 bounds=(0, [numpy.inf, numpy.inf, numpy.inf])
             )
 
             x_fitted = numpy.linspace(x_normed[0], x_normed[-1], 100)
             y_fitted = exp_func(x_fitted, *abc)
 
-            # as the genomic position increases, the splitpoint readthrough proportion gets bigger
-            kneedle = KneeLocator(x_fitted, y_fitted, S=1.0, curve='convex', direction='increasing')
-            readthrough_split_points[label] = kneedle.knee+pos[0]
-
-            # print(readthrough_split_points[label])
+            # print(abc)
             # plt.plot(pos, prop)
             # plt.plot(x_fitted+pos[0], y_fitted)
-            # plt.axvline(x= readthrough_split_points[label], color='red', ls="--", linewidth=1.0)
 
             # plt.show()
+
+            # as the genomic position increases, the splitpoint readthrough proportion gets bigger
+            kneedle = KneeLocator(x_fitted, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
+            readthrough_split_points[label] = kneedle.knee+pos[0]
 
         print("readthrough_split_points: {}".format(readthrough_split_points))
 
