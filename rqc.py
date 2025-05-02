@@ -761,23 +761,30 @@ if COMMAND == "plot_tes_analysis":
     # drop all genes where wam_change == 0
     p_same_treatment_cutoff = 0.05
 
-    filtered_genes_tes_wam = tes_file_df[
-        (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
-        (tes_file_df.wam_change != 0)
-    ]
+    tes_file_df["cannonical_mods"] = tes_file_df.number_cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
 
-    print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
+    for i in range(0, max(tes_file_df["cannonical_mods"].to_list()) + 1):
+        filtered_genes_tes_wam = tes_file_df[
+            (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
+            (tes_file_df.wam_change != 0) & 
+            (tes_file_df.cannonical_mods == i)
+        ]
 
-    filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
-    print(filtered_genes_tes_wam)
 
-    axes = filtered_genes_tes_wam.plot.scatter(
-        x='wam_change',
-        y='wart_change',
-        c='minus_log10_p_inter_treatment'
-    )
+        print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
 
-    axes.set_xlim(xmin=0, xmax=1)
+        filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
+        print(filtered_genes_tes_wam)
+
+        axes = filtered_genes_tes_wam.plot.scatter(
+            x='wam_change',
+            y='wart_change',
+            c='minus_log10_p_inter_treatment'
+        )
+
+        axes.set_title("Genes with {} cannonical m6A (n={})".format(i, len(filtered_genes_tes_wam)))
+
+    # axes.set_xlim(xmin=0, xmax=1)
 
     plt.show()
 
@@ -1222,7 +1229,7 @@ if COMMAND == "tes_analysis":
         if wam_after == 0 or wam_before == 0:
             d_wam_change[gene] = 0
         else:
-            wam_change = 1 - (wam_after / wam_before)
+            wam_change = 1 / (wam_after / wam_before)
             d_wam_change[gene] = wam_change
 
         if DEBUG:
@@ -1378,10 +1385,7 @@ if COMMAND == "tes_analysis":
             # We are assuming that TES sites follow exponential decay
             # final x_normed pos (x_normed[-1]) is the x shift we'll give to p0 to shift the 
             # exp curve to the right
-
-            # TODO if strand is positive, p0 and direction in kneedle function are reversed
-            # DOES NOT WORK CURRENTLY
-            
+            # if strand is positive, p0 and direction in kneedle function are reversed
             x_normed = numpy.array(pos) - pos[0]
             
             if row['strand'] == "-":
@@ -1390,7 +1394,6 @@ if COMMAND == "tes_analysis":
             else:
                 curve_guess = [0.5, x_normed[0], 0]
                 elbow_direction = "decreasing"
-
 
             abc, pcov = scipy.optimize.curve_fit(
                 exp_func, 
@@ -1422,13 +1425,15 @@ if COMMAND == "tes_analysis":
 
         readthrough_split_point = int(readthrough_split_point / len(bam_labels_control))
 
-        fig, axes = plt.subplots()
-        for label in bam_labels:
-            axes.scatter(*zip(*d_tes_vs_prop[label]), label=label, s=1)
+        if DEBUG:
+            fig, axes = plt.subplots()
+            for label in bam_labels:
+                # TODO add title of gene number, y axis labels etc, only do this if debug
+                axes.scatter(*zip(*d_tes_vs_prop[label]), label=label, s=1)
 
-            axes.axvline(x= readthrough_split_point, color='red', ls="--", linewidth=1.0)
-            axes.legend()
-        plt.show()
+                axes.axvline(x= readthrough_split_point, color='red', ls="--", linewidth=1.0)
+                axes.legend()
+            plt.show()
 
         # split into readthroughs and normals based on our TES
         print("{} - Finding readthrough proportions...".format(row['ID']))
@@ -1475,7 +1480,7 @@ if COMMAND == "tes_analysis":
         if rt_after == 0 or rt_before == 0:
             d_wart_change[row['ID']] = 0
         else:
-            wart_change = 1 - (rt_before / rt_after)
+            wart_change = 1 / (rt_before / rt_after)
             d_wart_change[row['ID']] = wart_change
 
         if DEBUG:
