@@ -462,11 +462,18 @@ def plot_subfeature_coverage(coverages):
         for label in v:
             cov = coverages['coverages'][label]
             if 'm6A' in label:
-                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color='red')
-                this_axes.fill_between(x_ticks, cov, alpha=0.2, color='red')
+                this_color = 'indigo'
+            elif 'm5C' in label:
+                this_color = 'red'
+            elif 'pseudouridine' in label:
+                this_color = 'yellow'
+            elif 'inosine' in label:
+                this_color = 'green'
             else:
-                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]))
-                this_axes.fill_between(x_ticks, cov, alpha=0.2)
+                this_color = 'skyblue'
+
+            this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color)
+            this_axes.fill_between(x_ticks, cov, alpha=0.2, color=this_color)
 
         this_axes.legend(loc="upper left", title=k)
         this_axes.set_ylabel(coverages['y_label'], color="black")
