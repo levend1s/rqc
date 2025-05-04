@@ -120,7 +120,17 @@ if DEBUG:
     TES_SUMMARY_HEADER = ["gene_id", "test", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
 else:
     TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "average_expression", "number_cannonical_mods", "wam_before", "wam_after", "wam_change"]
-    
+
+MODKIT_BEDMETHYL_HEADER = [
+    "contig", "start", "end", "code", "score", "strand", 
+    "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
+    "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
+]
+
+FEATURECOUNTS_HEADER = [
+    "read_id", "status", "number of targets", "targets"
+]
+
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
 # length which at least 50% or 90% of total nucleotides read belong to
@@ -523,37 +533,7 @@ def plot_subfeature_coverage(coverages):
             labelbottom=False
         )
 
-        # textstr = "num matches: {}\nnum bins: {}".format(coverages['num_matches'], coverages['num_bins'])
-        
-        # this_axes.text(
-        #     0.05, 
-        #     0.95, 
-        #     textstr, 
-        #     transform=this_axes.transAxes,
-        #     fontsize=10,
-        #     verticalalignment='top'
-        # )
-
-        # subfeature_names = coverages['subfeature_names']
         num_subfeatures = len(coverages['subfeature_names'])
-        # subfeature_width = int(coverages['num_bins'] / num_subfeatures)
-
-        # rename subfeature names to E1, E2, 3'UTR etc
-        # if num_subfeatures > 1:
-        #     if 'UTR' in subfeature_names[0]:
-        #         subfeature_names[0] = "5'UTR"
-        #     if 'UTR' in subfeature_names[1]:
-        #         subfeature_names[1] = "5'UTR"
-        #     if 'UTR' in subfeature_names[-1]:
-        #         subfeature_names[-1] = "3'UTR"
-        #     if 'UTR' in subfeature_names[-2]:
-        #         subfeature_names[-2] = "3'UTR"
-
-        # exon_idx = 1
-        # for i in range(num_subfeatures):
-        #     if subfeature_names[i] == 'CDS':
-        #         subfeature_names[i] = "E{}".format(exon_idx)
-        #         exon_idx += 1
 
         label_rotation = 45
         if COVERAGE_TYPE == "gene":
@@ -650,14 +630,12 @@ def getSubfeatures(id, coverage_type, coverage_padding):
     return row_subfeatures
 
 def START_CLOCK(name):
-    if DEBUG:
-        CLOCKS[name] = time.time()
+    CLOCKS[name] = time.time()
 
 def STOP_CLOCK(name, stop_name):
-    if DEBUG:
-        clock_stop = time.time()
-        diff = clock_stop - CLOCKS[name]
-        print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
+    clock_stop = time.time()
+    diff = clock_stop - CLOCKS[name]
+    print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
 
 # ------------------- COMMANDS -------------------  #
 # ------------------- COMMANDS -------------------  #
@@ -682,7 +660,6 @@ if COMMAND == "search":
     if CHECK_DUPLICATE_READS:
         find_multi_reference_alignments(d_read_ids)
 
-
     df = calc_tlen_distribution(d_tlen)
     print(df)
 
@@ -692,12 +669,9 @@ if COMMAND == "inspect":
     read_id = INPUT[0]
     alignments = []
 
-
     for i in range(1, len(INPUT), 2):
         label = INPUT[i]
         filename = INPUT[i+1]
-
-
 
         samfile = pysam.AlignmentFile(filename, 'rb')
         iter = samfile.fetch()
@@ -705,7 +679,6 @@ if COMMAND == "inspect":
         for x in iter:
             if (x.query_name == read_id):
                 alignments.append(x)
-
 
         samfile.close()
 
@@ -729,8 +702,6 @@ if COMMAND == "base_coverage":
                 matches.loc[i] = [s[1]] + [int(s[2])] + [int(s[3])]
                 i += 1
         num_matches = len(matches)
-
-
     else:
         matches = annotation_file.filter_feature_of_type([feature_id])
         if len(matches.df) == 0:
@@ -869,7 +840,6 @@ if COMMAND == "tes_analysis":
 
         matches = ANNOTATION_FILE.get_feature_by_attribute("ID", lines)
 
-
     else:
         matches = ANNOTATION_FILE.filter_feature_of_type([feature_id])
         if len(matches.df) == 0:
@@ -900,11 +870,6 @@ if COMMAND == "tes_analysis":
 
     gene_length = 0
 
-    # d_cannonical_mod_locations = {}
-    # d_cannonical_mod_locations['PF3D7_1338100.1'] = [3683,3754]
-    # d_cannonical_mod_locations['PF3D7_1338200.1'] = [2543,2531,2471,2429]
-    # d_cannonical_mod_locations['PF3D7_1420000.1'] = [2534,2526,2516,2383,2365]
-
     print("label\tgene id\ttotal reads\tnum reads after filter\tnot assigned (fc)\toutside 3p end\tmissing cannonical mod")
 
     cannonical_mods_genome_space_filter = []
@@ -928,16 +893,10 @@ if COMMAND == "tes_analysis":
         mod_label = "{}_m6A_0.95".format(prefix)
 
         if DEBUG:
-                print("CANNONICAL_MOD_PROP_THRESHOLD: {}".format(CANNONICAL_MOD_PROP_THRESHOLD))
-                print("READ_DEPTH_THRESHOLD: {}".format(READ_DEPTH_THRESHOLD))
+            print("CANNONICAL_MOD_PROP_THRESHOLD: {}".format(CANNONICAL_MOD_PROP_THRESHOLD))
+            print("READ_DEPTH_THRESHOLD: {}".format(READ_DEPTH_THRESHOLD))
 
-
-        modkit_bedmethyl_header = [
-            "contig", "start", "end", "code", "score", "strand", 
-            "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
-            "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
-        ]
-        mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=modkit_bedmethyl_header)
+        mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=MODKIT_BEDMETHYL_HEADER)
 
         # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
         mods_file_df = mods_file_df[
@@ -982,10 +941,7 @@ if COMMAND == "tes_analysis":
 
         # attempt to find the relevent featureCounts file in input_files
         feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
-        featurecounts_header = [
-            "read_id", "status", "number of targets", "targets"
-        ]
-        feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=featurecounts_header)
+        feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
 
 
 
@@ -993,12 +949,7 @@ if COMMAND == "tes_analysis":
         prefix = label.split("_")[0]
         mod_label = "{}_m6A_0.95".format(prefix)
 
-        modkit_bedmethyl_header = [
-            "contig", "start", "end", "code", "score", "strand", 
-            "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
-            "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
-        ]
-        mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=modkit_bedmethyl_header)
+        mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=MODKIT_BEDMETHYL_HEADER)
 
         # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
         # mods_file_df = mods_file_df[
@@ -1011,9 +962,7 @@ if COMMAND == "tes_analysis":
             # find subfeatures
             START_CLOCK("row_start")
 
-            # ---------- START POLY AAAAAAA
             summary_df_index = 0
-
             gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
 
             reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
@@ -1066,7 +1015,9 @@ if COMMAND == "tes_analysis":
             read_outside_3p_end = []
 
             MOD_PROB_THRESHOLD = 0.95
-            pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD)
+            pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD) 
+
+            START_CLOCK("for reads in region")
 
             for r in reads_in_region:
                 num_reads_bam += 1
@@ -1142,6 +1093,8 @@ if COMMAND == "tes_analysis":
                         else:
                             read_outside_3p_end.append(r.query_name)
 
+            STOP_CLOCK("for reads in region", "NA")
+
             # print("- REMOVED: {} reads that did not start in the last feature of target gene...".format(len(read_outside_3p_end)))
             
             # if FILTER_READS_FOR_CANNONICAL_MODS:
@@ -1203,8 +1156,12 @@ if COMMAND == "tes_analysis":
             d_not_beyond_3p[label][row['ID']] = num_reads_bam - len(read_indexes_to_process)
             d_not_in_feature_counts[label][row['ID']] = not_found
 
+            STOP_CLOCK("row_start", "row end")
+
             print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], num_reads_bam, len(d_tts[label][row['ID']]), not_found, len(read_outside_3p_end), len(missing_cannonical_mods)))
         
+
+
         samfile.close()
 
 
@@ -1270,7 +1227,7 @@ if COMMAND == "tes_analysis":
         if wam_after == 0 or wam_before == 0:
             d_wam_change[gene] = 0
         else:
-            wam_change = 1 / (wam_after / wam_before)
+            wam_change = wam_after / wam_before
             d_wam_change[gene] = wam_change
 
         if DEBUG:
@@ -1411,11 +1368,11 @@ if COMMAND == "tes_analysis":
                 if rt_prop < 1:
                     d_tes_vs_prop[label].append((p, rt_prop))
             
-                print("{} - tes_split: {}, rt_prop: {}".format(row['ID'], p, rt_prop))
+                # print("{} - tes_split: {}, rt_prop: {}".format(row['ID'], p, rt_prop))
 
             # sort by genomic position
             sorted_tes_prop = sorted(d_tes_vs_prop[label], key=lambda a: a[0], reverse=False)
-            print(sorted_tes_prop)
+            # print(sorted_tes_prop)
 
             pos = [x[0] for x in sorted_tes_prop]
             prop = [x[1] for x in sorted_tes_prop]
@@ -1457,7 +1414,7 @@ if COMMAND == "tes_analysis":
             kneedle = KneeLocator(x_fitted, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
             readthrough_split_points[label] = kneedle.knee+pos[0]
 
-        print("readthrough_split_points: {}".format(readthrough_split_points))
+        print("{} - readthrough_split_points: {}".format(row['ID'], readthrough_split_points))
 
         # take the average of the control readthrough splitpoints
         readthrough_split_point = 0
@@ -1489,9 +1446,6 @@ if COMMAND == "tes_analysis":
             d_read_through_counts[label] = num_read_throughs
             d_normal_read_counts[label] = num_normal
 
-        print(d_read_through_counts[label])
-        print(d_normal_read_counts[label])
-
         # CALCULATE WEIGHTED AVERAGE READTHROUGH RATIO
         weighted_rt_ratios_before = []
         weighted_rt_ratios_after = []
@@ -1521,7 +1475,7 @@ if COMMAND == "tes_analysis":
         if rt_after == 0 or rt_before == 0:
             d_wart_change[row['ID']] = 0
         else:
-            wart_change = 1 / (rt_before / rt_after)
+            wart_change = rt_after / rt_before
             d_wart_change[row['ID']] = wart_change
 
         if DEBUG:
