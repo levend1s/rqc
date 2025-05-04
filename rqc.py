@@ -775,28 +775,52 @@ if COMMAND == "plot_tes_analysis":
 
     tes_file_df["cannonical_mods"] = tes_file_df.number_cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
 
-    for i in range(0, max(tes_file_df["cannonical_mods"].to_list()) + 1):
+    SPLIT_BY_CANNONICAL_MODS = False
+    if SPLIT_BY_CANNONICAL_MODS:
+        for i in range(0, max(tes_file_df["cannonical_mods"].to_list()) + 1):
+            filtered_genes_tes_wam = tes_file_df[
+                (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
+                (tes_file_df.wam_change != 0) & 
+                (tes_file_df.cannonical_mods == i)
+            ]
+
+
+            print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
+
+            filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
+            filtered_genes_tes_wam['log2_wam_change'] = numpy.log2(filtered_genes_tes_wam['wam_change'])
+            filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
+
+
+            print(filtered_genes_tes_wam)
+
+            axes = filtered_genes_tes_wam.plot.scatter(
+                x='log2_wam_change',
+                y='log2_wart_change',
+                c='minus_log10_p_inter_treatment'
+            )
+
+            axes.set_title("Genes with {} cannonical m6A (n={})".format(i, len(filtered_genes_tes_wam)))
+    else:
         filtered_genes_tes_wam = tes_file_df[
             (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
-            (tes_file_df.wam_change != 0) & 
-            (tes_file_df.cannonical_mods == i)
+            (tes_file_df.wam_change != 0)
         ]
 
 
         print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
 
         filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
+        filtered_genes_tes_wam['log2_wam_change'] = numpy.log2(filtered_genes_tes_wam['wam_change'])
+        filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
+
         print(filtered_genes_tes_wam)
 
         axes = filtered_genes_tes_wam.plot.scatter(
-            x='wam_change',
-            y='wart_change',
+            x='log2_wam_change',
+            y='log2_wart_change',
             c='minus_log10_p_inter_treatment'
         )
-
-        axes.set_title("Genes with {} cannonical m6A (n={})".format(i, len(filtered_genes_tes_wam)))
-
-    # axes.set_xlim(xmin=0, xmax=1)
 
     plt.show()
 
