@@ -52,6 +52,8 @@ parser.add_argument('--show_cannonical_m6a', type=bool, default=False)
 parser.add_argument('--filter_for_m6A', type=str, default="[]")
 parser.add_argument('--filter_out_m6A', type=str, default="[]")
 parser.add_argument('--generate_filtered_bam', type=bool, default=False)
+parser.add_argument('--separate_y_axes', type=bool, default=False)
+
 
 
 
@@ -88,6 +90,7 @@ SHOW_CANNONICAL_M6A = args.show_cannonical_m6a
 GENERATE_FILTERED_BAM = args.generate_filtered_bam
 FILTER_FOR_M6A = args.filter_for_m6A
 FILTER_OUT_M6A = args.filter_out_m6A
+SEPARATE_Y_AXES = args.separate_y_axes
 
 # read unmapped (0x4)
 # read reverse strand (0x10)
@@ -412,6 +415,22 @@ def get_feature_children(tx_id, gff_df):
     matches = gff_df.get_feature_by_attribute("Parent", tx_id)
     return matches
 
+def get_plot_color(l):
+    this_color = "black"
+
+    if 'read_depth' in l:
+        this_color = 'skyblue'
+    elif 'm6A' in l:
+        this_color = 'indigo'
+    elif 'm5C' in l:
+        this_color = 'red'
+    elif 'pseudouridine' in l:
+        this_color = 'gold'
+    elif 'inosine' in l:
+        this_color = 'green'
+
+    return this_color
+
 def plot_subfeature_coverage(coverages):
     sample_labels = {}
     ymax = 0
@@ -459,27 +478,42 @@ def plot_subfeature_coverage(coverages):
         else:
             this_axes = axes
 
-        for label in v:
-            cov = coverages['coverages'][label]
-            if 'm6A' in label:
-                this_color = 'indigo'
-            elif 'm5C' in label:
-                this_color = 'red'
-            elif 'pseudouridine' in label:
-                this_color = 'yellow'
-            elif 'inosine' in label:
-                this_color = 'green'
-            else:
-                this_color = 'skyblue'
+        if (len(v) == 2) and SEPARATE_Y_AXES:
+            cov_1_label = v[0]
+            cov_1 = coverages['coverages'][cov_1_label]
+            cov_1_color = get_plot_color(cov_1_label)
 
-            this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color)
-            this_axes.fill_between(x_ticks, cov, alpha=0.2, color=this_color)
+            cov_2_label = v[1]
+            cov_2 = coverages['coverages'][cov_2_label]
+            cov_2_color = get_plot_color(cov_2_label)
 
-        this_axes.legend(loc="upper left", title=k)
-        this_axes.set_ylabel(coverages['y_label'], color="black")
-        this_axes.set_ylim(ymin=0, ymax=ymax)
-        this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
-        this_axes.set_yticks([0, ymax])
+            this_axes.plot(cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color)
+            this_axes.fill_between(x_ticks, cov_1, alpha=0.2, color=cov_1_color)
+            this_axes.tick_params(axis='y', labelcolor=cov_1_color)
+            this_axes.set_ylim(ymin=0)
+            this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
+            this_axes.set_ylabel(' '.join(cov_1_label.split("_")[1:]), color=cov_1_color)
+
+            this_axes_2 = this_axes.twinx()
+            this_axes_2.plot(cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color)
+            this_axes_2.fill_between(x_ticks, cov_2, alpha=0.2, color=cov_2_color)
+            this_axes_2.tick_params(axis='y', labelcolor=cov_2_color)
+            this_axes_2.set_ylim(ymin=0)
+            this_axes_2.set_ylabel(' '.join(cov_2_label.split("_")[1:]), color=cov_2_color)
+
+        else:
+            for label in v:
+                cov = coverages['coverages'][label]
+                this_color = get_plot_color(label)
+
+                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color)
+                this_axes.fill_between(x_ticks, cov, alpha=0.2, color=this_color)
+
+            this_axes.legend(loc="upper left", title=k)
+            this_axes.set_ylabel(coverages['y_label'], color="black")
+            this_axes.set_ylim(ymin=0, ymax=ymax)
+            this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
+            this_axes.set_yticks([0, ymax])
 
         this_axes.tick_params(
             axis='x',          
