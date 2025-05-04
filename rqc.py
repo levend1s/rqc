@@ -764,7 +764,7 @@ if COMMAND == "base_coverage":
             output['count_t'].sum()
         ))
 
-if COMMAND == "plot_tes_analysis":
+if COMMAND == "plot_tes_vs_wam":
     tes_tsv_file_path = INPUT[0]
     print("LOADING: {}".format(tes_tsv_file_path))
     tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
@@ -821,6 +821,44 @@ if COMMAND == "plot_tes_analysis":
             y='log2_wart_change',
             c='minus_log10_p_inter_treatment'
         )
+
+    plt.show()
+
+if COMMAND == "plot_tes_wam_distance":
+    tes_tsv_file_path = INPUT[0]
+    print("LOADING: {}".format(tes_tsv_file_path))
+    tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
+
+    # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
+    # drop all genes where wam_change == 0
+    p_same_treatment_cutoff = 0.05
+
+    tes_file_df["cannonical_mods"] = tes_file_df.number_cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
+
+    filtered_genes_tes_wam = tes_file_df[
+        (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
+        (tes_file_df.wam_change != 0)
+    ]
+
+
+    # plot 3 points
+    # 1 TES split point
+    # 2 how ever many cannonical mods there are for that gene
+    # 3 the 3' end of the CDS
+
+    print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
+
+    filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
+    filtered_genes_tes_wam['log2_wam_change'] = numpy.log2(filtered_genes_tes_wam['wam_change'])
+    filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
+
+    print(filtered_genes_tes_wam)
+
+    axes = filtered_genes_tes_wam.plot.scatter(
+        x='log2_wam_change',
+        y='log2_wart_change',
+        c='minus_log10_p_inter_treatment'
+    )
 
     plt.show()
 
