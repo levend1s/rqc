@@ -1095,7 +1095,7 @@ if COMMAND == "tes_analysis":
             STOP_CLOCK("row_start", "first stop")
             START_CLOCK("for reads in region")
 
-            # 0.3421351909637451s
+            # NOTE: now the longest function in the TES analysis
             for r in reads_in_region:
                 num_reads_bam += 1
 
@@ -1205,14 +1205,14 @@ if COMMAND == "tes_analysis":
                 else:
                     tts_sites.append(r.reference_end)
 
-                if SINGLE_GENE_ANALYSIS:
-                    if r.has_tag('pt:i'):
-                        poly_a_length = r.get_tag('pt:i')
-                        poly_a_lengths.append(poly_a_length)
-                    else:
-                        # print("WARNING: {} does not have poly a tag".format(r.qname))
-                        no_poly_a += 1
-                        poly_a_lengths.append(0)
+                # if SINGLE_GENE_ANALYSIS:
+                if r.has_tag('pt:i'):
+                    poly_a_length = r.get_tag('pt:i')
+                    poly_a_lengths.append(poly_a_length)
+                else:
+                    # print("WARNING: {} does not have poly a tag".format(r.qname))
+                    no_poly_a += 1
+                    poly_a_lengths.append(0)
 
                 #     found += 1
                 # else:
@@ -1338,55 +1338,56 @@ if COMMAND == "tes_analysis":
         average_not_in_feature_counts = math.floor(average_not_in_feature_counts / len(bam_labels))
 
         # calculate histograms for this gene
+        # if SINGLE_GENE_ANALYSIS:
+        gene_id = row['ID']
+
+        max_hist_count_poly_a = 0
+        max_hist_count_tts = 0
+        max_poly_a = 0
+        min_tts = 0
+        max_tts = 0
+        max_density = 0
+
+        # find min, maxs, 
+        for label in bam_labels:
+            if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
+                min_tts = min(d_tts[label][gene_id])
+
+            if max_tts < max(d_tts[label][gene_id]):
+                max_tts = max(d_tts[label][gene_id])
+
+            if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
+                max_poly_a = max(d_poly_a_lengths[label][gene_id])
+        
+        x_ticks = range(min_tts, max_tts)
+
+        # calculate hists
+        print("{} - Generating transcript end site histograms...".format(row['ID']))
+        for label in bam_labels:
+            np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
+            poly_a_hist = [0] * (np_poly_as.max() + 1)
+            tts_hist = [0] * (max_tts - min_tts + 1)
+
+            for i in range(1, np_poly_as.max() + 1):
+                poly_a_hist[i] = len([x for x in np_poly_as if x == i])
+
+            for i in range(min_tts, max_tts + 1): # count, position
+                tts_hist[i - min_tts] = (len([x for x in d_tts[label][gene_id] if x == i]), i)
+
+            # split the tuple cause here we're interested in the biggest count in the hist
+            e0 = [e[0] for e in tts_hist]
+            if max_hist_count_tts < max(e0):
+                max_hist_count_tts = max(e0)
+
+            if max_hist_count_poly_a < max(poly_a_hist):
+                max_hist_count_poly_a = max(poly_a_hist)
+
+            d_poly_a_length_hists[label][row['ID']] = poly_a_hist
+            d_tts_hist[label][row['ID']] = tts_hist
+
+
+        # generate dennsity plots
         if SINGLE_GENE_ANALYSIS:
-            gene_id = row['ID']
-
-            max_hist_count_poly_a = 0
-            max_hist_count_tts = 0
-            max_poly_a = 0
-            min_tts = 0
-            max_tts = 0
-            max_density = 0
-
-            # find min, maxs, 
-            for label in bam_labels:
-                if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
-                    min_tts = min(d_tts[label][gene_id])
-
-                if max_tts < max(d_tts[label][gene_id]):
-                    max_tts = max(d_tts[label][gene_id])
-
-                if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
-                    max_poly_a = max(d_poly_a_lengths[label][gene_id])
-            
-            x_ticks = range(min_tts, max_tts)
-
-            # calculate hists
-            print("{} - Generating transcript end site histograms...".format(row['ID']))
-            for label in bam_labels:
-                np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
-                poly_a_hist = [0] * (np_poly_as.max() + 1)
-                tts_hist = [0] * (max_tts - min_tts + 1)
-
-                for i in range(1, np_poly_as.max() + 1):
-                    poly_a_hist[i] = len([x for x in np_poly_as if x == i])
-
-                for i in range(min_tts, max_tts + 1): # count, position
-                    tts_hist[i - min_tts] = (len([x for x in d_tts[label][gene_id] if x == i]), i)
-    
-                # split the tuple cause here we're interested in the biggest count in the hist
-                e0 = [e[0] for e in tts_hist]
-                if max_hist_count_tts < max(e0):
-                    max_hist_count_tts = max(e0)
-
-                if max_hist_count_poly_a < max(poly_a_hist):
-                    max_hist_count_poly_a = max(poly_a_hist)
-
-                d_poly_a_length_hists[label][row['ID']] = poly_a_hist
-                d_tts_hist[label][row['ID']] = tts_hist
-
-
-            # generate dennsity plots
             print("{} - Generating transcript end site density information...".format(row['ID']))
             for label in bam_labels:
                 kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id])
@@ -1399,13 +1400,13 @@ if COMMAND == "tes_analysis":
                 if max_density < max(smoothed_tts_hist):
                     max_density = max(smoothed_tts_hist)
 
-            d_max_hist_count_poly_a[gene_id] = max_hist_count_poly_a
-            d_max_hist_count_tts[gene_id] = max_hist_count_tts
-            d_max_poly_a[gene_id] = max_poly_a
-            d_min_tts[gene_id] = min_tts
-            d_max_tts[gene_id] = max_tts
-            d_max_density[gene_id] = max_density
-            d_x_ticks[row['ID']] = x_ticks
+        d_max_hist_count_poly_a[gene_id] = max_hist_count_poly_a
+        d_max_hist_count_tts[gene_id] = max_hist_count_tts
+        d_max_poly_a[gene_id] = max_poly_a
+        d_min_tts[gene_id] = min_tts
+        d_max_tts[gene_id] = max_tts
+        d_max_density[gene_id] = max_density
+        d_x_ticks[row['ID']] = x_ticks
 
         # !!!! start of TES analysis, decide where the readthrough split point is
         # First, calculate the elbow for TES sites by count/frequency
@@ -1420,6 +1421,7 @@ if COMMAND == "tes_analysis":
         d_tes_vs_prop = {}
         readthrough_split_points = {}
         print("{} - Finding knee...".format(row['ID']))
+
         for label in bam_labels:
             # scatter plot tts vs poly-a length
             sorted_tes_counts = sorted([x for x in d_tts_hist[label][row['ID']] if x[0] > 0], key=lambda a: a[0], reverse=True)
