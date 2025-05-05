@@ -131,6 +131,17 @@ FEATURECOUNTS_HEADER = [
     "read_id", "status", "number of targets", "targets"
 ]
 
+PYSAM_MOD_TUPLES = {
+    'm6A_rev': ('A', 1, 'a'),
+    'm6A_inosine_rev': ('A', 1, 17596),
+    'pseU_rev': ('T', 1, 17802),
+    'm5C_rev': ('C', 1, 'm'),
+    'm6A_for': ('A', 0, 'a'),
+    'm6A_inosine_for': ('A', 0, 17596),
+    'pseU_for': ('T', 0, 17802),
+    'm5C_for': ('C', 0, 'm')
+}
+
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
 # length which at least 50% or 90% of total nucleotides read belong to
@@ -788,9 +799,8 @@ if COMMAND == "plot_tes_vs_wam":
             print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
 
             filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
-            filtered_genes_tes_wam['log2_wam_change'] = numpy.log2(filtered_genes_tes_wam['wam_change'])
+            filtered_genes_tes_wam['log2_wam_change'] = (numpy.log2(filtered_genes_tes_wam['wam_change']) * -1)
             filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
-
 
             print(filtered_genes_tes_wam)
 
@@ -806,18 +816,19 @@ if COMMAND == "plot_tes_vs_wam":
             (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
             (tes_file_df.wam_change != 0)
         ]
+        filtered_genes_tes_wam = tes_file_df
 
 
         print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
 
         filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
-        filtered_genes_tes_wam['log2_wam_change'] = numpy.log2(filtered_genes_tes_wam['wam_change'])
+        filtered_genes_tes_wam['-log2_wam_change'] = (numpy.log2(filtered_genes_tes_wam['wam_change']) * -1)
         filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
 
         print(filtered_genes_tes_wam)
 
         axes = filtered_genes_tes_wam.plot.scatter(
-            x='log2_wam_change',
+            x='-log2_wam_change',
             y='log2_wart_change',
             c='minus_log10_p_inter_treatment'
         )
@@ -912,6 +923,11 @@ if COMMAND == "tes_analysis":
             print("Found {} matches for type {}. Calculating TES variance...".format(len(matches.df), feature_id))
 
     matches = matches.attributes_to_columns()
+
+    SINGLE_GENE_ANALYSIS = False
+    if len(matches) == 1:
+        SINGLE_GENE_ANALYSIS = True
+
 
     num_bams = 0
 
@@ -1022,20 +1038,28 @@ if COMMAND == "tes_analysis":
         # generate coverage for all matches in this bam file
         for row_index, row in matches.iterrows():
             # find subfeatures
+            # 0.8235001564025879s - 1.4s
             START_CLOCK("row_start")
 
             summary_df_index = 0
-            gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
 
+            # 0.30355286598205566s
+            # gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
+
+            # 0.0003178119659423828s
             reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
             gene_length = row['end'] - row['start']
             row_name = row['ID']
 
+            START_CLOCK("mf")
+
+            # 0.12086892127990723s
             row_mods = mods_file_df[
                 (mods_file_df['start'].isin(cannonical_mods_start_pos[row['ID']])) &
                 (mods_file_df.strand == row['strand']) &
                 (mods_file_df.contig == row['seq_id'])
             ]
+            STOP_CLOCK("mf", "stop")
 
             d_mod_info[label][row['ID']] = {}
             d_mod_info[label][row['ID']]['valid_cov'] = {}
@@ -1060,17 +1084,6 @@ if COMMAND == "tes_analysis":
             throw_ref_starts = []
             read_indexes_to_process = []
 
-            pysam_mod_tuples = {
-                'm6A_rev': ('A', 1, 'a'),
-                'm6A_inosine_rev': ('A', 1, 17596),
-                'pseU_rev': ('T', 1, 17802),
-                'm5C_rev': ('C', 1, 'm'),
-                'm6A_for': ('A', 0, 'a'),
-                'm6A_inosine_for': ('A', 0, 17596),
-                'pseU_for': ('T', 0, 17802),
-                'm5C_for': ('C', 0, 'm')
-            }
-
             mod_of_interest = 'm6A'
 
             missing_cannonical_mods = []
@@ -1079,8 +1092,10 @@ if COMMAND == "tes_analysis":
             MOD_PROB_THRESHOLD = 0.95
             pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD) 
 
+            STOP_CLOCK("row_start", "first stop")
             START_CLOCK("for reads in region")
 
+            # 0.3421351909637451s
             for r in reads_in_region:
                 num_reads_bam += 1
 
@@ -1095,7 +1110,7 @@ if COMMAND == "tes_analysis":
 
                             if FILTER_READS_FOR_CANNONICAL_MODS:
                                 # this is [(read index, 256 * mod_prob)...]
-                                mods_probs = r.modified_bases.get(pysam_mod_tuples['m6A_rev'])
+                                mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev'])
                                 if mods_probs:
                                     # keep only mod positions which are above mod prob threshold
                                     ref_pos = numpy.array(r.get_reference_positions(full_length=True))
@@ -1129,7 +1144,7 @@ if COMMAND == "tes_analysis":
                             # read_indexes_to_process.append(this_index)
                             if FILTER_READS_FOR_CANNONICAL_MODS:
                                 # this is [(read index, 256 * mod_prob)...]
-                                mods_probs = r.modified_bases.get(pysam_mod_tuples['m6A_for'])
+                                mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_for'])
                                 if mods_probs:
                                     # keep only mod positions which are above mod prob threshold
                                     ref_pos = numpy.array(r.get_reference_positions(full_length=True))
@@ -1157,14 +1172,7 @@ if COMMAND == "tes_analysis":
 
             STOP_CLOCK("for reads in region", "NA")
 
-            # print("- REMOVED: {} reads that did not start in the last feature of target gene...".format(len(read_outside_3p_end)))
-            
-            # if FILTER_READS_FOR_CANNONICAL_MODS:
-                # print("- REMOVED: {} reads that did not contain all cannonical mods...".format(len(missing_cannonical_mods)))
-            # print("{} reads after filter".format(len(read_indexes_to_process)))
-
             if GENERATE_FILTERED_BAM:
-                
                 if FILTER_FOR_M6A != "[]":
                     fs_str = "FILTER_FOR_M6A"
                 else:
@@ -1179,9 +1187,9 @@ if COMMAND == "tes_analysis":
 
                 rqc_filtered.close()
 
-            # !!!!! END NANOPORE SPECIFIC !!!!!
-            gene_read_ids_fc = gene_reads['read_id'].to_list()
-            # print(gene_read_ids_fc)
+
+            # gene_read_ids_fc = gene_reads['read_id'].to_list()
+
             found = 0
             not_found = 0
             no_poly_a = 0
@@ -1191,14 +1199,13 @@ if COMMAND == "tes_analysis":
             tts_sites = []
 
             for r in read_indexes_to_process:
-                # print(r.qname)
-                # r = reads_in_region[idx]
-                if r.qname in gene_read_ids_fc:
-                    if row['strand'] == "-":
-                        tts_sites.append(r.reference_start)
-                    else:
-                        tts_sites.append(r.reference_end)
+                # if r.qname in gene_read_ids_fc:
+                if row['strand'] == "-":
+                    tts_sites.append(r.reference_start)
+                else:
+                    tts_sites.append(r.reference_end)
 
+                if SINGLE_GENE_ANALYSIS:
                     if r.has_tag('pt:i'):
                         poly_a_length = r.get_tag('pt:i')
                         poly_a_lengths.append(poly_a_length)
@@ -1207,10 +1214,10 @@ if COMMAND == "tes_analysis":
                         no_poly_a += 1
                         poly_a_lengths.append(0)
 
-                    found += 1
-                else:
-                    # print("WARNING {} NOT found in featureCounts".format(r.qname))
-                    not_found += 1
+                #     found += 1
+                # else:
+                #     # print("WARNING {} NOT found in featureCounts".format(r.qname))
+                #     not_found += 1
                     
             d_poly_a_lengths[label][row['ID']] = poly_a_lengths
             d_tts[label][row['ID']] = tts_sites
@@ -1221,11 +1228,8 @@ if COMMAND == "tes_analysis":
             STOP_CLOCK("row_start", "row end")
 
             print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], num_reads_bam, len(d_tts[label][row['ID']]), not_found, len(read_outside_3p_end), len(missing_cannonical_mods)))
-        
-
 
         samfile.close()
-
 
     # We are interested if the TES has multiple end sites 
     # OR
@@ -1247,6 +1251,23 @@ if COMMAND == "tes_analysis":
     d_wam_after = {}
     groups = [(bam_labels_control, weighted_mod_ratios_before), (bam_labels_treatment, weighted_mod_ratios_after)]
     d_wam_change = {}
+    d_x_ticks = {}
+    d_poly_a_length_hists = {}
+    d_tts_hist = {}
+    d_cdfs = {}
+    d_kdes = {}
+    d_max_hist_count_poly_a = {}
+    d_max_hist_count_tts = {}
+    d_max_poly_a = {}
+    d_min_tts = {}
+    d_max_tts = {}
+    d_max_density = {}
+
+    for label in bam_labels:
+        d_poly_a_length_hists[label] = {}
+        d_tts_hist[label] = {}
+        d_kdes[label] = {}
+        d_cdfs[label] = {}
 
     for row_index, row in matches.iterrows():
         gene_id = row['ID']
@@ -1317,63 +1338,77 @@ if COMMAND == "tes_analysis":
         average_not_in_feature_counts = math.floor(average_not_in_feature_counts / len(bam_labels))
 
         # calculate histograms for this gene
-        max_hist_count = 0
-        max_hist_count_tts = 0
-        max_poly_a = 0
-        min_tts = 0
-        max_tts = 0
-        max_density = 0
+        if SINGLE_GENE_ANALYSIS:
+            gene_id = row['ID']
 
-        d_poly_a_length_hists = {}
-        d_tts_hist = {}
-        d_cdfs = {}
-        d_kdes = {}
+            max_hist_count_poly_a = 0
+            max_hist_count_tts = 0
+            max_poly_a = 0
+            min_tts = 0
+            max_tts = 0
+            max_density = 0
 
-        gene_id = row['ID']
+            # find min, maxs, 
+            for label in bam_labels:
+                if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
+                    min_tts = min(d_tts[label][gene_id])
 
-        # find min, maxs, 
-        for label in bam_labels:
-            if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
-                min_tts = min(d_tts[label][gene_id])
+                if max_tts < max(d_tts[label][gene_id]):
+                    max_tts = max(d_tts[label][gene_id])
 
-            if max_tts < max(d_tts[label][gene_id]):
-                max_tts = max(d_tts[label][gene_id])
+                if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
+                    max_poly_a = max(d_poly_a_lengths[label][gene_id])
+            
+            x_ticks = range(min_tts, max_tts)
 
-            if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
-                max_poly_a = max(d_poly_a_lengths[label][gene_id])
-        
-        x_ticks = range(min_tts, max_tts)
+            # calculate hists
+            print("{} - Generating transcript end site histograms...".format(row['ID']))
+            for label in bam_labels:
+                np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
+                poly_a_hist = [0] * (np_poly_as.max() + 1)
+                tts_hist = [0] * (max_tts - min_tts + 1)
 
-        # calculate hists
-        print("{} - Generating transcript end site histograms...".format(row['ID']))
-        for label in bam_labels:
-            np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
-            poly_a_hist = [0] * (np_poly_as.max() + 1)
-            tts_hist = [0] * (max_tts - min_tts + 1)
+                for i in range(1, np_poly_as.max() + 1):
+                    poly_a_hist[i] = len([x for x in np_poly_as if x == i])
 
-            for i in range(1, np_poly_as.max() + 1):
-                poly_a_hist[i] = len([x for x in np_poly_as if x == i])
+                for i in range(min_tts, max_tts + 1): # count, position
+                    tts_hist[i - min_tts] = (len([x for x in d_tts[label][gene_id] if x == i]), i)
+    
+                # split the tuple cause here we're interested in the biggest count in the hist
+                e0 = [e[0] for e in tts_hist]
+                if max_hist_count_tts < max(e0):
+                    max_hist_count_tts = max(e0)
 
-            for i in range(min_tts, max_tts + 1): # count, position
-                tts_hist[i - min_tts] = (len([x for x in d_tts[label][gene_id] if x == i]), i)
+                if max_hist_count_poly_a < max(poly_a_hist):
+                    max_hist_count_poly_a = max(poly_a_hist)
 
-            d_poly_a_length_hists[label] = poly_a_hist
-            d_tts_hist[label] = tts_hist
+                d_poly_a_length_hists[label][row['ID']] = poly_a_hist
+                d_tts_hist[label][row['ID']] = tts_hist
 
 
-        # generate dennsity plots
-        print("{} - Generating transcript end site density information...".format(row['ID']))
-        for label in bam_labels:
-            kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id])
-            smoothed_tts_hist = kernel(x_ticks)
-            cdf = numpy.cumsum(smoothed_tts_hist)
+            # generate dennsity plots
+            print("{} - Generating transcript end site density information...".format(row['ID']))
+            for label in bam_labels:
+                kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id])
+                smoothed_tts_hist = kernel(x_ticks)
+                cdf = numpy.cumsum(smoothed_tts_hist)
 
-            d_kdes[label] = smoothed_tts_hist
-            d_cdfs[label] = cdf
+                d_kdes[label][row['ID']] = smoothed_tts_hist
+                d_cdfs[label][row['ID']] = cdf
 
-            if max_density < max(smoothed_tts_hist):
-                max_density = max(smoothed_tts_hist)
+                if max_density < max(smoothed_tts_hist):
+                    max_density = max(smoothed_tts_hist)
 
+            d_max_hist_count_poly_a[gene_id] = max_hist_count_poly_a
+            d_max_hist_count_tts[gene_id] = max_hist_count_tts
+            d_max_poly_a[gene_id] = max_poly_a
+            d_min_tts[gene_id] = min_tts
+            d_max_tts[gene_id] = max_tts
+            d_max_density[gene_id] = max_density
+            d_x_ticks[row['ID']] = x_ticks
+
+        # !!!! start of TES analysis, decide where the readthrough split point is
+        # First, calculate the elbow for TES sites by count/frequency
         tes_variance_tests = ["z"]#, "x2", "mw-u", "ks"]
 
         d_read_through_counts = {}
@@ -1384,13 +1419,10 @@ if COMMAND == "tes_analysis":
         d_knee = {}
         d_tes_vs_prop = {}
         readthrough_split_points = {}
-
-        # !!!! start of TES analysis, decide where the readthrough split point is
-        # First, calculate the elbow for TES sites by count/frequency 
         print("{} - Finding knee...".format(row['ID']))
         for label in bam_labels:
             # scatter plot tts vs poly-a length
-            sorted_tes_counts = sorted([x for x in d_tts_hist[label] if x[0] > 0], key=lambda a: a[0], reverse=True)
+            sorted_tes_counts = sorted([x for x in d_tts_hist[label][row['ID']] if x[0] > 0], key=lambda a: a[0], reverse=True)
             e1 = [x[0] for x in sorted_tes_counts]
 
             # not sure what the S=1.0 does here
@@ -1571,10 +1603,10 @@ if COMMAND == "tes_analysis":
                         pvalue = r.pvalue
 
                     if test == "x2":
-                        print("{} and {}".format(len(d_tts_hist[s1]), len(d_tts_hist[s2])))
-                        print("{} and {}".format(d_tts_hist[s1], d_tts_hist[s2]))
+                        print("{} and {}".format(len(d_tts_hist[s1][row['ID']]), len(d_tts_hist[s2][row['ID']])))
+                        print("{} and {}".format(d_tts_hist[s1][row['ID']], d_tts_hist[s2][row['ID']]))
 
-                        r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
+                        r = scipy.stats.chisquare(d_tts_hist[s1][row['ID']], f_exp=d_tts_hist[s2][row['ID']])
                         pvalue = r.pvalue
                     
                     if test == "z":
@@ -1593,9 +1625,6 @@ if COMMAND == "tes_analysis":
 
                 for s1, s2 in pairwise_combinations_same_treatment:
                     # two-sided: The null hypothesis is that the two distributions are identical, F(x)=G(x) for all x; the alternative is that they are not identical.
-                        
-                    # plt.scatter(d_kdes[s1], d_kdes[s2], s=1)
-                    # plt.show()
                     if test == "ks":
                         r = scipy.stats.ks_2samp(d_tts[s1][row['ID']], d_tts[s2][row['ID']])
                         print("{} vs {}: {}".format(s1, s2, r.pvalue))
@@ -1604,7 +1633,7 @@ if COMMAND == "tes_analysis":
                         pvalue = r.pvalue
 
                     if test == "x2":
-                        r = scipy.stats.chisquare(d_tts_hist[s1], f_exp=d_tts_hist[s2])
+                        r = scipy.stats.chisquare(d_tts_hist[s1][row['ID']], f_exp=d_tts_hist[s2][row['ID']])
                         pvalue = r.pvalue
 
                     if test == "z":
@@ -1646,65 +1675,8 @@ if COMMAND == "tes_analysis":
 
 
     # --------- PLOT ---------- #
-    if len(matches) == 1:
+    if SINGLE_GENE_ANALYSIS:
         gene_id = matches.iloc[0]['ID']
-
-        max_hist_count = 0
-        max_hist_count_tts = 0
-        max_poly_a = 0
-        min_tts = 0
-        max_tts = 0
-        max_density = 0
-
-        d_poly_a_length_hists = {}
-        d_tts_hist = {}
-        d_cdfs = {}
-        d_kdes = {}
-
-        # find min, maxs, calculate hists
-        for label in bam_labels:
-            np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
-            poly_a_hist = [0] * (np_poly_as.max() + 1)
-            tts_hist = [0] * (max(d_tts[label][gene_id]) + 1)
-
-            for i in range(1, np_poly_as.max() + 1):
-                poly_a_hist[i] = len([x for x in np_poly_as if x == i])
-
-            for i in range(1, (max(d_tts[label][gene_id])) + 1):
-                tts_hist[i] = len([x for x in d_tts[label][gene_id] if x == i])
-
-            if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
-                min_tts = min(d_tts[label][gene_id])
-
-            if max_tts < max(d_tts[label][gene_id]):
-                max_tts = max(d_tts[label][gene_id])
-
-            if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
-                max_poly_a = max(d_poly_a_lengths[label][gene_id])
-
-            d_poly_a_length_hists[label] = poly_a_hist
-            d_tts_hist[label] = tts_hist
-
-            if max_hist_count < max(poly_a_hist):
-                max_hist_count = max(poly_a_hist)
-
-            if max_hist_count_tts < max(tts_hist):
-                max_hist_count_tts = max(tts_hist)
-
-        x_ticks = range(min_tts, max_tts)
-
-        # generate dennsity plots
-        for label in bam_labels:
-            kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id])
-            smoothed_tts_hist = kernel(x_ticks)
-            cdf = numpy.cumsum(smoothed_tts_hist)
-
-            d_kdes[label] = smoothed_tts_hist
-            d_cdfs[label] = cdf
-
-            if max_density < max(smoothed_tts_hist):
-                max_density = max(smoothed_tts_hist)
-
 
         NUM_VERT_PLOTS = 3
         fig, axes = plt.subplots(NUM_VERT_PLOTS, num_bams)
@@ -1712,13 +1684,15 @@ if COMMAND == "tes_analysis":
         for label in bam_labels:
             # scatter plot tts vs poly-a length
             axes[0, axes_index].scatter(d_tts[label][gene_id], d_poly_a_lengths[label][gene_id], s=1)
-            axes[0, axes_index].set_ylim(ymin=0, ymax=max_poly_a*1.1)
-            axes[0, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
+            axes[0, axes_index].set_ylim(ymin=0, ymax=d_max_poly_a[gene_id]*1.1)
+            axes[0, axes_index].set_xlim(xmin=d_x_ticks[row['ID']][0], xmax=d_x_ticks[row['ID']][-1])
             axes[0, axes_index].get_xaxis().set_visible(False)
             
-            axes[1, axes_index].plot(d_tts_hist[label])
-            axes[1, axes_index].set_ylim(ymin=0, ymax=max_hist_count_tts*1.1)
-            axes[1, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
+            d_tts_hist_y = [e[0] for e in d_tts_hist[label][row['ID']]]
+            d_tts_hist_x = [e[1] for e in d_tts_hist[label][row['ID']]]
+            axes[1, axes_index].plot(d_tts_hist_x, d_tts_hist_y)
+            axes[1, axes_index].set_ylim(ymin=0, ymax=d_max_hist_count_tts[gene_id]*1.1)
+            axes[1, axes_index].set_xlim(xmin=d_x_ticks[row['ID']][0], xmax=d_x_ticks[row['ID']][-1])
             axes[1, axes_index].get_xaxis().set_visible(False)
 
             # axes[2, axes_index].plot(d_poly_a_length_hists[label])
@@ -1726,9 +1700,9 @@ if COMMAND == "tes_analysis":
             # axes[2, axes_index].set_xlim(xmin=0, xmax=max_poly_a)
             # axes[2, axes_index].get_xaxis().set_visible(False)
 
-            axes[2, axes_index].plot(x_ticks, d_kdes[label])
-            axes[2, axes_index].set_ylim(ymin=0, ymax=max_density*1.1)
-            axes[2, axes_index].set_xlim(xmin=min_tts, xmax=max_tts)
+            axes[2, axes_index].plot(d_x_ticks[row['ID']], d_kdes[label][gene_id])
+            axes[2, axes_index].set_ylim(ymin=0, ymax=d_max_density[gene_id]*1.1)
+            axes[2, axes_index].set_xlim(xmin=d_x_ticks[row['ID']][0], xmax=d_x_ticks[row['ID']][-1])
             axes[2, axes_index].set(xlabel='transcription end site (nt)')
 
 
@@ -1737,12 +1711,12 @@ if COMMAND == "tes_analysis":
             axes[1, axes_index].axvline(x= gene_length, color='darkgray', ls="--", linewidth=1.0)
             axes[2, axes_index].axvline(x= gene_length, color='darkgray', ls="--", linewidth=1.0)
 
-            if SHOW_CANNONICAL_M6A:
-                # # PLOT MOD LOCATION AS VERT LINES
-                for mod_location in d_cannonical_mod_locations[row_name]:
-                    axes[0, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
-                    axes[1, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
-                    axes[2, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+            # if SHOW_CANNONICAL_M6A:
+            #     # # PLOT MOD LOCATION AS VERT LINES
+            #     for mod_location in d_cannonical_mod_locations[row_name]:
+            #         axes[0, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+            #         axes[1, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+            #         axes[2, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
 
             # add axis labels
             if axes_index == 0:
@@ -1976,80 +1950,6 @@ if COMMAND == "plot_coverage":
                     row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS | BAM_REVERSE_STRAND
                 else:
                     row_flags_requires = BAM_REVERSE_STRAND
-
-                # ---------- START POLY AAAAAAA
-                if CALCULATE_POLY_A:
-                    summary_df_index = 0
-                    # load the relevant featureCounts for this bam file
-                    featureCountsFile = "/Users/joshualevendis/Downloads/featureCounts/28K1_to_pfal.50MAPQ.sorted.bam.featureCounts"
-
-                    featurecounts_header = [
-                        "read_id", "status", "number of targets", "targets"
-                    ]
-
-                    feature_counts_df = pandas.read_csv(featureCountsFile, sep='\t', names=featurecounts_header)
-                    gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
-
-                    reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
-
-                    gene_read_ids_fc = gene_reads['read_id'].to_list()
-                    found = 0
-                    not_found = 0
-                    no_poly_a = 0
-                    poly_a_lengths = []
-                    
-                    # tx length or TTS?
-                    tts_sites = []
-
-
-                    # compare the 
-                    for r in reads_in_region:
-                        # print(r.qname)
-                        if r.qname in gene_read_ids_fc:
-                            print("{} found in featureCounts".format(r.qname))
-
-                            if row['strand'] == "-":
-                                tts_sites.append(r.reference_start)
-                            else:
-                                tts_sites.append(r.reference_end)
-
-                            if r.has_tag('pt:i'):
-                                poly_a_length = r.get_tag('pt:i')
-                                poly_a_lengths.append(poly_a_length)
-                            else:
-                                print("WARNING: {} does not have poly a tag".format(r.qname))
-                                no_poly_a += 1
-                                poly_a_lengths.append(0)
-
-                            found += 1
-                        else:
-                            print("WARNING {} NOT found in featureCounts".format(r.qname))
-                            not_found += 1
-                            
-                    print("{} found, {} not found, {} found but no poly a, len featureCounts reads: {}".format(found, not_found, no_poly_a, len(gene_read_ids_fc)))
-
-                    np_poly_as = numpy.array(poly_a_lengths)
-                    poly_a_hist = [0] * np_poly_as.max()
-                    for i in range(np_poly_as.max()):
-                        poly_a_hist[i] = len([x for x in np_poly_as if x == i])
-
-                    summary_header = ["label", "num transcripts", "gene id", "poly_a_mean", "poly_a_var", "poly_a_min", "poly_a_max", "poly_a_median", "poly_a_q1", "poly_a_q3"]
-                    print("\t".join(summary_header))
-                    summary_df = pandas.DataFrame(columns=summary_header)
-                    # interested in: num, min, max, mean, variance
-
-                    row_summary = [label, found, row['ID'], np_poly_as.mean(), np_poly_as.var(), np_poly_as.min(), np_poly_as.max(), numpy.median(np_poly_as), numpy.quantile(np_poly_as, 0.25), numpy.quantile(np_poly_as, 0.75)]
-
-                    print("\t".join([str(x) for x in row_summary]))
-                    summary_df.loc[logfile_df_index] = row_summary
-                    summary_df_index += 1
-
-                    plt.scatter(tts_sites, poly_a_lengths)
-                    
-                    plt.show()
-                    print("calculating poly A and TTS variances")
-                # ---------- END POLY AAAAAA
-
 
                 for _, subfeature in row_subfeatures.iterrows():
                     subfeature_length = subfeature['end'] - subfeature['start'] + 1
