@@ -1182,7 +1182,7 @@ if COMMAND == "tes_analysis":
                 rqc_filtered.close()
 
 
-            gene_read_ids_fc = gene_reads['read_id'].to_list()
+            gene_read_ids_fc = set(gene_reads['read_id'])
 
             found = 0
             not_found = 0
