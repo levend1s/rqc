@@ -1021,8 +1021,6 @@ if COMMAND == "tes_analysis":
         feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
         feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
 
-
-
         # TODO load cannonical mod positions into array and convert to tx space
         prefix = label.split("_")[0]
         mod_label = "{}_m6A_0.95".format(prefix)
@@ -1047,14 +1045,14 @@ if COMMAND == "tes_analysis":
 
             # 0.30355286598205566s
             # gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
+            START_CLOCK("fetch")
 
             # 0.0003178119659423828s
             reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
             reads_in_region = list(reads_in_region)
             gene_length = row['end'] - row['start']
             row_name = row['ID']
-
-            START_CLOCK("mf")
+            STOP_CLOCK("fetch", "stop")
 
             # 0.12086892127990723s
             row_mods = mods_file_df[
@@ -1062,7 +1060,6 @@ if COMMAND == "tes_analysis":
                 (mods_file_df.strand == row['strand']) &
                 (mods_file_df.contig == row['seq_id'])
             ]
-            STOP_CLOCK("mf", "stop")
 
             d_mod_info[label][row['ID']] = {}
             d_mod_info[label][row['ID']]['valid_cov'] = {}
@@ -1077,7 +1074,6 @@ if COMMAND == "tes_analysis":
                 if mod not in d_mod_info[label][row['ID']]['valid_cov']:
                     d_mod_info[label][row['ID']]['valid_cov'][mod] = 0
                     d_mod_info[label][row['ID']]['num_mod'][mod] = 0
-
 
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
@@ -1097,6 +1093,11 @@ if COMMAND == "tes_analysis":
             STOP_CLOCK("row_start", "first stop")
             START_CLOCK("for reads in region")
 
+            if row['strand'] == "-":
+                most_3p_subfeature = row_subfeatures.iloc[0]
+            else:
+                most_3p_subfeature = row_subfeatures.iloc[-1]
+
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
                 r = reads_in_region[i]
@@ -1106,7 +1107,6 @@ if COMMAND == "tes_analysis":
                 if (row['strand'] == "+" and r.is_forward) or (row['strand'] == "-" and r.is_reverse):
                     if row['strand'] == "-":
                         read_3p_end = r.reference_start
-                        most_3p_subfeature = row_subfeatures.iloc[0]
 
                         if read_3p_end <= most_3p_subfeature.end:
                             # read_indexes_to_process.append(this_index)
@@ -1141,7 +1141,6 @@ if COMMAND == "tes_analysis":
 
                     else:
                         read_3p_end = r.reference_end
-                        most_3p_subfeature = row_subfeatures.iloc[-1]
 
                         if read_3p_end >= most_3p_subfeature.start:
                             # read_indexes_to_process.append(this_index)
