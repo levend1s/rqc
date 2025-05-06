@@ -1019,8 +1019,9 @@ if COMMAND == "tes_analysis":
         d_not_in_feature_counts[label] = {}
 
         # attempt to find the relevent featureCounts file in input_files
-        # feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
-        # feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
+        feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
+        feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
+        feature_counts_df['targets'] = feature_counts_df['targets'].astype('category')
 
         # TODO load cannonical mod positions into array and convert to tx space
         prefix = label.split("_")[0]
@@ -1039,7 +1040,7 @@ if COMMAND == "tes_analysis":
             summary_df_index = 0
 
             # 0.30355286598205566s
-            # gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
+            gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
             # START_CLOCK("fetch")
 
             # 0.0003178119659423828s
@@ -1181,7 +1182,7 @@ if COMMAND == "tes_analysis":
                 rqc_filtered.close()
 
 
-            # gene_read_ids_fc = gene_reads['read_id'].to_list()
+            gene_read_ids_fc = gene_reads['read_id'].to_list()
 
             found = 0
             not_found = 0
@@ -1191,20 +1192,20 @@ if COMMAND == "tes_analysis":
 
             for i in read_indexes_to_process:
                 r = reads_in_region[i]
-                # if r.qname in gene_read_ids_fc:
-                if row['strand'] == "-":
-                    tts_sites.append(r.reference_start)
-                else:
-                    tts_sites.append(r.reference_end)
+                if r.qname in gene_read_ids_fc:
+                    if row['strand'] == "-":
+                        tts_sites.append(r.reference_start)
+                    else:
+                        tts_sites.append(r.reference_end)
 
-                # if SINGLE_GENE_ANALYSIS:
-                if r.has_tag('pt:i'):
-                    poly_a_length = r.get_tag('pt:i')
-                    poly_a_lengths.append(poly_a_length)
-                else:
-                    # print("WARNING: {} does not have poly a tag".format(r.qname))
-                    no_poly_a += 1
-                    poly_a_lengths.append(0)
+                    # if SINGLE_GENE_ANALYSIS:
+                    if r.has_tag('pt:i'):
+                        poly_a_length = r.get_tag('pt:i')
+                        poly_a_lengths.append(poly_a_length)
+                    else:
+                        # print("WARNING: {} does not have poly a tag".format(r.qname))
+                        no_poly_a += 1
+                        poly_a_lengths.append(0)
 
                 #     found += 1
                 # else:
@@ -1316,11 +1317,15 @@ if COMMAND == "tes_analysis":
 
     summary_df_index = 0
     for row_index, row in matches.iterrows():
+        SAMPLE_HAS_ZERO_EXP = False
         average_expression = 0
         average_not_beyond_3p = 0
         average_not_in_feature_counts = 0
 
         for label in bam_labels:
+            if len(d_tts[label][row['ID']]) == 0:
+                SAMPLE_HAS_ZERO_EXP = True
+
             average_expression += len(d_tts[label][row['ID']])
             average_not_beyond_3p += d_not_beyond_3p[label][row['ID']]
             average_not_in_feature_counts += d_not_in_feature_counts[label][row['ID']]
@@ -1328,6 +1333,13 @@ if COMMAND == "tes_analysis":
         average_expression = math.floor(average_expression / len(bam_labels))
         average_not_beyond_3p = math.floor(average_not_beyond_3p / len(bam_labels))
         average_not_in_feature_counts = math.floor(average_not_in_feature_counts / len(bam_labels))
+
+        if SAMPLE_HAS_ZERO_EXP or average_expression < READ_DEPTH_THRESHOLD:
+            # print pandas tsv row summary
+            row_summary = [row['ID'], 0, 0, 0, 0, 0, 0, average_expression, cannonical_mods_start_pos[row['ID']], 0, 0, 0]
+            summary_df.loc[summary_df_index] = row_summary
+            summary_df_index += 1
+            continue
 
         # calculate histograms for this gene
         # if SINGLE_GENE_ANALYSIS:
@@ -1666,7 +1678,7 @@ if COMMAND == "tes_analysis":
 
 
     # --------- PLOT ---------- #
-    if SINGLE_GENE_ANALYSIS:
+    if SINGLE_GENE_ANALYSIS and row['ID'] in d_tts_hist[first_label]:
         gene_id = matches.iloc[0]['ID']
 
         NUM_VERT_PLOTS = 3

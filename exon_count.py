@@ -6,8 +6,8 @@ import numpy
 import pandas
 import math
 
-ANNOTATION_FILE = "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
-OUTPUT_FILE = "/Users/joshualevendis/Documents/RNA/rqc/pfal_mRNA_exon_counts.json"
+ANNOTATION_FILE = "/Users/joshlevendis/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+OUTPUT_FILE = "/Users/joshlevendis/rqc/pfal_mRNA_exon_counts.json"
 
 FEATURE_ID = "CDS"
 PARENT_TYPE = "mRNA"
