@@ -1028,6 +1028,8 @@ if COMMAND == "tes_analysis":
         mod_label = "{}_m6A_0.95".format(prefix)
 
         mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=MODKIT_BEDMETHYL_HEADER)
+        mods_file_df['strand'] = mods_file_df['strand'].astype('category')
+        mods_file_df['contig'] = mods_file_df['strand'].astype('category')
 
         # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
         # mods_file_df = mods_file_df[
@@ -1048,6 +1050,7 @@ if COMMAND == "tes_analysis":
 
             # 0.0003178119659423828s
             reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
+            reads_in_region = list(reads_in_region)
             gene_length = row['end'] - row['start']
             row_name = row['ID']
 
@@ -1081,7 +1084,6 @@ if COMMAND == "tes_analysis":
             row_subfeatures = getSubfeatures(row['ID'], "subfeature", 0)
             num_reads_bam = 0
 
-            throw_ref_starts = []
             read_indexes_to_process = []
 
             mod_of_interest = 'm6A'
@@ -1096,7 +1098,8 @@ if COMMAND == "tes_analysis":
             START_CLOCK("for reads in region")
 
             # NOTE: now the longest function in the TES analysis
-            for r in reads_in_region:
+            for i in range(len(reads_in_region)):
+                r = reads_in_region[i]
                 num_reads_bam += 1
 
                 # keep only reads in the same direction as this strand
@@ -1122,7 +1125,7 @@ if COMMAND == "tes_analysis":
                                     if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
                                         # print("READ HAD ALL CANNONICAL MODS\n")
                                         if FILTER_FOR_M6A != "[]":
-                                            read_indexes_to_process.append(r)
+                                            read_indexes_to_process.append(i)
                                         if FILTER_OUT_M6A != "[]":
                                             missing_cannonical_mods.append(r.query_name)
                                     else:
@@ -1130,9 +1133,9 @@ if COMMAND == "tes_analysis":
                                         if FILTER_FOR_M6A != "[]":
                                             missing_cannonical_mods.append(r.query_name)
                                         if FILTER_OUT_M6A != "[]":
-                                            read_indexes_to_process.append(r)
+                                            read_indexes_to_process.append(i)
                             else:
-                                read_indexes_to_process.append(r)
+                                read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
 
@@ -1156,7 +1159,7 @@ if COMMAND == "tes_analysis":
                                     if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
                                         # print("READ HAD ALL CANNONICAL MODS\n")
                                         if FILTER_FOR_M6A != "[]":
-                                            read_indexes_to_process.append(r)
+                                            read_indexes_to_process.append(i)
                                         if FILTER_OUT_M6A != "[]":
                                             missing_cannonical_mods.append(r.query_name)
                                     else:
@@ -1164,9 +1167,9 @@ if COMMAND == "tes_analysis":
                                         if FILTER_FOR_M6A != "[]":
                                             missing_cannonical_mods.append(r.query_name)
                                         if FILTER_OUT_M6A != "[]":
-                                            read_indexes_to_process.append(r)
+                                            read_indexes_to_process.append(i)
                             else:
-                                read_indexes_to_process.append(r)
+                                read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
 
@@ -1182,8 +1185,8 @@ if COMMAND == "tes_analysis":
                 print("GENERATING FILTERED BAM: {}".format(filtered_bam_filename))
 
                 rqc_filtered = pysam.AlignmentFile(filtered_bam_filename, "wb", template=samfile)
-                for read in read_indexes_to_process:
-                    rqc_filtered.write(read)
+                for i in read_indexes_to_process:
+                    rqc_filtered.write(reads_in_region[i])
 
                 rqc_filtered.close()
 
@@ -1198,7 +1201,8 @@ if COMMAND == "tes_analysis":
             # tx length or TTS?
             tts_sites = []
 
-            for r in read_indexes_to_process:
+            for i in read_indexes_to_process:
+                r = reads_in_region[i]
                 # if r.qname in gene_read_ids_fc:
                 if row['strand'] == "-":
                     tts_sites.append(r.reference_start)
