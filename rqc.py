@@ -975,7 +975,9 @@ if COMMAND == "tes_analysis":
             print("READ_DEPTH_THRESHOLD: {}".format(READ_DEPTH_THRESHOLD))
 
         mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=MODKIT_BEDMETHYL_HEADER)
-
+        mods_file_df['strand'] = mods_file_df['strand'].astype('category')
+        mods_file_df['contig'] = mods_file_df['contig'].astype('category')
+        
         # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
         mods_file_df = mods_file_df[
             (mods_file_df.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
@@ -1016,10 +1018,9 @@ if COMMAND == "tes_analysis":
         d_not_beyond_3p[label] = {}
         d_not_in_feature_counts[label] = {}
 
-
         # attempt to find the relevent featureCounts file in input_files
-        feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
-        feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
+        # feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
+        # feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
 
         # TODO load cannonical mod positions into array and convert to tx space
         prefix = label.split("_")[0]
@@ -1027,32 +1028,27 @@ if COMMAND == "tes_analysis":
 
         mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=MODKIT_BEDMETHYL_HEADER)
         mods_file_df['strand'] = mods_file_df['strand'].astype('category')
-        mods_file_df['contig'] = mods_file_df['strand'].astype('category')
-
-        # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
-        # mods_file_df = mods_file_df[
-        #     (mods_file_df.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
-        #     (mods_file_df.valid_cov >= READ_DEPTH_THRESHOLD)
-        # ]
+        mods_file_df['contig'] = mods_file_df['contig'].astype('category')
 
         # generate coverage for all matches in this bam file
         for row_index, row in matches.iterrows():
             # find subfeatures
             # 0.8235001564025879s - 1.4s
-            START_CLOCK("row_start")
+            # START_CLOCK("row_start")
 
             summary_df_index = 0
 
             # 0.30355286598205566s
             # gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
-            START_CLOCK("fetch")
+            # START_CLOCK("fetch")
 
             # 0.0003178119659423828s
             reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
             reads_in_region = list(reads_in_region)
+
             gene_length = row['end'] - row['start']
             row_name = row['ID']
-            STOP_CLOCK("fetch", "stop")
+            # STOP_CLOCK("fetch", "stop")
 
             # 0.12086892127990723s
             row_mods = mods_file_df[
@@ -1089,9 +1085,6 @@ if COMMAND == "tes_analysis":
 
             MOD_PROB_THRESHOLD = 0.95
             pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD) 
-
-            STOP_CLOCK("row_start", "first stop")
-            START_CLOCK("for reads in region")
 
             if row['strand'] == "-":
                 most_3p_subfeature = row_subfeatures.iloc[0]
@@ -1172,8 +1165,6 @@ if COMMAND == "tes_analysis":
                         else:
                             read_outside_3p_end.append(r.query_name)
 
-            STOP_CLOCK("for reads in region", "NA")
-
             if GENERATE_FILTERED_BAM:
                 if FILTER_FOR_M6A != "[]":
                     fs_str = "FILTER_FOR_M6A"
@@ -1196,8 +1187,6 @@ if COMMAND == "tes_analysis":
             not_found = 0
             no_poly_a = 0
             poly_a_lengths = []
-            
-            # tx length or TTS?
             tts_sites = []
 
             for i in read_indexes_to_process:
@@ -1227,10 +1216,10 @@ if COMMAND == "tes_analysis":
 
             d_not_beyond_3p[label][row['ID']] = num_reads_bam - len(read_indexes_to_process)
             d_not_in_feature_counts[label][row['ID']] = not_found
-
-            STOP_CLOCK("row_start", "row end")
+            # STOP_CLOCK("row_start", "stop")
 
             print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], num_reads_bam, len(d_tts[label][row['ID']]), not_found, len(read_outside_3p_end), len(missing_cannonical_mods)))
+
 
         samfile.close()
 
@@ -1367,15 +1356,11 @@ if COMMAND == "tes_analysis":
         # calculate hists
         print("{} - Generating transcript end site histograms...".format(row['ID']))
         for label in bam_labels:
-            np_poly_as = numpy.array(d_poly_a_lengths[label][gene_id])
-            poly_a_hist = [0] * (np_poly_as.max() + 1)
-            tts_hist = [0] * (max_tts - min_tts + 1)
-
-            for i in range(1, np_poly_as.max() + 1):
-                poly_a_hist[i] = len([x for x in np_poly_as if x == i])
-
-            for i in range(min_tts, max_tts + 1): # count, position
-                tts_hist[i - min_tts] = (len([x for x in d_tts[label][gene_id] if x == i]), i)
+            poly_a_length_range = list(range(1, max(d_poly_a_lengths[label][gene_id]) + 1))
+            poly_a_hist = [d_poly_a_lengths[label][gene_id].count(i) for i in poly_a_length_range]
+            
+            unique_tes = set(d_tts[label][gene_id])
+            tts_hist = [(d_tts[label][gene_id].count(i), i) for i in unique_tes]
 
             # split the tuple cause here we're interested in the biggest count in the hist
             e0 = [e[0] for e in tts_hist]
@@ -1387,6 +1372,7 @@ if COMMAND == "tes_analysis":
 
             d_poly_a_length_hists[label][row['ID']] = poly_a_hist
             d_tts_hist[label][row['ID']] = tts_hist
+
 
 
         # generate dennsity plots
@@ -1693,8 +1679,9 @@ if COMMAND == "tes_analysis":
             axes[0, axes_index].set_xlim(xmin=d_x_ticks[row['ID']][0], xmax=d_x_ticks[row['ID']][-1])
             axes[0, axes_index].get_xaxis().set_visible(False)
             
-            d_tts_hist_y = [e[0] for e in d_tts_hist[label][row['ID']]]
-            d_tts_hist_x = [e[1] for e in d_tts_hist[label][row['ID']]]
+            sorted_tes_counts_by_pos = sorted(d_tts_hist[label][row['ID']], key=lambda a: a[1])
+            d_tts_hist_y = [e[0] for e in sorted_tes_counts_by_pos]
+            d_tts_hist_x = [e[1] for e in sorted_tes_counts_by_pos]
             axes[1, axes_index].plot(d_tts_hist_x, d_tts_hist_y)
             axes[1, axes_index].set_ylim(ymin=0, ymax=d_max_hist_count_tts[gene_id]*1.1)
             axes[1, axes_index].set_xlim(xmin=d_x_ticks[row['ID']][0], xmax=d_x_ticks[row['ID']][-1])
