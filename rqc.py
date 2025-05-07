@@ -116,10 +116,7 @@ GFF_DF = None
 GFF_PARENT_TREE = {}
 CLOCKS = {}
 
-if DEBUG:
-    TES_SUMMARY_HEADER = ["gene_id", "test", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "score", "tests_passed", "average_expression", "average_not_beyond_3p", "average_not_in_feature_counts"]
-else:
-    TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "average_expression", "number_cannonical_mods", "wam_before", "wam_after", "wam_change"]
+TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "tes_curve_r2", "tes_curve_coeff", "average_expression", "number_cannonical_mods", "wam_before", "wam_after", "wam_change"]
 
 MODKIT_BEDMETHYL_HEADER = [
     "contig", "start", "end", "code", "score", "strand", 
@@ -1260,17 +1257,11 @@ if COMMAND == "tes_analysis":
     d_max_tts = {}
     d_max_density = {}
 
-    d_r_squared = {}
-    d_splitpoint_approximation_method = {}
-
     for label in bam_labels:
         d_poly_a_length_hists[label] = {}
         d_tts_hist[label] = {}
         d_kdes[label] = {}
         d_cdfs[label] = {}
-        d_r_squared[label] = {}
-        d_splitpoint_approximation_method[label] = {}
- 
 
     for row_index, row in matches.iterrows():
         gene_id = row['ID']
@@ -1430,7 +1421,9 @@ if COMMAND == "tes_analysis":
         d_sorted_tes = {}
         d_knee = {}
         d_tes_vs_prop = {}
-        readthrough_split_points = {}
+        d_readthrough_split_points = {}
+        d_fitted_curve_r_squared = {}
+        d_fitted_curve_coeff = {}
         print("{} - Finding knee...".format(row['ID']))
 
         for label in bam_labels:
@@ -1456,18 +1449,22 @@ if COMMAND == "tes_analysis":
         def exp_func(x, a, b, c):
             return a ** (x - b) + c
         
-        def power_func(x, a):
-            return x ** a
+        # def power_func(x, a):
+        #     return x ** a
+        
+        def power_func(x, a, b, c):
+            return a * (x ** b) + c
 
         def lin_func(x, a, b):
             return (a * x) + b
+        
+        def normalise_numpy_array(a):
+                return (a - numpy.min(a)) / (numpy.max(a) - numpy.min(a))
             
         # def log_func(x, a, b):
 
         for label in bam_labels:
             d_tes_vs_prop[label] = []
-
-
 
             for c, p in d_sorted_tes[label]:
                 if row['strand'] == "-":
@@ -1484,106 +1481,101 @@ if COMMAND == "tes_analysis":
                 # or the majority of reads
                 if rt_prop < 1:
                     d_tes_vs_prop[label].append((p, rt_prop))
-            
-                # print("{} - tes_split: {}, rt_prop: {}".format(row['ID'], p, rt_prop))
 
             # if we couldn't add any TES which had fewer readthroughs than normals
-            # Then this must be a clean cut gene...
-            # The final TES must be the splitpoint
-            print(d_tes_vs_prop)
+            # Then this must be a clean cut gene... The final TES must be the splitpoint
             if len(d_tes_vs_prop[label]) == 1:
-                readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                d_fitted_curve_coeff[label] = numpy.inf
                 # TODO add type info to reporting dict
                 continue
 
-            # if this is a concave curve, then we'll take the final TES as the splitpoint
-
-
-            # else: # Otherwise we need approximate a split point using exp curve fitting
-             
             # sort by genomic position
             sorted_tes_prop = sorted(d_tes_vs_prop[label], key=lambda a: a[0], reverse=False)
-            # print(sorted_tes_prop)
-
-            print(sorted_tes_prop)
-
             pos = [x[0] for x in sorted_tes_prop]
             prop = [x[1] for x in sorted_tes_prop]
 
             # fit curve to TES data that will be used to to find the kneedle of the curve
             # data will have bumps and many false knees/elbows that we want to smooth out
             # so the kneedle function finds the correct knee
-            # We are assuming that TES sites follow exponential decay
-            # final x_normed pos (x_normed[-1]) is the x shift we'll give to p0 to shift the 
-            # exp curve to the right
-            # if strand is positive, p0 and direction in kneedle function are reversed
-            def normalise_numpy_array(a):
-                return (a - numpy.min(a)) / (numpy.max(a) - numpy.min(a))
-            
-                
 
-            pos_normalised = normalise_numpy_array(numpy.array(pos))
-            x_fitted = numpy.linspace(pos_normalised[0], pos_normalised[-1], 100)
-            pos_y_interp = scipy.interpolate.interp1d(pos, prop)
-            prop_normalised_interpolated = [pos_y_interp(x) for x in x_fitted]
-
-            if row['strand'] == "-":
-                elbow_direction = "increasing"
-            else:
-                elbow_direction = "decreasing"
-
-            # len(prop) < 100
             # interpolate points between the few points we have so we can better approximate a
             # curve that fits our data
+            pos_normalised = normalise_numpy_array(numpy.array(pos))
+            x_interp = numpy.linspace(0, 1, 100)
+            pos_y_interp = scipy.interpolate.interp1d(pos_normalised, prop)
+            prop_normalised_interpolated = [pos_y_interp(x) for x in x_interp]
 
+            # if strand is positive direction in kneedle function are reversed
+            if row['strand'] == "-":
+                elbow_direction = "increasing"
+                initial_guess = [1, 0.1, 0]
+            else:
+                elbow_direction = "decreasing"
+                initial_guess = [-1, 0.1, 1]
+
+            # len(prop) < 100
             abc, pcov = scipy.optimize.curve_fit(
                 power_func,
-                pos_normalised, 
+                x_interp,
                 prop_normalised_interpolated,
-                p0=[0.1]
+                p0=initial_guess
             )
 
-            y_fitted = power_func(x_fitted, *abc)
+            y_fitted = power_func(x_interp, *abc)
 
             # calculate R^2
             # https://stackoverflow.com/questions/19189362/getting-the-r-squared-value-using-curve-fit
-            residuals = prop - power_func(pos_normalised, *abc)
+            residuals = prop_normalised_interpolated - power_func(x_interp, *abc)
             residual_sum_squares = numpy.sum(residuals ** 2)
-            total_sum_squares = numpy.sum((prop - numpy.mean(prop)) ** 2)
+            total_sum_squares = numpy.sum((prop_normalised_interpolated - numpy.mean(prop_normalised_interpolated)) ** 2)
             r_squared = 1 - (residual_sum_squares / total_sum_squares)
 
             print("r_squared: {}".format(r_squared))
 
             if DEBUG:
                 print(abc)
-                plt.plot(pos_normalised, prop)
-                plt.plot(x_fitted, y_fitted)
-
+                plt.scatter(x_interp, prop_normalised_interpolated)
+                plt.scatter(x_interp, y_fitted)
                 plt.show()
 
-            # if we estimated a concave curve for a negative strand, take the final TES as end site
-            if abc[0] <= 1 and row['strand'] == "-":
-                readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
-                # TODO add type info to reporting dict
+            fitted_curve_coeff = abc[1]
+            d_fitted_curve_coeff[label] = fitted_curve_coeff
+
+            # if we estimated a concave curve, take the final TES as end site
+            if fitted_curve_coeff <= 1 and row['strand'] == "-":
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                continue
+
+            if fitted_curve_coeff >= 1 and row['strand'] == "+":
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][-1][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
                 continue
 
 
             # as the genomic position increases, the splitpoint readthrough proportion gets bigger
-            kneedle = KneeLocator(x_fitted, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
+            kneedle = KneeLocator(x_interp, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
 
             # convert normalised elbow point back to genomic space
             normalised_elbow_pos = kneedle.knee
             genomic_elbow_pos = pos[0] + ((max(pos) - min(pos)) * normalised_elbow_pos)
-            readthrough_split_points[label] = genomic_elbow_pos
+            d_readthrough_split_points[label] = genomic_elbow_pos
+            d_fitted_curve_r_squared[label] = r_squared
 
-        print("{} - readthrough_split_points: {}".format(row['ID'], readthrough_split_points))
+        print("{} - readthrough_split_points: {}".format(row['ID'], d_readthrough_split_points))
 
-        # take the average of the control readthrough splitpoints
+        # take the average of the control readthrough splitpoints and r^2
         readthrough_split_point = 0
+        # average_r_squared = 0
         for label in bam_labels_control:
-            readthrough_split_point += readthrough_split_points[label]
+            readthrough_split_point += d_readthrough_split_points[label]
+            # average_r_squared += d_fitted_curve_r_squared[label]
 
         readthrough_split_point = int(readthrough_split_point / len(bam_labels_control))
+        # average_r_squared = int(average_r_squared / len(bam_labels_control))
+
 
         if DEBUG:
             fig, axes = plt.subplots()
@@ -1732,7 +1724,7 @@ if COMMAND == "tes_analysis":
                     tests_passed += 1
 
             # print pandas tsv row summary
-            row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, readthrough_split_point, average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
+            row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, readthrough_split_point, list(d_fitted_curve_r_squared.values()), list(d_fitted_curve_coeff.values()), average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
 
