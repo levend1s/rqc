@@ -1044,7 +1044,11 @@ if COMMAND == "tes_analysis":
             # START_CLOCK("fetch")
 
             # 0.0003178119659423828s
-            reads_in_region = samfile.fetch(contig=row['seq_id'], start=row['start'], stop=row['end'])
+            reads_in_region = samfile.fetch(
+                contig=row['seq_id'], 
+                start=row['start'] - COVERAGE_PADDING, 
+                stop=row['end'] + COVERAGE_PADDING
+            )
             reads_in_region = list(reads_in_region)
 
             gene_length = row['end'] - row['start']
@@ -1256,11 +1260,17 @@ if COMMAND == "tes_analysis":
     d_max_tts = {}
     d_max_density = {}
 
+    d_r_squared = {}
+    d_splitpoint_approximation_method = {}
+
     for label in bam_labels:
         d_poly_a_length_hists[label] = {}
         d_tts_hist[label] = {}
         d_kdes[label] = {}
         d_cdfs[label] = {}
+        d_r_squared[label] = {}
+        d_splitpoint_approximation_method[label] = {}
+ 
 
     for row_index, row in matches.iterrows():
         gene_id = row['ID']
@@ -1445,11 +1455,19 @@ if COMMAND == "tes_analysis":
         # exp function 
         def exp_func(x, a, b, c):
             return a ** (x - b) + c
+        
+        def power_func(x, a):
+            return x ** a
+
+        def lin_func(x, a, b):
+            return (a * x) + b
             
         # def log_func(x, a, b):
 
         for label in bam_labels:
             d_tes_vs_prop[label] = []
+
+
 
             for c, p in d_sorted_tes[label]:
                 if row['strand'] == "-":
@@ -1462,14 +1480,32 @@ if COMMAND == "tes_analysis":
                 rt_prop = num_read_throughs / num_normal
 
                 # only keep this if there are fewer readthroughs than normals
+                # NOTE this assumption doesn't work if there is one clean cut site for all reads
+                # or the majority of reads
                 if rt_prop < 1:
                     d_tes_vs_prop[label].append((p, rt_prop))
             
                 # print("{} - tes_split: {}, rt_prop: {}".format(row['ID'], p, rt_prop))
 
+            # if we couldn't add any TES which had fewer readthroughs than normals
+            # Then this must be a clean cut gene...
+            # The final TES must be the splitpoint
+            print(d_tes_vs_prop)
+            if len(d_tes_vs_prop[label]) == 1:
+                readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                # TODO add type info to reporting dict
+                continue
+
+            # if this is a concave curve, then we'll take the final TES as the splitpoint
+
+
+            # else: # Otherwise we need approximate a split point using exp curve fitting
+             
             # sort by genomic position
             sorted_tes_prop = sorted(d_tes_vs_prop[label], key=lambda a: a[0], reverse=False)
             # print(sorted_tes_prop)
+
+            print(sorted_tes_prop)
 
             pos = [x[0] for x in sorted_tes_prop]
             prop = [x[1] for x in sorted_tes_prop]
@@ -1481,35 +1517,64 @@ if COMMAND == "tes_analysis":
             # final x_normed pos (x_normed[-1]) is the x shift we'll give to p0 to shift the 
             # exp curve to the right
             # if strand is positive, p0 and direction in kneedle function are reversed
-            x_normed = numpy.array(pos) - pos[0]
+            def normalise_numpy_array(a):
+                return (a - numpy.min(a)) / (numpy.max(a) - numpy.min(a))
             
+                
+
+            pos_normalised = normalise_numpy_array(numpy.array(pos))
+            x_fitted = numpy.linspace(pos_normalised[0], pos_normalised[-1], 100)
+            pos_y_interp = scipy.interpolate.interp1d(pos, prop)
+            prop_normalised_interpolated = [pos_y_interp(x) for x in x_fitted]
+
             if row['strand'] == "-":
-                curve_guess = [2, x_normed[-1], 0]
                 elbow_direction = "increasing"
             else:
-                curve_guess = [0.5, x_normed[0], 0]
                 elbow_direction = "decreasing"
 
+            # len(prop) < 100
+            # interpolate points between the few points we have so we can better approximate a
+            # curve that fits our data
+
             abc, pcov = scipy.optimize.curve_fit(
-                exp_func, 
-                x_normed, 
-                prop,
-                p0=curve_guess,
-                bounds=(0, [numpy.inf, numpy.inf, numpy.inf])
+                power_func,
+                pos_normalised, 
+                prop_normalised_interpolated,
+                p0=[0.1]
             )
 
-            x_fitted = numpy.linspace(x_normed[0], x_normed[-1], 100)
-            y_fitted = exp_func(x_fitted, *abc)
+            y_fitted = power_func(x_fitted, *abc)
 
-            # print(abc)
-            # plt.plot(pos, prop)
-            # plt.plot(x_fitted+pos[0], y_fitted)
+            # calculate R^2
+            # https://stackoverflow.com/questions/19189362/getting-the-r-squared-value-using-curve-fit
+            residuals = prop - power_func(pos_normalised, *abc)
+            residual_sum_squares = numpy.sum(residuals ** 2)
+            total_sum_squares = numpy.sum((prop - numpy.mean(prop)) ** 2)
+            r_squared = 1 - (residual_sum_squares / total_sum_squares)
 
-            # plt.show()
+            print("r_squared: {}".format(r_squared))
+
+            if DEBUG:
+                print(abc)
+                plt.plot(pos_normalised, prop)
+                plt.plot(x_fitted, y_fitted)
+
+                plt.show()
+
+            # if we estimated a concave curve for a negative strand, take the final TES as end site
+            if abc[0] <= 1 and row['strand'] == "-":
+                readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                # TODO add type info to reporting dict
+                continue
+
 
             # as the genomic position increases, the splitpoint readthrough proportion gets bigger
             kneedle = KneeLocator(x_fitted, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
-            readthrough_split_points[label] = kneedle.knee+pos[0]
+
+            # convert normalised elbow point back to genomic space
+            normalised_elbow_pos = kneedle.knee
+            genomic_elbow_pos = pos[0] + ((max(pos) - min(pos)) * normalised_elbow_pos)
+            readthrough_split_points[label] = genomic_elbow_pos
 
         print("{} - readthrough_split_points: {}".format(row['ID'], readthrough_split_points))
 
