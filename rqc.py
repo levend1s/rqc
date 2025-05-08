@@ -1468,7 +1468,7 @@ if COMMAND == "tes_analysis":
 
         if SAMPLE_HAS_ZERO_EXP or average_expression < READ_DEPTH_THRESHOLD:
             # print pandas tsv row summary
-            row_summary = [row['ID'], 0, 0, 0, 0, 0, 0, average_expression, cannonical_mods_start_pos[row['ID']], 0, 0, 0]
+            row_summary = [row['ID'], 0, 0, 0, 0, 0, 0, [], [], average_expression, cannonical_mods_start_pos[row['ID']], 0, 0, 0]
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
             continue
@@ -1620,7 +1620,11 @@ if COMMAND == "tes_analysis":
             )
 
             y_fitted = power_func(x_interp, *abc)
-
+            if DEBUG:
+                print(abc)
+                plt.scatter(x_interp, prop_normalised_interpolated)
+                plt.scatter(x_interp, y_fitted)
+                plt.show()
             # calculate R^2
             # https://stackoverflow.com/questions/19189362/getting-the-r-squared-value-using-curve-fit
             residuals = prop_normalised_interpolated - power_func(x_interp, *abc)
@@ -1629,12 +1633,6 @@ if COMMAND == "tes_analysis":
             r_squared = 1 - (residual_sum_squares / total_sum_squares)
 
             print("r_squared: {}".format(r_squared))
-
-            if DEBUG:
-                print(abc)
-                plt.scatter(x_interp, prop_normalised_interpolated)
-                plt.scatter(x_interp, y_fitted)
-                plt.show()
 
             fitted_curve_coeff = abc[1]
             d_fitted_curve_coeff[label] = fitted_curve_coeff
@@ -1654,7 +1652,15 @@ if COMMAND == "tes_analysis":
             kneedle = KneeLocator(x_interp, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
 
             # convert normalised elbow point back to genomic space
-            normalised_elbow_pos = kneedle.knee
+            if kneedle.knee:
+                normalised_elbow_pos = kneedle.knee
+            else:
+                print("WARNING: {} - couldn't determine knee, setting as max TES".format(row['ID']))
+                if row['strand'] == "-":
+                    normalised_elbow_pos = 0
+                else:
+                    normalised_elbow_pos = 1
+
             genomic_elbow_pos = pos[0] + ((max(pos) - min(pos)) * normalised_elbow_pos)
             d_readthrough_split_points[label] = genomic_elbow_pos
             d_fitted_curve_r_squared[label] = r_squared
