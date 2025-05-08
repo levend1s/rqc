@@ -116,7 +116,7 @@ GFF_DF = None
 GFF_PARENT_TREE = {}
 CLOCKS = {}
 
-TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "tes_curve_r2", "tes_curve_coeff", "average_expression", "number_cannonical_mods", "wam_before", "wam_after", "wam_change"]
+TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "tes_curve_r2", "tes_curve_coeff", "average_expression", "cannonical_mods", "wam_before", "wam_after", "wam_change"]
 
 MODKIT_BEDMETHYL_HEADER = [
     "contig", "start", "end", "code", "score", "strand", 
@@ -138,6 +138,19 @@ PYSAM_MOD_TUPLES = {
     'pseU_for': ('T', 0, 17802),
     'm5C_for': ('C', 0, 'm')
 }
+
+# exp function 
+def exp_func(x, a, b, c):
+    return a ** (x - b) + c
+
+def power_func(x, a, b, c):
+    return a * (x ** b) + c
+
+def lin_func(x, a, b):
+    return (a * x) + b
+
+def normalise_numpy_array(a):
+        return (a - numpy.min(a)) / (numpy.max(a) - numpy.min(a))
 
 # this calculates the NX for a reverse sorted list of read lengths
 # You might use this to calculate the N50 or N90, to find the read 
@@ -781,7 +794,7 @@ if COMMAND == "plot_tes_vs_wam":
     # drop all genes where wam_change == 0
     p_same_treatment_cutoff = 0.05
 
-    tes_file_df["cannonical_mods"] = tes_file_df.number_cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
+    tes_file_df["num_cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
 
     SPLIT_BY_CANNONICAL_MODS = False
     if SPLIT_BY_CANNONICAL_MODS:
@@ -841,32 +854,125 @@ if COMMAND == "plot_tes_wam_distance":
     # drop all genes where wam_change == 0
     p_same_treatment_cutoff = 0.05
 
-    tes_file_df["cannonical_mods"] = tes_file_df.number_cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
+    tes_file_df["num_cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
+    tes_file_df["cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: list(ast.literal_eval(s)))
 
-    filtered_genes_tes_wam = tes_file_df[
-        (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
-        (tes_file_df.wam_change != 0)
-    ]
+    print(tes_file_df["cannonical_mods"].to_list())
+    # flatten 2d list of cannonical mods
+    all_cannonical_mods = [x for xs in tes_file_df["cannonical_mods"].to_list() for x in xs]
 
+    tes_split_sites = tes_file_df["tes"].to_list()
 
-    # plot 3 points
-    # 1 TES split point
-    # 2 how ever many cannonical mods there are for that gene
-    # 3 the 3' end of the CDS
+    # load annotation file and find indexes for all parent children
+    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+    GFF_DF['ID'] = GFF_DF['ID'].astype('category')
 
-    print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
+    cannonical_mod_offsets = []
+    annotation_start_offsets = []
+    annotation_end_offsets = []
 
-    filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
-    filtered_genes_tes_wam['log2_wam_change'] = numpy.log2(filtered_genes_tes_wam['wam_change'])
-    filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
+    # TODO also plot DRACH sites
+    # TODO also plot DRACH sites
+    # TODO also plot DRACH sites
 
-    print(filtered_genes_tes_wam)
+    for row_index, row in tes_file_df.iterrows():
+        this_row_gff = GFF_DF[GFF_DF['ID'] == row['gene_id']]
+        num_matches = len(this_row_gff)
+        if num_matches != 1:
+            print("ERROR: found {} matches for {}".format(num_matches, row['ID']))
+            continue
 
-    axes = filtered_genes_tes_wam.plot.scatter(
-        x='log2_wam_change',
-        y='log2_wart_change',
-        c='minus_log10_p_inter_treatment'
+        reference_point = row["tes"]
+        reference_label = "approximated TES"
+
+        row_strand = this_row_gff.iloc[0]['strand']
+        row_start = this_row_gff.iloc[0]['start']
+        row_end = this_row_gff.iloc[0]['end']
+
+        # assume it's -ve
+        row_mod_offsets = reference_point - numpy.array(row["cannonical_mods"])
+        row_start_offset = reference_point - row_end
+        row_end_offset = reference_point - row_start
+
+        if row_strand == "+":
+            row_mod_offsets *= -1
+            row_start_offset = row_start - reference_point
+            row_end_offset = row_end - reference_point
+
+        for x in row_mod_offsets:
+            cannonical_mod_offsets.append(x)
+
+        annotation_start_offsets.append(row_start_offset)
+        annotation_end_offsets.append(row_end_offset)
+
+    min_x = int(min([
+        min(cannonical_mod_offsets),
+        # min(annotation_start_offsets),
+        min(annotation_end_offsets)
+    ]) * 1.1)
+    max_x = int(max([
+        max(cannonical_mod_offsets),
+        # max(annotation_start_offsets),
+        max(annotation_end_offsets)
+    ]) * 1.1)
+
+    x_ticks = numpy.linspace(
+        min_x, 
+        max_x, 
+        max_x - min_x
     )
+    if len(tes_file_df) > 1:
+        kernel = scipy.stats.gaussian_kde(cannonical_mod_offsets)
+        cannonical_mod_offset_kde = kernel(x_ticks)
+        kernel = scipy.stats.gaussian_kde(annotation_start_offsets)
+        annotation_start_offset_kde = kernel(x_ticks)
+        kernel = scipy.stats.gaussian_kde(annotation_end_offsets)
+        annotation_end_offset_kde = kernel(x_ticks)
+
+    cannonical_mod_offsets_hist = [cannonical_mod_offsets.count(i) for i in range(min_x, max_x)]
+    annotation_start_offsets_hist = [annotation_start_offsets.count(i) for i in range(min_x, max_x)]
+    annotation_end_offsets_hist = [annotation_end_offsets.count(i) for i in range(min_x, max_x)]
+
+    d_colors = {
+        'mods': 'green',
+        'start': 'red',
+        'end': 'blue',
+    }
+    if len(tes_file_df) > 1:
+        fig, axes = plt.subplots()
+        axes.plot(x_ticks, cannonical_mod_offset_kde, label='cannonical m6A', color=d_colors['mods'])
+        axes.fill_between(x_ticks, cannonical_mod_offset_kde, alpha=0.2, color=d_colors['mods'])
+
+        # axes.plot(x_ticks, annotation_start_offset_kde, label='annotation start 5\'', color=d_colors['start'])
+        # axes.fill_between(x_ticks, annotation_start_offset_kde, alpha=0.2, color=d_colors['start'])
+
+        axes.plot(x_ticks, annotation_end_offset_kde, label='annotation end 3\'', color=d_colors['end'])
+        axes.fill_between(x_ticks, annotation_end_offset_kde, alpha=0.2, color=d_colors['end'])
+
+        axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
+        axes.set_ylabel('density (au)')
+        axes.set_xlabel('distance from TES (nt)')
+        axes.legend()
+        plt.legend(loc="upper right")
+
+
+    fig, axes = plt.subplots()
+    axes.plot(x_ticks, cannonical_mod_offsets_hist, label='cannonical m6A', color=d_colors['mods'])
+    axes.fill_between(x_ticks, cannonical_mod_offsets_hist, alpha=0.2, color=d_colors['mods'])
+
+    # axes.plot(x_ticks, annotation_start_offsets_hist, label='annotation start 5\'', color=d_colors['start'])
+    # axes.fill_between(x_ticks, annotation_start_offsets_hist, alpha=0.2, color=d_colors['start'])
+
+    axes.plot(x_ticks, annotation_end_offsets_hist, label='annotation end 3\'', color=d_colors['end'])
+    axes.fill_between(x_ticks, annotation_end_offsets_hist, alpha=0.2, color=d_colors['end'])
+
+    axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
+    axes.set_ylabel('count')
+    axes.set_xlabel('distance from TES (nt)')
+    axes.legend()
+    plt.legend(loc="upper right")
+
 
     plt.show()
 
@@ -1424,49 +1530,14 @@ if COMMAND == "tes_analysis":
         d_readthrough_split_points = {}
         d_fitted_curve_r_squared = {}
         d_fitted_curve_coeff = {}
-        print("{} - Finding knee...".format(row['ID']))
-
-        for label in bam_labels:
-            # scatter plot tts vs poly-a length
-            sorted_tes_counts = sorted([x for x in d_tts_hist[label][row['ID']] if x[0] > 0], key=lambda a: a[0], reverse=True)
-            e1 = [x[0] for x in sorted_tes_counts]
-
-            # not sure what the S=1.0 does here
-            kneedle = KneeLocator(e1, list(range(len(e1))), S=1.0, curve='convex', direction='decreasing')
-            cannonical_tes = sorted_tes_counts[0:kneedle.knee]
-
-            d_sorted_tes[label] = sorted_tes_counts
-            d_knee[label] = kneedle.knee
-
-        # We're trying to find a good TES to split readthroughs and normal reads
-        readthrough_split_point = d_sorted_tes[first_label][0][0]
-        smallest_rt_prop = math.inf
 
         # calculate readthrough proportions for each sample
         print("{} - Finding max common transcript end site...".format(row['ID']))
 
-        # exp function 
-        def exp_func(x, a, b, c):
-            return a ** (x - b) + c
-        
-        # def power_func(x, a):
-        #     return x ** a
-        
-        def power_func(x, a, b, c):
-            return a * (x ** b) + c
-
-        def lin_func(x, a, b):
-            return (a * x) + b
-        
-        def normalise_numpy_array(a):
-                return (a - numpy.min(a)) / (numpy.max(a) - numpy.min(a))
-            
-        # def log_func(x, a, b):
-
         for label in bam_labels:
             d_tes_vs_prop[label] = []
 
-            for c, p in d_sorted_tes[label]:
+            for c, p in d_tts_hist[label][row['ID']]:
                 if row['strand'] == "-":
                     num_read_throughs = len([x for x in d_tts[label][gene_id] if x < p])
                     num_normal = len([x for x in d_tts[label][gene_id] if x >= p])
@@ -1554,7 +1625,6 @@ if COMMAND == "tes_analysis":
                 d_fitted_curve_r_squared[label] = numpy.inf
                 continue
 
-
             # as the genomic position increases, the splitpoint readthrough proportion gets bigger
             kneedle = KneeLocator(x_interp, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
 
@@ -1626,7 +1696,9 @@ if COMMAND == "tes_analysis":
         d_wart_before[row['ID']] = rt_before
         d_wart_after[row['ID']] = rt_after
 
-        if rt_after == 0 or rt_before == 0:
+        if rt_before == 0 and rt_after > 0:
+            d_wart_change[row['ID']] = numpy.inf
+        elif rt_after == 0 or rt_before == 0:
             d_wart_change[row['ID']] = 0
         else:
             wart_change = rt_after / rt_before
