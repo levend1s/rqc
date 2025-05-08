@@ -53,11 +53,7 @@ parser.add_argument('--filter_for_m6A', type=str, default="[]")
 parser.add_argument('--filter_out_m6A', type=str, default="[]")
 parser.add_argument('--generate_filtered_bam', type=bool, default=False)
 parser.add_argument('--separate_y_axes', type=bool, default=False)
-
-
-
-
-
+parser.add_argument('--reference_point', type=str, default="TES")
 
 args = parser.parse_args()
 
@@ -91,6 +87,7 @@ GENERATE_FILTERED_BAM = args.generate_filtered_bam
 FILTER_FOR_M6A = args.filter_for_m6A
 FILTER_OUT_M6A = args.filter_out_m6A
 SEPARATE_Y_AXES = args.separate_y_axes
+REFERENCE_POINT = args.reference_point
 
 # read unmapped (0x4)
 # read reverse strand (0x10)
@@ -857,7 +854,6 @@ if COMMAND == "plot_tes_wam_distance":
     tes_file_df["num_cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
     tes_file_df["cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: list(ast.literal_eval(s)))
 
-    print(tes_file_df["cannonical_mods"].to_list())
     # flatten 2d list of cannonical mods
     all_cannonical_mods = [x for xs in tes_file_df["cannonical_mods"].to_list() for x in xs]
 
@@ -871,6 +867,8 @@ if COMMAND == "plot_tes_wam_distance":
     cannonical_mod_offsets = []
     annotation_start_offsets = []
     annotation_end_offsets = []
+    tes_end_offsets = []
+
 
     # TODO also plot DRACH sites
     # TODO also plot DRACH sites
@@ -883,37 +881,50 @@ if COMMAND == "plot_tes_wam_distance":
             print("ERROR: found {} matches for {}".format(num_matches, row['ID']))
             continue
 
-        reference_point = row["tes"]
-        reference_label = "approximated TES"
-
         row_strand = this_row_gff.iloc[0]['strand']
         row_start = this_row_gff.iloc[0]['start']
         row_end = this_row_gff.iloc[0]['end']
+
+        if REFERENCE_POINT == "3_PRIME":
+            if row_strand == "-":
+                reference_point = row_start
+            else:
+                reference_point = row_end
+
+            reference_label = "annotated 3' end"
+        if REFERENCE_POINT == "TES":
+            reference_point = row["tes"]
+            reference_label = "approximated TES"
 
         # assume it's -ve
         row_mod_offsets = reference_point - numpy.array(row["cannonical_mods"])
         row_start_offset = reference_point - row_end
         row_end_offset = reference_point - row_start
+        row_tes_offset = reference_point - row['tes']
 
         if row_strand == "+":
             row_mod_offsets *= -1
             row_start_offset = row_start - reference_point
             row_end_offset = row_end - reference_point
+            row_tes_offset = row['tes'] - reference_point
 
         for x in row_mod_offsets:
             cannonical_mod_offsets.append(x)
 
         annotation_start_offsets.append(row_start_offset)
         annotation_end_offsets.append(row_end_offset)
+        tes_end_offsets.append(row_tes_offset)
 
     min_x = int(min([
         min(cannonical_mod_offsets),
         # min(annotation_start_offsets),
+        min(tes_end_offsets),
         min(annotation_end_offsets)
     ]) * 1.1)
     max_x = int(max([
         max(cannonical_mod_offsets),
         # max(annotation_start_offsets),
+        max(tes_end_offsets),
         max(annotation_end_offsets)
     ]) * 1.1)
 
@@ -927,12 +938,17 @@ if COMMAND == "plot_tes_wam_distance":
         cannonical_mod_offset_kde = kernel(x_ticks)
         kernel = scipy.stats.gaussian_kde(annotation_start_offsets)
         annotation_start_offset_kde = kernel(x_ticks)
-        kernel = scipy.stats.gaussian_kde(annotation_end_offsets)
-        annotation_end_offset_kde = kernel(x_ticks)
+        if REFERENCE_POINT == "TES":
+            kernel = scipy.stats.gaussian_kde(annotation_end_offsets)
+            annotation_end_offset_kde = kernel(x_ticks)
+        if REFERENCE_POINT == "3_PRIME":
+            kernel = scipy.stats.gaussian_kde(tes_end_offsets)
+            tes_offset_kde = kernel(x_ticks)
 
     cannonical_mod_offsets_hist = [cannonical_mod_offsets.count(i) for i in range(min_x, max_x)]
     annotation_start_offsets_hist = [annotation_start_offsets.count(i) for i in range(min_x, max_x)]
     annotation_end_offsets_hist = [annotation_end_offsets.count(i) for i in range(min_x, max_x)]
+    tes_offsets_hist = [tes_end_offsets.count(i) for i in range(min_x, max_x)]
 
     d_colors = {
         'mods': 'green',
@@ -944,15 +960,18 @@ if COMMAND == "plot_tes_wam_distance":
         axes.plot(x_ticks, cannonical_mod_offset_kde, label='cannonical m6A', color=d_colors['mods'])
         axes.fill_between(x_ticks, cannonical_mod_offset_kde, alpha=0.2, color=d_colors['mods'])
 
-        # axes.plot(x_ticks, annotation_start_offset_kde, label='annotation start 5\'', color=d_colors['start'])
-        # axes.fill_between(x_ticks, annotation_start_offset_kde, alpha=0.2, color=d_colors['start'])
+        if REFERENCE_POINT == "TES":
+            axes.plot(x_ticks, annotation_end_offset_kde, label='annotation end 3\'', color=d_colors['end'])
+            axes.fill_between(x_ticks, annotation_end_offset_kde, alpha=0.2, color=d_colors['end'])
+            axes.set_xlabel('distance from TES (nt)')
 
-        axes.plot(x_ticks, annotation_end_offset_kde, label='annotation end 3\'', color=d_colors['end'])
-        axes.fill_between(x_ticks, annotation_end_offset_kde, alpha=0.2, color=d_colors['end'])
+        if REFERENCE_POINT == "3_PRIME":
+            axes.plot(x_ticks, tes_offset_kde, label='TES', color=d_colors['end'])
+            axes.fill_between(x_ticks, tes_offset_kde, alpha=0.2, color=d_colors['end'])
+            axes.set_xlabel('distance from 3\' (nt)')
 
         axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
         axes.set_ylabel('density (au)')
-        axes.set_xlabel('distance from TES (nt)')
         axes.legend()
         plt.legend(loc="upper right")
 
@@ -961,18 +980,20 @@ if COMMAND == "plot_tes_wam_distance":
     axes.plot(x_ticks, cannonical_mod_offsets_hist, label='cannonical m6A', color=d_colors['mods'])
     axes.fill_between(x_ticks, cannonical_mod_offsets_hist, alpha=0.2, color=d_colors['mods'])
 
-    # axes.plot(x_ticks, annotation_start_offsets_hist, label='annotation start 5\'', color=d_colors['start'])
-    # axes.fill_between(x_ticks, annotation_start_offsets_hist, alpha=0.2, color=d_colors['start'])
+    if REFERENCE_POINT == "TES":
+        axes.plot(x_ticks, annotation_end_offsets_hist, label='annotation end 3\'', color=d_colors['end'])
+        axes.fill_between(x_ticks, annotation_end_offsets_hist, alpha=0.2, color=d_colors['end'])
+        axes.set_xlabel('distance from TES (nt)')
 
-    axes.plot(x_ticks, annotation_end_offsets_hist, label='annotation end 3\'', color=d_colors['end'])
-    axes.fill_between(x_ticks, annotation_end_offsets_hist, alpha=0.2, color=d_colors['end'])
+    if REFERENCE_POINT == "3_PRIME":
+        axes.plot(x_ticks, tes_offsets_hist, label='TES', color=d_colors['end'])
+        axes.fill_between(x_ticks, tes_offsets_hist, alpha=0.2, color=d_colors['end'])
+        axes.set_xlabel('distance from 3\' (nt)')
 
     axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
     axes.set_ylabel('count')
-    axes.set_xlabel('distance from TES (nt)')
     axes.legend()
     plt.legend(loc="upper right")
-
 
     plt.show()
 
@@ -1194,10 +1215,14 @@ if COMMAND == "tes_analysis":
             MOD_PROB_THRESHOLD = 0.95
             pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD) 
 
-            if row['strand'] == "-":
-                most_3p_subfeature = row_subfeatures.iloc[0]
+            # example: PF3D7_0709050.1
+            if len(row_subfeatures) == 0:
+                most_3p_subfeature = row
             else:
-                most_3p_subfeature = row_subfeatures.iloc[-1]
+                if row['strand'] == "-":
+                    most_3p_subfeature = row_subfeatures.iloc[0]
+                else:
+                    most_3p_subfeature = row_subfeatures.iloc[-1]
 
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
