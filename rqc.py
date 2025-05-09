@@ -1449,14 +1449,14 @@ if COMMAND == "tes_analysis":
 
     summary_df_index = 0
     for row_index, row in matches.iterrows():
-        SAMPLE_HAS_ZERO_EXP = False
+        SAMPLE_HAS_LOW_EXP = False
         average_expression = 0
         average_not_beyond_3p = 0
         average_not_in_feature_counts = 0
 
         for label in bam_labels:
-            if len(d_tts[label][row['ID']]) == 0:
-                SAMPLE_HAS_ZERO_EXP = True
+            if len(d_tts[label][row['ID']]) < READ_DEPTH_THRESHOLD:
+                SAMPLE_HAS_LOW_EXP = True
 
             average_expression += len(d_tts[label][row['ID']])
             average_not_beyond_3p += d_not_beyond_3p[label][row['ID']]
@@ -1466,7 +1466,7 @@ if COMMAND == "tes_analysis":
         average_not_beyond_3p = math.floor(average_not_beyond_3p / len(bam_labels))
         average_not_in_feature_counts = math.floor(average_not_in_feature_counts / len(bam_labels))
 
-        if SAMPLE_HAS_ZERO_EXP or average_expression < READ_DEPTH_THRESHOLD:
+        if SAMPLE_HAS_LOW_EXP or average_expression < READ_DEPTH_THRESHOLD:
             # print pandas tsv row summary
             row_summary = [row['ID'], 0, 0, 0, 0, 0, 0, [], [], average_expression, cannonical_mods_start_pos[row['ID']], 0, 0, 0]
             summary_df.loc[summary_df_index] = row_summary
@@ -1616,7 +1616,8 @@ if COMMAND == "tes_analysis":
                 power_func,
                 x_interp,
                 prop_normalised_interpolated,
-                p0=initial_guess
+                p0=initial_guess,
+                maxfev=5000
             )
 
             y_fitted = power_func(x_interp, *abc)
@@ -1819,7 +1820,8 @@ if COMMAND == "tes_analysis":
                 p_inter_treatment = scipy.stats.combine_pvalues(inter_treatment_p_vals).pvalue
                 p_same_treatment = scipy.stats.combine_pvalues(same_treatment_p_vals).pvalue
 
-                score = math.log(p_same_treatment / p_inter_treatment, 10)
+                score = -1# math.log(p_same_treatment / p_inter_treatment, 10)
+
                 tests_passed = 0
                 if p_inter_treatment < (alpha / len(inter_treatment_p_vals)):
                     tests_passed += 1
