@@ -674,23 +674,14 @@ if COMMAND == "find_gene_neighbours":
     GFF_DF['seq_id'] = GFF_DF['seq_id'].astype('category')
 
     # 1 filter by type
-    gff_matching_type = GFF_DF[GFF_DF['type'] == TYPE]
-    # test_row = gff_matching_type[gff_matching_type['ID'] == "PF3D7_1456500.1"]
-
-    # print(test_row)
-
-    # convergent genes: filter by end position 
-
-    def genes_overlap(a, b, padding):
-        if (a.end <= (b.end + padding) and a.end >= (b.start - padding)) \
-            or (a.start <= (a.end + padding) and a.start >= (b.start - padding)):
-            return True
-        else:
-            return False
+    if TYPE != 'all':
+        gff_matching_type = GFF_DF[GFF_DF['type'] == TYPE]
+    else:
+        gff_matching_type = GFF_DF
 
     neighbours_series = [[]] * len(gff_matching_type)
-
     i = 0
+
     for a_idx, a in gff_matching_type.iterrows():
         print("processing: {}".format(a['ID']))
         neighbours = []
@@ -710,9 +701,6 @@ if COMMAND == "find_gene_neighbours":
         print("neighbours: {}".format(neighbours))
         neighbours_series[i] = neighbours
         i += 1
-
-        if i >100:
-            break
 
     neighbours_df = gff_matching_type[['ID']].copy()
     neighbours_df['neighbours'] = neighbours_series
