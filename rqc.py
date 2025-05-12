@@ -55,6 +55,10 @@ parser.add_argument('--generate_filtered_bam', type=bool, default=False)
 parser.add_argument('--separate_y_axes', type=bool, default=False)
 parser.add_argument('--reference_point', type=str, default="TES")
 
+# find neighbors
+parser.add_argument('--type', type=str, default="TES")
+parser.add_argument('--neighbour_distance', type=int, default=0)
+
 args = parser.parse_args()
 
 INPUT = args.inputs
@@ -88,6 +92,9 @@ FILTER_FOR_M6A = args.filter_for_m6A
 FILTER_OUT_M6A = args.filter_out_m6A
 SEPARATE_Y_AXES = args.separate_y_axes
 REFERENCE_POINT = args.reference_point
+
+TYPE = args.type
+NEIGHBOR_DISTANCE = args.neighbour_distance
 
 # read unmapped (0x4)
 # read reverse strand (0x10)
@@ -658,6 +665,71 @@ def STOP_CLOCK(name, stop_name):
 # ------------------- COMMANDS -------------------  #
 # ------------------- COMMANDS -------------------  #
 # ------------------- COMMANDS -------------------  #
+
+if COMMAND == "find_gene_neighbours":
+    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+    GFF_DF['ID'] = GFF_DF['ID'].astype('category')
+    GFF_DF['type'] = GFF_DF['type'].astype('category')
+    GFF_DF['seq_id'] = GFF_DF['seq_id'].astype('category')
+
+    # 1 filter by type
+    gff_matching_type = GFF_DF[GFF_DF['type'] == TYPE]
+
+    # convergent genes: filter by end position 
+
+    def genes_overlap(a, b, padding):
+        if (a.end <= (b.end + padding) and a.end >= (b.start - padding)) \
+            or (a.start <= (a.end + padding) and a.start >= (b.start - padding)):
+            return True
+        else:
+            return False
+
+
+    # def compare_with_everything_else(row):
+    #     neighbours = []
+
+    #     for other_row_index, other_row in gff_matching_type.iterrows():
+    #         if genes_overlap(row, other_row, NEIGHBOR_DISTANCE):
+    #             neighbours.append(other_row['ID'])
+
+    #     return neighbours
+    
+    
+    # gff_matching_type['neighbours'] = gff_matching_type.apply(
+    #     lambda r: compare_with_everything_else(r), 
+    #     axis=1
+    # )
+
+    neighbours_series = [[]] * len(gff_matching_type)
+
+    for a_idx, a in gff_matching_type.iterrows():
+        print("processing: {}".format(a['ID']))
+        neighbours = []
+        for b_idx, b in gff_matching_type.iterrows():
+            
+            #skip checking the same gene
+            if a_idx != b_idx and a.seq_id == b.seq_id:
+
+                # do the to genes overlap? add it to the list of neighbours
+                if (a.end <= (b.end + NEIGHBOR_DISTANCE) and a.end >= (b.start - NEIGHBOR_DISTANCE)) \
+                    or (a.start <= (a.end + NEIGHBOR_DISTANCE) and a.start >= (b.start - NEIGHBOR_DISTANCE)):
+                    neighbours.append(b['ID'])
+
+        neighbours_series[a_idx]
+        gff_matching_type.loc[a_idx, 'neighbours'] = neighbours
+        if a_idx > 20:
+            break
+
+    print(gff_matching_type)
+            
+
+
+
+
+
+    # print(GFF_DF)
+
 
 if COMMAND == "search":
     print("searching...")
