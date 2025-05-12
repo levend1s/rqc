@@ -675,6 +675,9 @@ if COMMAND == "find_gene_neighbours":
 
     # 1 filter by type
     gff_matching_type = GFF_DF[GFF_DF['type'] == TYPE]
+    # test_row = gff_matching_type[gff_matching_type['ID'] == "PF3D7_1456500.1"]
+
+    # print(test_row)
 
     # convergent genes: filter by end position 
 
@@ -685,50 +688,38 @@ if COMMAND == "find_gene_neighbours":
         else:
             return False
 
-
-    # def compare_with_everything_else(row):
-    #     neighbours = []
-
-    #     for other_row_index, other_row in gff_matching_type.iterrows():
-    #         if genes_overlap(row, other_row, NEIGHBOR_DISTANCE):
-    #             neighbours.append(other_row['ID'])
-
-    #     return neighbours
-    
-    
-    # gff_matching_type['neighbours'] = gff_matching_type.apply(
-    #     lambda r: compare_with_everything_else(r), 
-    #     axis=1
-    # )
-
     neighbours_series = [[]] * len(gff_matching_type)
 
+    i = 0
     for a_idx, a in gff_matching_type.iterrows():
         print("processing: {}".format(a['ID']))
         neighbours = []
-        for b_idx, b in gff_matching_type.iterrows():
+
+        same_contig = gff_matching_type[gff_matching_type['seq_id'] == a['seq_id']]
+        for b_idx, b in same_contig.iterrows():
             
             #skip checking the same gene
-            if a_idx != b_idx and a.seq_id == b.seq_id:
+            if (a_idx != b_idx) and (a.seq_id == b.seq_id):
 
                 # do the to genes overlap? add it to the list of neighbours
                 if (a.end <= (b.end + NEIGHBOR_DISTANCE) and a.end >= (b.start - NEIGHBOR_DISTANCE)) \
-                    or (a.start <= (a.end + NEIGHBOR_DISTANCE) and a.start >= (b.start - NEIGHBOR_DISTANCE)):
+                    or (a.start <= (b.end + NEIGHBOR_DISTANCE) and a.start >= (b.start - NEIGHBOR_DISTANCE)):
+                    
                     neighbours.append(b['ID'])
 
-        neighbours_series[a_idx]
-        gff_matching_type.loc[a_idx, 'neighbours'] = neighbours
-        if a_idx > 20:
+        print("neighbours: {}".format(neighbours))
+        neighbours_series[i] = neighbours
+        i += 1
+
+        if i >100:
             break
 
-    print(gff_matching_type)
-            
+    neighbours_df = gff_matching_type[['ID']].copy()
+    neighbours_df['neighbours'] = neighbours_series
 
-
-
-
-
-    # print(GFF_DF)
+    TES_SUMMARY_PATH = "./gene_neighbours.tsv"
+    print(neighbours_df)
+    neighbours_df.to_csv(TES_SUMMARY_PATH, sep='\t', index=False)
 
 
 if COMMAND == "search":
