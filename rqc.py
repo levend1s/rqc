@@ -666,6 +666,111 @@ def STOP_CLOCK(name, stop_name):
 # ------------------- COMMANDS -------------------  #
 # ------------------- COMMANDS -------------------  #
 
+if COMMAND == "gene_neighbour_analysis":
+    gene_neighbour_tsv_file_path = INPUT[0]
+    print("LOADING: {}".format(gene_neighbour_tsv_file_path))
+    gene_neighbour_df = pandas.read_csv(gene_neighbour_tsv_file_path, sep='\t')
+    gene_neighbour_df['ID'] = gene_neighbour_df['ID'].astype('category')
+    gene_neighbour_df['type'] = gene_neighbour_df['type'].astype('category')
+    gene_neighbour_df['seq_id'] = gene_neighbour_df['seq_id'].astype('category')
+    gene_neighbour_df['strand'] = gene_neighbour_df['strand'].astype('category')
+
+    gene_neighbour_df["neighbours"] = gene_neighbour_df.neighbours.apply(lambda s: ast.literal_eval(s))
+
+    print("gene_neighbour_df size: {}".format(len(gene_neighbour_df)))
+
+    all_neighbour_pairs = []
+    lonely_genes = []
+
+    # returns true if a is greater than b and less than c
+    def is_between(a, b, c):
+        if (a >= b) and (a <= c):
+            return True
+        else:
+            return False 
+
+    for a_idx, a in gene_neighbour_df.iterrows():
+        if len(a['neighbours']) == 0:
+            lonely_genes.append(a.ID)
+
+        else:
+            for b_id in a['neighbours']:
+
+                smaller = min(a.ID, b_id)
+                bigger = max(a.ID, b_id)
+
+                all_neighbour_pairs.append((smaller, bigger))
+
+    unique_neighbour_pairs = set(all_neighbour_pairs)
+
+    d_neighbour_types = {}
+    d_neighbour_types['co_directional'] = []
+    d_neighbour_types['embedded_antiparallel'] = []
+    d_neighbour_types['divergent'] = []
+    d_neighbour_types['convergent'] = []
+    d_neighbour_types['warning'] = []
+    d_neighbour_types['lonely'] = lonely_genes
+
+    for pair in unique_neighbour_pairs:
+        print(pair)
+        a = gene_neighbour_df[gene_neighbour_df['ID'] == pair[0]].iloc[0]
+        b = gene_neighbour_df[gene_neighbour_df['ID'] == pair[1]].iloc[0]
+
+        if a.strand == "+":
+            a_5p_pos = a.start
+            a_3p_pos = a.end
+        else:
+            a_5p_pos = a.end
+            a_3p_pos = a.start
+
+        if b.strand == "+":
+            b_5p_pos = b.start
+            b_3p_pos = b.end
+        else:
+            b_5p_pos = b.end
+            b_3p_pos = b.start
+
+        # parallel / co-directional
+        # if a and b are on same strand
+        if b.strand == a.strand:
+            print("{} and {}: CO DIRECTIONAL".format(a.ID, b.ID))
+            d_neighbour_types['co_directional'].append(pair)
+        elif is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
+            # embedded anti parallel (complete)
+            print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_antiparallel'].append(pair)
+
+        elif is_between(b.start, a.start, a.end) and is_between(b.end, a.start, a.end):
+            # embedded anti parallel (complete)
+            print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_antiparallel'].append(pair)
+
+        elif is_between(a_5p_pos, b.start - NEIGHBOR_DISTANCE, b.end + NEIGHBOR_DISTANCE):
+            # divergent (partial, 5' ends overlap)
+            print("{} and {}: DIVERGENT".format(a.ID, b.ID))
+            d_neighbour_types['divergent'].append(pair)
+
+        elif is_between(a_3p_pos, b.start - NEIGHBOR_DISTANCE, b.end + NEIGHBOR_DISTANCE):
+            # convergent (partial, 3' ends overlap)
+            print("{} and {}: CONVERGENT".format(a.ID, b.ID))
+            d_neighbour_types['convergent'].append(pair)
+
+        else:
+            print("WARNING: COULDN'T DETERMINE NEIGHBOUR NATURE OF {} and {}".format(a.ID, b.ID))
+            d_neighbour_types['warning'].append(pair)
+                    
+    d_neighbour_types_counts = d_neighbour_types
+    for k, v in d_neighbour_types_counts.items():
+        d_neighbour_types_counts[k] = len(v)
+
+    pprint(d_neighbour_types)
+    print(d_neighbour_types_counts)
+
+    d_neighbour_types_counts.pop("warning")
+    plt.bar(*zip(*d_neighbour_types_counts.items()))
+    plt.show()
+
+
 if COMMAND == "find_gene_neighbours":
     ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
     GFF_DF = ANNOTATION_FILE.attributes_to_columns()
@@ -673,14 +778,23 @@ if COMMAND == "find_gene_neighbours":
     GFF_DF['type'] = GFF_DF['type'].astype('category')
     GFF_DF['seq_id'] = GFF_DF['seq_id'].astype('category')
 
-    # 1 filter by type
-    if TYPE != 'all':
-        gff_matching_type = GFF_DF[GFF_DF['type'] == TYPE]
+    # keep only entries that don't have a parent (removes exons, utrs etc)
+    # print(GFF_DF['Parent'])
+    GFF_DF = GFF_DF[GFF_DF['Parent'].isna()]
+
+    print(GFF_DF)
+    
+    if TYPE == 'all':
+        all_types = set(GFF_DF['type'])
+        print(all_types)
+        gff_matching_type = GFF_DF[GFF_DF['type'].isin(all_types)]
     else:
-        gff_matching_type = GFF_DF
+        gff_matching_type = GFF_DF[GFF_DF['type'] == TYPE]
 
     neighbours_series = [[]] * len(gff_matching_type)
     i = 0
+
+    print("FOUND {} MATCHES FOR TYPE {}".format(len(gff_matching_type), TYPE))
 
     for a_idx, a in gff_matching_type.iterrows():
         print("processing: {}".format(a['ID']))
@@ -702,7 +816,7 @@ if COMMAND == "find_gene_neighbours":
         neighbours_series[i] = neighbours
         i += 1
 
-    neighbours_df = gff_matching_type[['ID']].copy()
+    neighbours_df = gff_matching_type[['ID', 'strand', 'type', 'start', 'end', 'seq_id']].copy()
     neighbours_df['neighbours'] = neighbours_series
 
     TES_SUMMARY_PATH = "./gene_neighbours.tsv"
