@@ -1030,12 +1030,15 @@ if COMMAND == "plot_tes_vs_wam":
             filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
             filtered_genes_tes_wam['log2_wam_change'] = (numpy.log2(filtered_genes_tes_wam['wam_change']) * -1)
             filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
+            
+            filtered_genes_tes_wam['wam_diff'] = filtered_genes_tes_wam['wam_before'] - filtered_genes_tes_wam['wam_after']
+            filtered_genes_tes_wam['tes_diff'] = filtered_genes_tes_wam['wart_before'] - filtered_genes_tes_wam['wart_after']
 
             print(filtered_genes_tes_wam)
 
             axes = filtered_genes_tes_wam.plot.scatter(
-                x='log2_wam_change',
-                y='log2_wart_change',
+                x='wam_diff',
+                y='tes_diff',
                 c='minus_log10_p_inter_treatment'
             )
 
@@ -1054,11 +1057,15 @@ if COMMAND == "plot_tes_vs_wam":
         filtered_genes_tes_wam['-log2_wam_change'] = (numpy.log2(filtered_genes_tes_wam['wam_change']) * -1)
         filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
 
+        filtered_genes_tes_wam['wam_diff'] = filtered_genes_tes_wam['wam_before'] - filtered_genes_tes_wam['wam_after']
+        filtered_genes_tes_wam['tes_diff'] = filtered_genes_tes_wam['wart_after'] - filtered_genes_tes_wam['wart_before']
+
+
         print(filtered_genes_tes_wam)
 
         axes = filtered_genes_tes_wam.plot.scatter(
-            x='-log2_wam_change',
-            y='log2_wart_change',
+            x='wam_diff',
+            y='tes_diff',
             c='minus_log10_p_inter_treatment'
         )
 
