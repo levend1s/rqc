@@ -14,6 +14,7 @@ from pprint import pprint
 import sys
 import itertools
 import os
+import json
 
 from kneed import KneeLocator
 from statsmodels.stats.proportion import proportions_ztest
@@ -54,8 +55,9 @@ parser.add_argument('--filter_out_m6A', type=str, default="[]")
 parser.add_argument('--generate_filtered_bam', type=bool, default=False)
 parser.add_argument('--separate_y_axes', type=bool, default=False)
 parser.add_argument('--reference_point', type=str, default="TES")
-parser.add_argument('--neighbour_file', type=str)
+parser.add_argument('--neighbour_file', type=str, default=None)
 parser.add_argument('--filter_for_feature_counts', type=bool, default=False)
+parser.add_argument('--filter_by_neighbour_type', type=str, default="all")
 
 
 # find neighbors
@@ -96,11 +98,12 @@ FILTER_OUT_M6A = args.filter_out_m6A
 SEPARATE_Y_AXES = args.separate_y_axes
 REFERENCE_POINT = args.reference_point
 FILTER_FOR_FEATURE_COUNTS = args.filter_for_feature_counts
+FILTER_BY_NEIGHBOUR_TYPE = args.filter_by_neighbour_type
 
 
 TYPE = args.type
-NEIGHBOR_DISTANCE = args.neighbour_distance
-NEIGHBOR_FILE = args.neighbour_file
+NEIGHBOUR_DISTANCE = args.neighbour_distance
+NEIGHBOUR_FILE = args.neighbour_file
 
 
 # read unmapped (0x4)
@@ -761,12 +764,12 @@ if COMMAND == "gene_neighbour_analysis":
             print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
             d_neighbour_types['embedded_antiparallel'].append(pair)
 
-        elif is_between(a_5p_pos, b.start - NEIGHBOR_DISTANCE, b.end + NEIGHBOR_DISTANCE):
+        elif is_between(a_5p_pos, b.start - NEIGHBOUR_DISTANCE, b.end + NEIGHBOUR_DISTANCE):
             # divergent (partial, 5' ends overlap)
             print("{} and {}: DIVERGENT".format(a.ID, b.ID))
             d_neighbour_types['divergent'].append(pair)
 
-        elif is_between(a_3p_pos, b.start - NEIGHBOR_DISTANCE, b.end + NEIGHBOR_DISTANCE):
+        elif is_between(a_3p_pos, b.start - NEIGHBOUR_DISTANCE, b.end + NEIGHBOUR_DISTANCE):
             # convergent (partial, 3' ends overlap)
             print("{} and {}: CONVERGENT".format(a.ID, b.ID))
             d_neighbour_types['convergent'].append(pair)
@@ -774,7 +777,12 @@ if COMMAND == "gene_neighbour_analysis":
         else:
             print("WARNING: COULDN'T DETERMINE NEIGHBOUR NATURE OF {} and {}".format(a.ID, b.ID))
             d_neighbour_types['warning'].append(pair)
-                    
+
+
+    outfile = "./gene_neighbour_analysis.json"
+    with open(outfile, 'w') as f:
+        json.dump(d_neighbour_types, f)
+
     d_neighbour_types_counts = d_neighbour_types.copy()
     for k, v in d_neighbour_types_counts.items():
         d_neighbour_types_counts[k] = len(v)
@@ -825,8 +833,8 @@ if COMMAND == "find_gene_neighbours":
             if (a_idx != b_idx) and (a.seq_id == b.seq_id):
 
                 # do the to genes overlap? add it to the list of neighbours
-                if (a.end <= (b.end + NEIGHBOR_DISTANCE) and a.end >= (b.start - NEIGHBOR_DISTANCE)) \
-                    or (a.start <= (b.end + NEIGHBOR_DISTANCE) and a.start >= (b.start - NEIGHBOR_DISTANCE)):
+                if (a.end <= (b.end + NEIGHBOUR_DISTANCE) and a.end >= (b.start - NEIGHBOUR_DISTANCE)) \
+                    or (a.start <= (b.end + NEIGHBOUR_DISTANCE) and a.start >= (b.start - NEIGHBOUR_DISTANCE)):
                     
                     neighbours.append(b['ID'])
 
@@ -970,6 +978,38 @@ if COMMAND == "plot_tes_vs_wam":
     print("LOADING: {}".format(tes_tsv_file_path))
     tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
 
+    print(NEIGHBOUR_FILE)
+
+    neighbour_file_df = {}
+
+    if NEIGHBOUR_FILE:
+        with open(NEIGHBOUR_FILE) as json_data:
+            neighbour_file_df = json.load(json_data)
+
+    print(neighbour_file_df.keys())
+
+    # FILTER_BY_NEIGHBOUR_TYPE = "lonely"
+    tes_file_df_len_raw = len(tes_file_df)
+    print("INPUT: {}".format(tes_file_df_len_raw))
+
+    if FILTER_BY_NEIGHBOUR_TYPE != "all":
+        gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
+        tes_file_df["parent_id"] = tes_file_df.gene_id.apply(lambda s: s.split('.')[0])
+
+        # flatten list if required
+        if len(gene_list_filter) > 0 and isinstance(gene_list_filter[0], list):
+            gene_list_filter = [x for xs in gene_list_filter for x in xs]
+
+        gene_list_filter = set(gene_list_filter)
+
+        # remove all entries from tes_file if the gene isn't in the gene list
+        tes_file_df = tes_file_df[
+                (tes_file_df['parent_id'].isin(gene_list_filter))
+        ]
+
+        print("REMOVED {} DUE TO GENE NEIGHBOUR FILTER".format(tes_file_df_len_raw - len(tes_file_df)))
+
+
     # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
     # drop all genes where wam_change == 0
     p_same_treatment_cutoff = 0.05
@@ -984,7 +1024,6 @@ if COMMAND == "plot_tes_vs_wam":
                 (tes_file_df.wam_change != 0) & 
                 (tes_file_df.cannonical_mods == i)
             ]
-
 
             print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
 
@@ -1006,7 +1045,7 @@ if COMMAND == "plot_tes_vs_wam":
             (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
             (tes_file_df.wam_change != 0)
         ]
-        filtered_genes_tes_wam = tes_file_df
+        # filtered_genes_tes_wam = tes_file_df
 
 
         print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
@@ -1313,7 +1352,6 @@ if COMMAND == "tes_analysis":
 
     # END CANNONICAL MOD IDENTIFICATION
     print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
-    read_on_different_strand = 0
 
     for label in bam_labels:
         samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
@@ -1345,6 +1383,7 @@ if COMMAND == "tes_analysis":
             # START_CLOCK("row_start")
 
             summary_df_index = 0
+            read_on_different_strand = 0
 
             # 0.30355286598205566s
             gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
@@ -1535,8 +1574,6 @@ if COMMAND == "tes_analysis":
             # STOP_CLOCK("row_start", "stop")
 
             # print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
-
-            print(len(read_indexes_to_process))
             print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), read_on_different_strand, missing_from_fc, len(read_outside_3p_end), len(missing_cannonical_mods)))
 
 
