@@ -54,6 +54,9 @@ parser.add_argument('--filter_out_m6A', type=str, default="[]")
 parser.add_argument('--generate_filtered_bam', type=bool, default=False)
 parser.add_argument('--separate_y_axes', type=bool, default=False)
 parser.add_argument('--reference_point', type=str, default="TES")
+parser.add_argument('--neighbour_file', type=str)
+parser.add_argument('--filter_for_feature_counts', type=bool, default=False)
+
 
 # find neighbors
 parser.add_argument('--type', type=str, default="TES")
@@ -92,9 +95,13 @@ FILTER_FOR_M6A = args.filter_for_m6A
 FILTER_OUT_M6A = args.filter_out_m6A
 SEPARATE_Y_AXES = args.separate_y_axes
 REFERENCE_POINT = args.reference_point
+FILTER_FOR_FEATURE_COUNTS = args.filter_for_feature_counts
+
 
 TYPE = args.type
 NEIGHBOR_DISTANCE = args.neighbour_distance
+NEIGHBOR_FILE = args.neighbour_file
+
 
 # read unmapped (0x4)
 # read reverse strand (0x10)
@@ -709,6 +716,7 @@ if COMMAND == "gene_neighbour_analysis":
     d_neighbour_types['divergent'] = []
     d_neighbour_types['convergent'] = []
     d_neighbour_types['warning'] = []
+    d_neighbour_types['embedded_co_directional'] = []
     d_neighbour_types['lonely'] = lonely_genes
 
     for pair in unique_neighbour_pairs:
@@ -732,7 +740,15 @@ if COMMAND == "gene_neighbour_analysis":
 
         # parallel / co-directional
         # if a and b are on same strand
-        if b.strand == a.strand:
+        if (b.strand == a.strand) and is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
+            # embedded co directional (complete)
+            print("{} and {}: EMBEDDED CO DIRECTIONAL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_co_directional'].append(pair)
+        elif (b.strand == a.strand) and is_between(b.start, a.start, a.end) and is_between(b.end, a.start, a.end):
+            # embedded co directional (complete)
+            print("{} and {}: EMBEDDED CO DIRECTIONAL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_co_directional'].append(pair)
+        elif b.strand == a.strand:
             print("{} and {}: CO DIRECTIONAL".format(a.ID, b.ID))
             d_neighbour_types['co_directional'].append(pair)
         elif is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
@@ -759,7 +775,7 @@ if COMMAND == "gene_neighbour_analysis":
             print("WARNING: COULDN'T DETERMINE NEIGHBOUR NATURE OF {} and {}".format(a.ID, b.ID))
             d_neighbour_types['warning'].append(pair)
                     
-    d_neighbour_types_counts = d_neighbour_types
+    d_neighbour_types_counts = d_neighbour_types.copy()
     for k, v in d_neighbour_types_counts.items():
         d_neighbour_types_counts[k] = len(v)
 
@@ -772,6 +788,8 @@ if COMMAND == "gene_neighbour_analysis":
 
 
 if COMMAND == "find_gene_neighbours":
+    type = INPUT[0]
+
     ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
     GFF_DF = ANNOTATION_FILE.attributes_to_columns()
     GFF_DF['ID'] = GFF_DF['ID'].astype('category')
@@ -784,12 +802,12 @@ if COMMAND == "find_gene_neighbours":
 
     print(GFF_DF)
     
-    if TYPE == 'all':
+    if type == 'all':
         all_types = set(GFF_DF['type'])
         print(all_types)
         gff_matching_type = GFF_DF[GFF_DF['type'].isin(all_types)]
     else:
-        gff_matching_type = GFF_DF[GFF_DF['type'] == TYPE]
+        gff_matching_type = GFF_DF[GFF_DF['type'] == type]
 
     neighbours_series = [[]] * len(gff_matching_type)
     i = 0
@@ -1237,8 +1255,6 @@ if COMMAND == "tes_analysis":
 
     gene_length = 0
 
-    print("label\tgene id\ttotal reads\tnum reads after filter\tnot assigned (fc)\toutside 3p end\tmissing cannonical mod")
-
     cannonical_mods_genome_space_filter = []
 
     if FILTER_FOR_M6A != "[]":
@@ -1296,6 +1312,8 @@ if COMMAND == "tes_analysis":
         print("cannonical_mods_start_pos: {}".format(cannonical_mods_start_pos[row['ID']]))
 
     # END CANNONICAL MOD IDENTIFICATION
+    print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
+    read_on_different_strand = 0
 
     for label in bam_labels:
         samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
@@ -1368,7 +1386,6 @@ if COMMAND == "tes_analysis":
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
             row_subfeatures = getSubfeatures(row['ID'], "subfeature", 0)
-            num_reads_bam = 0
 
             read_indexes_to_process = []
 
@@ -1392,7 +1409,6 @@ if COMMAND == "tes_analysis":
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
                 r = reads_in_region[i]
-                num_reads_bam += 1
 
                 # keep only reads in the same direction as this strand
                 if (row['strand'] == "+" and r.is_forward) or (row['strand'] == "-" and r.is_reverse):
@@ -1462,6 +1478,8 @@ if COMMAND == "tes_analysis":
                                 read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
+                else:
+                    read_on_different_strand += 1
 
             if GENERATE_FILTERED_BAM:
                 if FILTER_FOR_M6A != "[]":
@@ -1483,13 +1501,17 @@ if COMMAND == "tes_analysis":
 
             found = 0
             not_found = 0
+            missing_from_fc = 0
             no_poly_a = 0
             poly_a_lengths = []
             tts_sites = []
 
             for i in read_indexes_to_process:
                 r = reads_in_region[i]
-                if r.qname in gene_read_ids_fc:
+                if FILTER_FOR_FEATURE_COUNTS and (r.qname not in gene_read_ids_fc):
+                    missing_from_fc += 1
+                    continue
+                else:
                     if row['strand'] == "-":
                         tts_sites.append(r.reference_start)
                     else:
@@ -1504,19 +1526,18 @@ if COMMAND == "tes_analysis":
                         no_poly_a += 1
                         poly_a_lengths.append(0)
 
-                #     found += 1
-                # else:
-                #     # print("WARNING {} NOT found in featureCounts".format(r.qname))
-                #     not_found += 1
-                    
+
             d_poly_a_lengths[label][row['ID']] = poly_a_lengths
             d_tts[label][row['ID']] = tts_sites
 
-            d_not_beyond_3p[label][row['ID']] = num_reads_bam - len(read_indexes_to_process)
-            d_not_in_feature_counts[label][row['ID']] = not_found
+            d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
+            d_not_in_feature_counts[label][row['ID']] = missing_from_fc
             # STOP_CLOCK("row_start", "stop")
 
-            print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], num_reads_bam, len(d_tts[label][row['ID']]), not_found, len(read_outside_3p_end), len(missing_cannonical_mods)))
+            # print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
+
+            print(len(read_indexes_to_process))
+            print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), read_on_different_strand, missing_from_fc, len(read_outside_3p_end), len(missing_cannonical_mods)))
 
 
         samfile.close()
