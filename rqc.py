@@ -58,7 +58,8 @@ parser.add_argument('--reference_point', type=str, default="TES")
 parser.add_argument('--neighbour_file', type=str, default=None)
 parser.add_argument('--filter_for_feature_counts', type=bool, default=False)
 parser.add_argument('--filter_by_neighbour_type', type=str, default="all")
-
+parser.add_argument('--split_by_canonical_mods', type=bool, default=False)
+parser.add_argument('--num_canonical_mods_filter', type=int, default=0)
 
 # find neighbors
 parser.add_argument('--type', type=str, default="TES")
@@ -99,11 +100,15 @@ SEPARATE_Y_AXES = args.separate_y_axes
 REFERENCE_POINT = args.reference_point
 FILTER_FOR_FEATURE_COUNTS = args.filter_for_feature_counts
 FILTER_BY_NEIGHBOUR_TYPE = args.filter_by_neighbour_type
+NUM_CANONICAL_MODS_FILTER = args.num_canonical_mods_filter
+
 
 
 TYPE = args.type
 NEIGHBOUR_DISTANCE = args.neighbour_distance
 NEIGHBOUR_FILE = args.neighbour_file
+SPLIT_BY_CANONICAL_MODS = args.split_by_canonical_mods
+
 
 
 # read unmapped (0x4)
@@ -1007,7 +1012,15 @@ if COMMAND == "plot_tes_vs_wam":
                 (tes_file_df['parent_id'].isin(gene_list_filter))
         ]
 
-        print("REMOVED {} DUE TO GENE NEIGHBOUR FILTER".format(tes_file_df_len_raw - len(tes_file_df)))
+        print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(tes_file_df_len_raw - len(tes_file_df), FILTER_BY_NEIGHBOUR_TYPE))
+
+
+    tes_file_df['minus_log10_p_inter_treatment'] = (numpy.log10(tes_file_df['p_inter_treatment']) * -1)
+    tes_file_df['-log2_wam_change'] = (numpy.log2(tes_file_df['wam_change']) * -1)
+    tes_file_df['log2_wart_change'] = numpy.log2(tes_file_df['wart_change'])
+
+    tes_file_df['wam_diff'] = tes_file_df['wam_before'] - tes_file_df['wam_after']
+    tes_file_df['tes_diff'] = tes_file_df['wart_after'] - tes_file_df['wart_before']
 
 
     # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
@@ -1015,61 +1028,74 @@ if COMMAND == "plot_tes_vs_wam":
     p_same_treatment_cutoff = 0.05
 
     tes_file_df["num_cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
+    filtered_genes_tes_wam = tes_file_df[
+        # (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
+        (tes_file_df.num_cannonical_mods > 0) & 
+        (tes_file_df.average_expression >= READ_DEPTH_THRESHOLD)
+    ]
+    print("REMOVING {} DUE TO FILTER (num canonical mods > 0, avg expression > {})".format(len(tes_file_df) - len(filtered_genes_tes_wam), READ_DEPTH_THRESHOLD))
 
-    SPLIT_BY_CANNONICAL_MODS = False
-    if SPLIT_BY_CANNONICAL_MODS:
-        for i in range(0, max(tes_file_df["cannonical_mods"].to_list()) + 1):
-            filtered_genes_tes_wam = tes_file_df[
-                (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
-                (tes_file_df.wam_change != 0) & 
-                (tes_file_df.cannonical_mods == i)
+    import mplcursors
+
+
+    axes = None
+    if SPLIT_BY_CANONICAL_MODS:
+        for i in range(1, max(filtered_genes_tes_wam["num_cannonical_mods"].to_list()) + 1):
+            filtered_genes_tes_wam_mods = filtered_genes_tes_wam[
+                (filtered_genes_tes_wam.num_cannonical_mods == i)
             ]
 
-            print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
+            if len(filtered_genes_tes_wam_mods) == 0:
+                continue
 
-            filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
-            filtered_genes_tes_wam['log2_wam_change'] = (numpy.log2(filtered_genes_tes_wam['wam_change']) * -1)
-            filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
-            
-            filtered_genes_tes_wam['wam_diff'] = filtered_genes_tes_wam['wam_before'] - filtered_genes_tes_wam['wam_after']
-            filtered_genes_tes_wam['tes_diff'] = filtered_genes_tes_wam['wart_before'] - filtered_genes_tes_wam['wart_after']
+            x_col = 'wam_diff'
+            y_col = 'tes_diff'
 
-            print(filtered_genes_tes_wam)
+            print("REMOVING {} DUE TO FILTER (MODS={})".format(len(filtered_genes_tes_wam) - len(filtered_genes_tes_wam_mods), i))
 
-            axes = filtered_genes_tes_wam.plot.scatter(
+            axes = filtered_genes_tes_wam_mods.plot.scatter(
                 x='wam_diff',
                 y='tes_diff',
                 c='minus_log10_p_inter_treatment'
             )
 
-            axes.set_title("Genes with {} cannonical m6A (n={})".format(i, len(filtered_genes_tes_wam)))
+            m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam_mods[x_col], filtered_genes_tes_wam_mods[y_col])
+            axes.plot(filtered_genes_tes_wam_mods[x_col], m * filtered_genes_tes_wam_mods[x_col] + c)
+            axes.text(1, 1, "R^2: {}".format(round(r_value ** 2, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+
+            axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, i, len(filtered_genes_tes_wam_mods)))
     else:
-        filtered_genes_tes_wam = tes_file_df[
-            (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
-            (tes_file_df.wam_change != 0)
-        ]
-        # filtered_genes_tes_wam = tes_file_df
-
-
-        print("REMOVING {} DUE TO FILTER".format(len(tes_file_df) - len(filtered_genes_tes_wam)))
-
-        filtered_genes_tes_wam['minus_log10_p_inter_treatment'] = (numpy.log10(filtered_genes_tes_wam['p_inter_treatment']) * -1)
-        filtered_genes_tes_wam['-log2_wam_change'] = (numpy.log2(filtered_genes_tes_wam['wam_change']) * -1)
-        filtered_genes_tes_wam['log2_wart_change'] = numpy.log2(filtered_genes_tes_wam['wart_change'])
-
-        filtered_genes_tes_wam['wam_diff'] = filtered_genes_tes_wam['wam_before'] - filtered_genes_tes_wam['wam_after']
-        filtered_genes_tes_wam['tes_diff'] = filtered_genes_tes_wam['wart_after'] - filtered_genes_tes_wam['wart_before']
-
-
-        print(filtered_genes_tes_wam)
+        if NUM_CANONICAL_MODS_FILTER > 0:
+            filtered_genes_tes_wam = filtered_genes_tes_wam[
+                (filtered_genes_tes_wam.num_cannonical_mods == NUM_CANONICAL_MODS_FILTER)
+            ]
+        
+        x_col = 'wam_diff'
+        y_col = 'tes_diff'
 
         axes = filtered_genes_tes_wam.plot.scatter(
             x='wam_diff',
             y='tes_diff',
             c='minus_log10_p_inter_treatment'
         )
+        m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
+        axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
+        axes.text(1, 1, "R^2: {}".format(round(r_value ** 2, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+
+        if NUM_CANONICAL_MODS_FILTER > 0:
+            axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, NUM_CANONICAL_MODS_FILTER, len(filtered_genes_tes_wam)))
+        else:
+            axes.set_title("{} genes with cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, len(filtered_genes_tes_wam)))
+
+        def show_label(sel):
+            index = sel.index
+            sel.annotation.set_text(filtered_genes_tes_wam['gene_id'].to_list()[index])
+            print(filtered_genes_tes_wam['gene_id'].to_list()[index])
+            
+        mplcursors.cursor(axes, hover=True).connect("add", show_label)
 
     plt.show()
+
 
 if COMMAND == "plot_tes_wam_distance":
     tes_tsv_file_path = INPUT[0]
