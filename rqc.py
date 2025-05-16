@@ -1016,6 +1016,7 @@ if COMMAND == "plot_tes_vs_wam":
 
 
     tes_file_df['minus_log10_p_inter_treatment'] = (numpy.log10(tes_file_df['p_inter_treatment']) * -1)
+    tes_file_df['log10_average_expression'] = (numpy.log10(tes_file_df['average_expression']))
     tes_file_df['-log2_wam_change'] = (numpy.log2(tes_file_df['wam_change']) * -1)
     tes_file_df['log2_wart_change'] = numpy.log2(tes_file_df['wart_change'])
 
@@ -1076,7 +1077,7 @@ if COMMAND == "plot_tes_vs_wam":
         axes = filtered_genes_tes_wam.plot.scatter(
             x='wam_diff',
             y='tes_diff',
-            c='minus_log10_p_inter_treatment'
+            c='log10_average_expression'
         )
         m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
         axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
