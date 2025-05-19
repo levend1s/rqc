@@ -1077,11 +1077,13 @@ if COMMAND == "plot_tes_vs_wam":
         axes = filtered_genes_tes_wam.plot.scatter(
             x='wam_diff',
             y='tes_diff',
-            c='log10_average_expression'
+            c='log10_average_expression',
+            s=2
         )
         m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
         axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
-        axes.text(1, 1, "R^2: {}".format(round(r_value ** 2, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+        axes.text(1, 1, "R: {}".format(round(r_value, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+        # axes.set_xticks([round(x*0.1, 1) for x in range(0, 11)])
 
         if NUM_CANONICAL_MODS_FILTER > 0:
             axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, NUM_CANONICAL_MODS_FILTER, len(filtered_genes_tes_wam)))
@@ -2086,6 +2088,9 @@ if COMMAND == "tes_analysis":
                     tests_passed += 1
 
             # print pandas tsv row summary
+            # print("NUM READTHROUGHS: {}".format(d_read_through_counts))
+            # print("NUM NORMAL: {}".format(d_normal_read_counts))
+
             row_summary = [row['ID'], d_wart_change[row['ID']], d_wart_before[row['ID']], d_wart_after[row['ID']], p_inter_treatment, p_same_treatment, readthrough_split_point, list(d_fitted_curve_r_squared.values()), list(d_fitted_curve_coeff.values()), average_expression, cannonical_mods_start_pos[row['ID']], d_wam_before[row['ID']], d_wam_after[row['ID']], d_wam_change[row['ID']]]
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
