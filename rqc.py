@@ -133,6 +133,8 @@ dataframes = {}
 
 GFF_DF = None
 GFF_PARENT_TREE = {}
+ANNOTATION_FILE = None
+GFF_DF = None
 CLOCKS = {}
 
 TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "tes_curve_r2", "tes_curve_coeff", "average_expression", "cannonical_mods", "wam_before", "wam_after", "wam_change"]
@@ -1255,6 +1257,326 @@ if COMMAND == "plot_tes_wam_distance":
 
     plt.show()
 
+def process_input_files():
+    print("LOG - processing input files...")
+    # process input file. Each line contains a label, the type of file, and the filepath
+    # label group type path
+    input_files = {}
+    # if len(INPUT[1:]) % 4 != 0:
+    #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
+    #     sys.exit()
+    # else:
+    in_index = 1
+    while in_index < len(INPUT):
+        if not INPUT[in_index].startswith("#"):
+            input_files[INPUT[in_index]] = {
+                'group': INPUT[in_index+1], 
+                'type': INPUT[in_index+2], 
+                'path': INPUT[in_index+3]
+            }
+        in_index += 4
+
+    return input_files
+
+def process_annotation_file():
+    print("LOG - loading gff file...")
+    # load annotation file and find indexes for all parent children
+    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+
+    for row_index, row in GFF_DF.iterrows():
+        if row['Parent'] in GFF_PARENT_TREE:
+            GFF_PARENT_TREE[row['Parent']].append(row_index)
+        else:
+            GFF_PARENT_TREE[row['Parent']] = [row_index]
+
+    return ANNOTATION_FILE
+
+def filter_gff_for_target_features(annotation_file):
+    print("LOG - filtering gff file for target features...")
+
+    # Try to find matches of provided type, if not, assume that input is a list of IDs
+    feature_id = INPUT[0]
+    if os.path.isfile(feature_id):
+        lines = []
+        with open(feature_id) as f:
+            lines = f.read().splitlines()
+
+        matches = annotation_file.get_feature_by_attribute("ID", lines)
+
+    else:
+        matches = annotation_file.filter_feature_of_type([feature_id])
+        if len(matches.df) == 0:
+            evaluated_input = ast.literal_eval(feature_id)
+            matches = annotation_file.get_feature_by_attribute("ID", evaluated_input)
+            print("Looking for {} IDs, found {} matches: {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+        else:
+            print("Found {} matches for type {}...".format(len(matches.df), feature_id))
+
+    matches = matches.attributes_to_columns()
+
+    return matches
+
+def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_threshold, read_depth_threshold, padding):
+    print("LOG - finding canonical mods...")
+    cannonical_mods_start_pos = {}
+    for label in bam_labels:
+        prefix = label.split("_")[0]
+        mod_label = "{}_m6A_0.95".format(prefix)
+
+        if DEBUG:
+            print("mod_prop_threshold: {}".format(mod_prop_threshold))
+            print("read_depth_threshold: {}".format(read_depth_threshold))
+
+        mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=MODKIT_BEDMETHYL_HEADER)
+        mods_file_df['strand'] = mods_file_df['strand'].astype('category')
+        mods_file_df['contig'] = mods_file_df['contig'].astype('category')
+        
+        # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
+        mods_file_df = mods_file_df[
+            (mods_file_df.percent_mod >= (mod_prop_threshold * 100)) & 
+            (mods_file_df.valid_cov >= read_depth_threshold)
+        ]
+
+        for _, row in gff_panda_rows.iterrows():
+
+            if row['ID'] not in cannonical_mods_start_pos:
+                cannonical_mods_start_pos[row['ID']] = []
+
+            row_mods = mods_file_df[
+                (mods_file_df.start >= (row['start'] - padding)) &
+                (mods_file_df.end <= (row['end'] + padding)) &
+                (mods_file_df.strand == row['strand']) &
+                (mods_file_df.contig == row['seq_id'])
+            ]
+
+            if DEBUG:
+                print(row_mods)
+
+            for mod_index, mod in row_mods.iterrows():
+                if mod['start'] not in cannonical_mods_start_pos[row['ID']]:
+                    cannonical_mods_start_pos[row['ID']].append(mod['start'])
+
+    if DEBUG:
+        print("cannonical_mods_start_pos: {}".format(cannonical_mods_start_pos[row['ID']]))
+
+    return cannonical_mods_start_pos
+
+def get_filtered_read_ids_gene():
+    print("LOG - filtering reads...")
+
+def get_filtered_reads_ids():
+    print("LOG - filtering reads...")
+
+    print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
+
+    for label in bam_labels:
+        samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
+        
+        d_not_beyond_3p[label] = {}
+        d_not_in_feature_counts[label] = {}
+
+        # attempt to find the relevent featureCounts file in input_files
+        feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
+        feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
+        feature_counts_df['targets'] = feature_counts_df['targets'].astype('category')
+
+        # TODO load cannonical mod positions into array and convert to tx space
+        prefix = label.split("_")[0]
+        mod_label = "{}_m6A_0.95".format(prefix)
+
+        # generate coverage for all matches in this bam file
+        for row_index, row in matches.iterrows():
+            # find subfeatures
+            read_on_different_strand = 0
+            
+            gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
+            gene_read_ids_fc = set(gene_reads['read_id'])
+
+            reads_in_region = samfile.fetch(
+                contig=row['seq_id'], 
+                start=row['start'] - COVERAGE_PADDING, 
+                stop=row['end'] + COVERAGE_PADDING
+            )
+            reads_in_region = list(reads_in_region)
+
+            # make sure all cannonical mod locations exist, so add them as zero if not in bedmethyl
+            for mod in cannonical_mods_start_pos[row['ID']]:
+                d_mod_info[label][row['ID']]['valid_cov'][mod] = 0
+                d_mod_info[label][row['ID']]['num_mod'][mod] = 0
+
+            # !!!!! START NANOPORE SPECIFIC !!!!!
+            # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
+            row_subfeatures = getSubfeatures(row['ID'], "subfeature", 0)
+
+            d_filtered_read_ids = {}
+            d_filtered_read_ids['different_strand'] = []
+            d_filtered_read_ids['3p'] = []
+            d_filtered_read_ids['featureCounts'] = []
+            d_filtered_read_ids['filtered_reads'] = []
+            for mod in cannonical_mods_start_pos[row['ID']]:
+                d_filtered_read_ids['filtered_reads'] = []
+
+
+
+
+            read_indexes_to_process = []
+
+            missing_cannonical_mods = []
+            read_outside_3p_end = []
+
+            MOD_PROB_THRESHOLD = 0.95
+            pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD) 
+
+            # example: PF3D7_0709050.1
+            if len(row_subfeatures) == 0:
+                most_3p_subfeature = row
+            else:
+                if row['strand'] == "-":
+                    most_3p_subfeature = row_subfeatures.iloc[0]
+                else:
+                    most_3p_subfeature = row_subfeatures.iloc[-1]
+
+            # NOTE: now the longest function in the TES analysis
+            for i in range(len(reads_in_region)):
+                r = reads_in_region[i]
+
+                # keep only reads in the same direction as this strand
+                if (row['strand'] == "+" and r.is_forward) or (row['strand'] == "-" and r.is_reverse):
+                    if row['strand'] == "-":
+                        read_3p_end = r.reference_start
+
+                        if read_3p_end <= most_3p_subfeature.end:
+                            # read_indexes_to_process.append(this_index)
+
+                            if FILTER_READS_FOR_CANNONICAL_MODS:
+                                # this is [(read index, 256 * mod_prob)...]
+                                mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev'])
+                                if mods_probs:
+                                    # keep only mod positions which are above mod prob threshold
+                                    ref_pos = numpy.array(r.get_reference_positions(full_length=True))
+                                    read_mod_positions = [x[0] for x in mods_probs if x[1] >= pysam_mod_threshold]
+                                    
+                                    # read mod positions is the position from the start of the read
+                                    # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
+                                    # print(ref_pos[read_mod_positions])
+                                    if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
+                                        # print("READ HAD ALL CANNONICAL MODS\n")
+                                        if FILTER_FOR_M6A != "[]":
+                                            read_indexes_to_process.append(i)
+                                        if FILTER_OUT_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                    else:
+                                        # print("READ DID NOT HAVE ALL CANNONICAL MODS: id={}".format(r.query_name))
+                                        if FILTER_FOR_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                        if FILTER_OUT_M6A != "[]":
+                                            read_indexes_to_process.append(i)
+                            else:
+                                read_indexes_to_process.append(i)
+                        else:
+                            read_outside_3p_end.append(r.query_name)
+
+                    else:
+                        read_3p_end = r.reference_end
+
+                        if read_3p_end >= most_3p_subfeature.start:
+                            # read_indexes_to_process.append(this_index)
+                            if FILTER_READS_FOR_CANNONICAL_MODS:
+                                # this is [(read index, 256 * mod_prob)...]
+                                mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_for'])
+                                if mods_probs:
+                                    # keep only mod positions which are above mod prob threshold
+                                    ref_pos = numpy.array(r.get_reference_positions(full_length=True))
+                                    read_mod_positions = [x[0] for x in mods_probs if x[1] >= pysam_mod_threshold]
+                                    
+                                    # read mod positions is the position from the start of the read
+                                    # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
+                                    # print(ref_pos[read_mod_positions])
+                                    if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
+                                        # print("READ HAD ALL CANNONICAL MODS\n")
+                                        if FILTER_FOR_M6A != "[]":
+                                            read_indexes_to_process.append(i)
+                                        if FILTER_OUT_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                    else:
+                                        # print("READ DID NOT HAVE ALL CANNONICAL MODS: id={}".format(r.query_name))
+                                        if FILTER_FOR_M6A != "[]":
+                                            missing_cannonical_mods.append(r.query_name)
+                                        if FILTER_OUT_M6A != "[]":
+                                            read_indexes_to_process.append(i)
+                            else:
+                                read_indexes_to_process.append(i)
+                        else:
+                            read_outside_3p_end.append(r.query_name)
+                else:
+                    read_on_different_strand += 1
+
+            missing_from_fc = 0
+            no_poly_a = 0
+            poly_a_lengths = []
+            tts_sites = []
+
+            for i in read_indexes_to_process:
+                r = reads_in_region[i]
+                if FILTER_FOR_FEATURE_COUNTS and (r.qname not in gene_read_ids_fc):
+                    missing_from_fc += 1
+                    continue
+                else:
+                    if row['strand'] == "-":
+                        tts_sites.append(r.reference_start)
+                    else:
+                        tts_sites.append(r.reference_end)
+
+                    # if SINGLE_GENE_ANALYSIS:
+                    if r.has_tag('pt:i'):
+                        poly_a_length = r.get_tag('pt:i')
+                        poly_a_lengths.append(poly_a_length)
+                    else:
+                        # print("WARNING: {} does not have poly a tag".format(r.qname))
+                        no_poly_a += 1
+                        poly_a_lengths.append(0)
+
+
+            d_poly_a_lengths[label][row['ID']] = poly_a_lengths
+            d_tts[label][row['ID']] = tts_sites
+
+            d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
+            d_not_in_feature_counts[label][row['ID']] = missing_from_fc
+            # STOP_CLOCK("row_start", "stop")
+
+            # print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
+            print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), read_on_different_strand, missing_from_fc, len(read_outside_3p_end), len(missing_cannonical_mods)))
+
+
+        samfile.close()
+
+    return 
+
+if COMMAND == "m6A_specific_tes_analysis":
+    print("m6A_specific_tes_analysis...")
+
+    input_files = process_input_files()
+
+    gff = process_annotation_file()
+    target_features = filter_gff_for_target_features(gff)
+
+    bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
+    bam_labels_control = [l for l in bam_labels if input_files[l]['group'] == 'control']
+    bam_labels_treatment = [l for l in bam_labels if input_files[l]['group'] == 'knock-sideways']
+
+    canonical_mods = find_canonical_mods(
+        target_features, 
+        input_files, 
+        bam_labels, 
+        CANNONICAL_MOD_PROP_THRESHOLD, 
+        READ_DEPTH_THRESHOLD, 
+        COVERAGE_PADDING
+    )
+    print(canonical_mods)
+
+
+
 
 if COMMAND == "tes_analysis":
     # load annotation file
@@ -1300,7 +1622,7 @@ if COMMAND == "tes_analysis":
         if len(matches.df) == 0:
             evaluated_input = ast.literal_eval(feature_id)
             matches = ANNOTATION_FILE.get_feature_by_attribute("ID", evaluated_input)
-            print("Looking for {} IDs, found {} matches. TES analysis for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+            print("Looking for {} IDs, found {} matches: TES analysis for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
         else:
             print("Found {} matches for type {}. Calculating TES variance...".format(len(matches.df), feature_id))
 
