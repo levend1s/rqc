@@ -1362,196 +1362,120 @@ def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_thresh
 
     return cannonical_mods_start_pos
 
-def get_filtered_read_ids_gene():
+def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_threshold, read_depth_threshold, padding, cannonical_mods_start_pos):
     print("LOG - filtering reads...")
 
-def get_filtered_reads_ids():
-    print("LOG - filtering reads...")
+    print("" \
+    "label\t" \
+    "id\t" \
+    "filtered reads\t" \
+    "reads in region\t" \
+    "filtered (strand)\t" \
+    "filtered (fc)\t" \
+    "filtered (3p)\t")
+    
+    PYSAM_MOD_THRESHOLD = int(256 * mod_prop_threshold) 
 
-    print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
+    d_sample_filtered_read_ids = {}
 
     for label in bam_labels:
         samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
         
-        d_not_beyond_3p[label] = {}
-        d_not_in_feature_counts[label] = {}
-
         # attempt to find the relevent featureCounts file in input_files
-        feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
-        feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
-        feature_counts_df['targets'] = feature_counts_df['targets'].astype('category')
+        if FILTER_FOR_FEATURE_COUNTS:
+            feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
+            feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
+            feature_counts_df['targets'] = feature_counts_df['targets'].astype('category')
 
-        # TODO load cannonical mod positions into array and convert to tx space
-        prefix = label.split("_")[0]
-        mod_label = "{}_m6A_0.95".format(prefix)
+        d_sample_filtered_read_ids[label] = {}
 
         # generate coverage for all matches in this bam file
-        for row_index, row in matches.iterrows():
-            # find subfeatures
-            read_on_different_strand = 0
-            
-            gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
-            gene_read_ids_fc = set(gene_reads['read_id'])
-
+        for _, row in gff_panda_rows.iterrows():
             reads_in_region = samfile.fetch(
                 contig=row['seq_id'], 
-                start=row['start'] - COVERAGE_PADDING, 
-                stop=row['end'] + COVERAGE_PADDING
+                start=row['start'] - padding, 
+                stop=row['end'] + padding
             )
             reads_in_region = list(reads_in_region)
-
-            # make sure all cannonical mod locations exist, so add them as zero if not in bedmethyl
-            for mod in cannonical_mods_start_pos[row['ID']]:
-                d_mod_info[label][row['ID']]['valid_cov'][mod] = 0
-                d_mod_info[label][row['ID']]['num_mod'][mod] = 0
-
-            # !!!!! START NANOPORE SPECIFIC !!!!!
-            # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
-            row_subfeatures = getSubfeatures(row['ID'], "subfeature", 0)
 
             d_filtered_read_ids = {}
             d_filtered_read_ids['different_strand'] = []
             d_filtered_read_ids['3p'] = []
             d_filtered_read_ids['featureCounts'] = []
             d_filtered_read_ids['filtered_reads'] = []
-            for mod in cannonical_mods_start_pos[row['ID']]:
-                d_filtered_read_ids['filtered_reads'] = []
+            d_filtered_read_ids['tx_end_sites'] = {}
+
+            d_filtered_read_ids['mods'] = {}
+
+            d_filtered_read_ids['mods']['None'] = []
+            d_filtered_read_ids['tx_end_sites']['all'] = []
+            for mod in cannonical_mods_start_pos[row.ID]:
+                d_filtered_read_ids['mods'][mod] = []
+                d_filtered_read_ids['tx_end_sites'][mod] = []
 
 
 
-
-            read_indexes_to_process = []
-
-            missing_cannonical_mods = []
-            read_outside_3p_end = []
-
-            MOD_PROB_THRESHOLD = 0.95
-            pysam_mod_threshold = int(256 * MOD_PROB_THRESHOLD) 
-
-            # example: PF3D7_0709050.1
-            if len(row_subfeatures) == 0:
-                most_3p_subfeature = row
-            else:
-                if row['strand'] == "-":
-                    most_3p_subfeature = row_subfeatures.iloc[0]
-                else:
-                    most_3p_subfeature = row_subfeatures.iloc[-1]
+            if FILTER_FOR_FEATURE_COUNTS:
+                gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
+                gene_read_ids_fc = set(gene_reads['read_id'])
 
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
                 r = reads_in_region[i]
 
                 # keep only reads in the same direction as this strand
-                if (row['strand'] == "+" and r.is_forward) or (row['strand'] == "-" and r.is_reverse):
-                    if row['strand'] == "-":
-                        read_3p_end = r.reference_start
+                if (row.strand == "+" and r.is_forward) or (row.strand == "-" and r.is_reverse):
+                    if (row.strand == "-" and r.reference_start <= row.start) or (row.strand == "+" and r.reference_end >= row.start):
+                        # get mod sites for this read. this is [(read index, 256 * mod_prob)...]
+                        if FILTER_FOR_FEATURE_COUNTS and (r.qname not in gene_read_ids_fc):
+                            d_filtered_read_ids['featureCounts'].append(i)
+                        else:
+                            d_filtered_read_ids['filtered_reads'].append(i)
 
-                        if read_3p_end <= most_3p_subfeature.end:
-                            # read_indexes_to_process.append(this_index)
-
-                            if FILTER_READS_FOR_CANNONICAL_MODS:
-                                # this is [(read index, 256 * mod_prob)...]
+                            if row.strand == "-":
                                 mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev'])
-                                if mods_probs:
-                                    # keep only mod positions which are above mod prob threshold
-                                    ref_pos = numpy.array(r.get_reference_positions(full_length=True))
-                                    read_mod_positions = [x[0] for x in mods_probs if x[1] >= pysam_mod_threshold]
-                                    
-                                    # read mod positions is the position from the start of the read
-                                    # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
-                                    # print(ref_pos[read_mod_positions])
-                                    if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
-                                        # print("READ HAD ALL CANNONICAL MODS\n")
-                                        if FILTER_FOR_M6A != "[]":
-                                            read_indexes_to_process.append(i)
-                                        if FILTER_OUT_M6A != "[]":
-                                            missing_cannonical_mods.append(r.query_name)
-                                    else:
-                                        # print("READ DID NOT HAVE ALL CANNONICAL MODS: id={}".format(r.query_name))
-                                        if FILTER_FOR_M6A != "[]":
-                                            missing_cannonical_mods.append(r.query_name)
-                                        if FILTER_OUT_M6A != "[]":
-                                            read_indexes_to_process.append(i)
+                                tx_end_site = r.reference_start
                             else:
-                                read_indexes_to_process.append(i)
-                        else:
-                            read_outside_3p_end.append(r.query_name)
-
-                    else:
-                        read_3p_end = r.reference_end
-
-                        if read_3p_end >= most_3p_subfeature.start:
-                            # read_indexes_to_process.append(this_index)
-                            if FILTER_READS_FOR_CANNONICAL_MODS:
-                                # this is [(read index, 256 * mod_prob)...]
                                 mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_for'])
-                                if mods_probs:
-                                    # keep only mod positions which are above mod prob threshold
-                                    ref_pos = numpy.array(r.get_reference_positions(full_length=True))
-                                    read_mod_positions = [x[0] for x in mods_probs if x[1] >= pysam_mod_threshold]
-                                    
-                                    # read mod positions is the position from the start of the read
-                                    # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
-                                    # print(ref_pos[read_mod_positions])
-                                    if set(cannonical_mods_genome_space_filter).issubset(ref_pos[read_mod_positions]):
-                                        # print("READ HAD ALL CANNONICAL MODS\n")
-                                        if FILTER_FOR_M6A != "[]":
-                                            read_indexes_to_process.append(i)
-                                        if FILTER_OUT_M6A != "[]":
-                                            missing_cannonical_mods.append(r.query_name)
-                                    else:
-                                        # print("READ DID NOT HAVE ALL CANNONICAL MODS: id={}".format(r.query_name))
-                                        if FILTER_FOR_M6A != "[]":
-                                            missing_cannonical_mods.append(r.query_name)
-                                        if FILTER_OUT_M6A != "[]":
-                                            read_indexes_to_process.append(i)
-                            else:
-                                read_indexes_to_process.append(i)
-                        else:
-                            read_outside_3p_end.append(r.query_name)
-                else:
-                    read_on_different_strand += 1
+                                tx_end_site = r.reference_end
 
-            missing_from_fc = 0
-            no_poly_a = 0
-            poly_a_lengths = []
-            tts_sites = []
+                            d_filtered_read_ids['tx_end_sites']['all'].append(tx_end_site)
 
-            for i in read_indexes_to_process:
-                r = reads_in_region[i]
-                if FILTER_FOR_FEATURE_COUNTS and (r.qname not in gene_read_ids_fc):
-                    missing_from_fc += 1
-                    continue
-                else:
-                    if row['strand'] == "-":
-                        tts_sites.append(r.reference_start)
+                            if mods_probs:
+                                # keep only mod positions which are above mod prob threshold
+                                ref_pos = numpy.array(r.get_reference_positions(full_length=True))
+                                read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
+                                
+                                # read mod positions is the position from the start of the read
+                                # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
+                                canonical_mods_in_read = set(cannonical_mods_start_pos[row.ID]).intersection(ref_pos[read_mod_positions])
+                                if len(canonical_mods_in_read) == 0:
+                                    d_filtered_read_ids['mods']['None'].append(i)
+                                    d_filtered_read_ids['tx_end_sites']['all'].append(tx_end_site)
+                                else:
+                                    for mod in canonical_mods_in_read:
+                                        d_filtered_read_ids['mods'][mod].append(i)
+                                        d_filtered_read_ids['tx_end_sites'][mod].append(tx_end_site)
                     else:
-                        tts_sites.append(r.reference_end)
+                        d_filtered_read_ids['3p'].append(i)
+                else:
+                    d_filtered_read_ids['different_strand'].append(i)
 
-                    # if SINGLE_GENE_ANALYSIS:
-                    if r.has_tag('pt:i'):
-                        poly_a_length = r.get_tag('pt:i')
-                        poly_a_lengths.append(poly_a_length)
-                    else:
-                        # print("WARNING: {} does not have poly a tag".format(r.qname))
-                        no_poly_a += 1
-                        poly_a_lengths.append(0)
-
-
-            d_poly_a_lengths[label][row['ID']] = poly_a_lengths
-            d_tts[label][row['ID']] = tts_sites
-
-            d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
-            d_not_in_feature_counts[label][row['ID']] = missing_from_fc
-            # STOP_CLOCK("row_start", "stop")
-
-            # print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
-            print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), read_on_different_strand, missing_from_fc, len(read_outside_3p_end), len(missing_cannonical_mods)))
-
-
+            print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
+                label, 
+                row.ID, 
+                len(d_filtered_read_ids['filtered_reads']), 
+                len(reads_in_region), 
+                len(d_filtered_read_ids['different_strand']), 
+                len(d_filtered_read_ids['featureCounts']), 
+                len(d_filtered_read_ids['3p'])
+                ))
+            
+            d_sample_filtered_read_ids[label][row.ID] = d_filtered_read_ids
+            
         samfile.close()
 
-    return 
+    return d_sample_filtered_read_ids
 
 if COMMAND == "m6A_specific_tes_analysis":
     print("m6A_specific_tes_analysis...")
@@ -1573,8 +1497,117 @@ if COMMAND == "m6A_specific_tes_analysis":
         READ_DEPTH_THRESHOLD, 
         COVERAGE_PADDING
     )
-    print(canonical_mods)
 
+    filtered_read_ids = get_filtered_reads_ids(
+        target_features, 
+        input_files,
+        bam_labels, 
+        CANNONICAL_MOD_PROP_THRESHOLD,
+        READ_DEPTH_THRESHOLD,
+        COVERAGE_PADDING,
+        canonical_mods
+    )
+
+    # TODO: make more readable, refactor
+    for _, row in target_features.iterrows():
+        # create hist / kde for all tes, and separate ones for reads containing each mod
+        min_tes = 0
+        max_tes = 0
+        max_hist_count_tes = 0
+        max_density = 0
+        d_tes_hist = {}
+        d_kdes = {}
+
+        for label in bam_labels:
+            d_tes_hist[label] = {}
+            for key, tx_end_sites in filtered_read_ids[label][row.ID]['tx_end_sites'].items():
+
+                if min_tes > min(tx_end_sites) or min_tes == 0:
+                    min_tes = min(tx_end_sites)
+
+                if max_tes < max(tx_end_sites):
+                    max_tes = max(tx_end_sites)
+
+                # calculate hists
+                unique_tes = set(tx_end_sites)
+                tes_hist = [(tx_end_sites.count(i), i) for i in unique_tes]
+
+                # split the tuple cause here we're interested in the biggest count in the hist
+                e0 = [e[0] for e in tes_hist]
+                if max_hist_count_tes < max(e0):
+                    max_hist_count_tes = max(e0)
+
+                d_tes_hist[label][key] = tes_hist
+
+        x_ticks = range(min_tes, max_tes)
+
+        for label in bam_labels:
+            # generate dennsity plots
+            print("{} - Generating transcript end site density information...".format(row.ID))
+            d_kdes[label] = {}
+            
+            for key, tx_end_sites in filtered_read_ids[label][row.ID]['tx_end_sites'].items():
+                
+                kernel = scipy.stats.gaussian_kde(tx_end_sites)
+                smoothed_tes_hist = kernel(x_ticks)
+                d_kdes[label][key] = smoothed_tes_hist
+
+                if max_density < max(smoothed_tes_hist):
+                    max_density = max(smoothed_tes_hist)
+
+        if row.strand == "-":
+            row_annotation_3p_end = row.start
+        else:
+            row_annotation_3p_end = row.end
+
+
+        NUM_VERT_PLOTS = 1 + len(filtered_read_ids[label][row.ID]['tx_end_sites'].keys())
+        fig, axes = plt.subplots(NUM_VERT_PLOTS, len(bam_labels))
+        axes_index = 0
+        for label in bam_labels:
+            # NOTE: is this needed?
+            sorted_tes_counts_by_pos = sorted(d_tes_hist[label]['all'], key=lambda a: a[1])
+            d_tes_hist_y = [e[0] for e in sorted_tes_counts_by_pos]
+            d_tes_hist_x = [e[1] for e in sorted_tes_counts_by_pos]
+
+            axes[0, axes_index].plot(d_tes_hist_x, d_tes_hist_y)
+            axes[0, axes_index].set_ylim(ymin=0, ymax=max_hist_count_tes*1.1)
+            axes[0, axes_index].set_xlim(xmin=x_ticks[0], xmax=x_ticks[-1])
+            axes[0, axes_index].get_xaxis().set_visible(False)
+
+            subplot_idx = 1
+            for key, kde in d_kdes[label].items():
+                axes[subplot_idx, axes_index].plot(x_ticks, kde, label=key)
+                axes[subplot_idx, axes_index].set_ylim(ymin=0, ymax=max_density*1.1)
+                axes[subplot_idx, axes_index].set_xlim(xmin=x_ticks[0], xmax=x_ticks[-1])
+                axes[subplot_idx, axes_index].set(xlabel='transcription end site (nt)')
+                axes[subplot_idx, axes_index].legend()
+
+                subplot_idx += 1
+
+            # PLOT GENE END AS VERT LINE
+            axes[0, axes_index].axvline(x=row_annotation_3p_end, color='darkgray', ls="--", linewidth=1.0)
+            axes[1, axes_index].axvline(x=row_annotation_3p_end, color='darkgray', ls="--", linewidth=1.0)
+
+                # # PLOT MOD LOCATION AS VERT LINES
+            for mod_location in canonical_mods[row.ID]:
+                axes[0, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+                axes[1, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+
+            # add axis labels
+            if axes_index == 0:
+                axes[0, axes_index].set(ylabel='count')
+                axes[1, axes_index].set(xlabel='transcription end site (nt)', ylabel='density (au)')
+            else:
+                axes[0, axes_index].get_yaxis().set_visible(False)
+                axes[1, axes_index].get_yaxis().set_visible(False)
+                
+
+            axes_index += 1
+
+        fig.subplots_adjust(hspace=0, wspace=0.1)
+        plt.legend(loc="upper right")
+        plt.show()
 
 
 
