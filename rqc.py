@@ -801,7 +801,6 @@ if COMMAND == "gene_neighbour_analysis":
     plt.bar(*zip(*d_neighbour_types_counts.items()))
     plt.show()
 
-
 if COMMAND == "find_gene_neighbours":
     type = INPUT[0]
 
@@ -855,7 +854,6 @@ if COMMAND == "find_gene_neighbours":
     TES_SUMMARY_PATH = "./gene_neighbours.tsv"
     print(neighbours_df)
     neighbours_df.to_csv(TES_SUMMARY_PATH, sep='\t', index=False)
-
 
 if COMMAND == "search":
     print("searching...")
@@ -1018,7 +1016,7 @@ if COMMAND == "plot_tes_vs_wam":
 
 
     tes_file_df['minus_log10_p_inter_treatment'] = (numpy.log10(tes_file_df['p_inter_treatment']) * -1)
-    tes_file_df['log10_average_expression'] = (numpy.log10(tes_file_df['average_expression']))
+    tes_file_df['log2_average_expression'] = (numpy.log2(tes_file_df['average_expression']))
     tes_file_df['-log2_wam_change'] = (numpy.log2(tes_file_df['wam_change']) * -1)
     tes_file_df['log2_wart_change'] = numpy.log2(tes_file_df['wart_change'])
 
@@ -1029,8 +1027,36 @@ if COMMAND == "plot_tes_vs_wam":
     # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
     # drop all genes where wam_change == 0
     p_same_treatment_cutoff = 0.05
+    MIN_GAP_BETWEEN_M6A = 1
 
-    tes_file_df["num_cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
+    num_canonical_mods = []
+    for _, row in tes_file_df.iterrows():
+        canonical_mods = sorted([int(s) for s in ast.literal_eval(row['cannonical_mods'])])
+        this_num_canonical_mods = len(canonical_mods)
+
+        if this_num_canonical_mods == 1:
+            num_canonical_mods.append(this_num_canonical_mods)
+        else:
+            mod_distances = []
+            prev = 0
+            for x in canonical_mods:
+                if prev == 0:
+                    prev = x
+                else:
+                    mod_distances.append(x - prev)
+                    prev = x
+
+            mod_distances = [x for x in mod_distances if x > MIN_GAP_BETWEEN_M6A]
+
+            num_canonical_mods.append(len(mod_distances) + 1)
+
+            if this_num_canonical_mods > 1 and len(mod_distances) != this_num_canonical_mods - 1:
+                print(canonical_mods)
+                print(mod_distances)
+                print("NOTE: {} had {} m6As that were too close (<={}nt), ...".format(row['gene_id'], this_num_canonical_mods - len(mod_distances), MIN_GAP_BETWEEN_M6A))
+
+    tes_file_df["num_cannonical_mods"] = num_canonical_mods
+
     filtered_genes_tes_wam = tes_file_df[
         # (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
         (tes_file_df.num_cannonical_mods > 0) & 
@@ -1059,7 +1085,7 @@ if COMMAND == "plot_tes_vs_wam":
             axes = filtered_genes_tes_wam_mods.plot.scatter(
                 x='wam_diff',
                 y='tes_diff',
-                c='minus_log10_p_inter_treatment'
+                c='log2_average_expression'
             )
 
             m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam_mods[x_col], filtered_genes_tes_wam_mods[y_col])
@@ -1079,7 +1105,7 @@ if COMMAND == "plot_tes_vs_wam":
         axes = filtered_genes_tes_wam.plot.scatter(
             x='wam_diff',
             y='tes_diff',
-            c='log10_average_expression',
+            c='log2_average_expression',
             s=2
         )
         m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
@@ -1309,9 +1335,9 @@ def filter_gff_for_target_features(annotation_file):
         if len(matches.df) == 0:
             evaluated_input = ast.literal_eval(feature_id)
             matches = annotation_file.get_feature_by_attribute("ID", evaluated_input)
-            print("Looking for {} IDs, found {} matches: {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+            print("LOG - Looking for {} IDs, found {} matches: {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
         else:
-            print("Found {} matches for type {}...".format(len(matches.df), feature_id))
+            print("LOG - Found {} matches for type {}...".format(len(matches.df), feature_id))
 
     matches = matches.attributes_to_columns()
 
@@ -1362,7 +1388,168 @@ def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_thresh
 
     return cannonical_mods_start_pos
 
-def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_threshold, read_depth_threshold, padding, cannonical_mods_start_pos):
+def approximate_tes(gff_panda_rows, input_files, bam_labels):
+    d_approximated_tes = {}
+
+    for _, row in gff_panda_rows.iterrows():
+        d_tes_vs_prop = {}
+        d_readthrough_split_points = {}
+        d_fitted_curve_r_squared = {}
+        d_fitted_curve_coeff = {}
+
+        # calculate readthrough proportions for each sample
+        print("LOG - {} - approximating transcript end site...".format(row.ID))
+
+        for label in bam_labels:
+            samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
+
+            reads_in_region = samfile.fetch(
+                contig=row.seq_id,
+                start=row.start, 
+                stop=row.end
+            )
+
+            reads_in_region = list(reads_in_region)
+
+            samfile.close()
+
+            tes = []
+
+            for i in range(len(reads_in_region)):
+                r = reads_in_region[i]
+
+                # keep only reads in the same direction as this strand
+                if (row.strand == "+" and r.is_forward) or (row.strand == "-" and r.is_reverse):
+                    # if (row.strand == "-" and r.reference_start <= row.start) or (row.strand == "+" and r.reference_end >= row.end):
+                    if row.strand == "-":
+                        tes.append(r.reference_start)
+                    else:
+                        tes.append(r.reference_end)
+
+            d_tes_vs_prop[label] = []
+
+            for p in tes:
+                if row['strand'] == "-":
+                    num_read_throughs = len([x for x in tes if x < p])
+                    num_normal = len([x for x in tes if x >= p])
+                else:
+                    num_read_throughs = len([x for x in tes if x > p])
+                    num_normal = len([x for x in tes if x <= p])
+                
+                rt_prop = num_read_throughs / num_normal
+
+                # only keep this if there are fewer readthroughs than normals
+                # NOTE this assumption doesn't work if there is one clean cut site for all reads
+                # or the majority of reads
+                if rt_prop < 1:
+                    d_tes_vs_prop[label].append((p, rt_prop))
+
+            # if we couldn't add any TES which had fewer readthroughs than normals
+            # Then this must be a clean cut gene... The final TES must be the splitpoint
+            if len(d_tes_vs_prop[label]) == 1:
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                d_fitted_curve_coeff[label] = numpy.inf
+                # TODO add type info to reporting dict
+                continue
+
+            # sort by genomic position
+            sorted_tes_prop = sorted(d_tes_vs_prop[label], key=lambda a: a[0], reverse=False)
+            pos = [x[0] for x in sorted_tes_prop]
+            prop = [x[1] for x in sorted_tes_prop]
+
+            # fit curve to TES data that will be used to to find the kneedle of the curve
+            # data will have bumps and many false knees/elbows that we want to smooth out
+            # so the kneedle function finds the correct knee
+
+            # interpolate points between the few points we have so we can better approximate a
+            # curve that fits our data
+            pos_normalised = normalise_numpy_array(numpy.array(pos))
+            x_interp = numpy.linspace(0, 1, 100)
+            pos_y_interp = scipy.interpolate.interp1d(pos_normalised, prop)
+            prop_normalised_interpolated = [pos_y_interp(x) for x in x_interp]
+
+            # if strand is positive direction in kneedle function are reversed
+            if row['strand'] == "-":
+                elbow_direction = "increasing"
+                initial_guess = [1, 0.1, 0]
+            else:
+                elbow_direction = "decreasing"
+                initial_guess = [-1, 0.1, 1]
+
+            # len(prop) < 100
+            abc, _ = scipy.optimize.curve_fit(
+                power_func,
+                x_interp,
+                prop_normalised_interpolated,
+                p0=initial_guess,
+                maxfev=5000
+            )
+
+            y_fitted = power_func(x_interp, *abc)
+            if DEBUG:
+                print(abc)
+                plt.scatter(x_interp, prop_normalised_interpolated)
+                plt.scatter(x_interp, y_fitted)
+                plt.show()
+            # calculate R^2
+            # https://stackoverflow.com/questions/19189362/getting-the-r-squared-value-using-curve-fit
+            residuals = prop_normalised_interpolated - power_func(x_interp, *abc)
+            residual_sum_squares = numpy.sum(residuals ** 2)
+            total_sum_squares = numpy.sum((prop_normalised_interpolated - numpy.mean(prop_normalised_interpolated)) ** 2)
+            r_squared = 1 - (residual_sum_squares / total_sum_squares)
+
+            if DEBUG:
+                print("r_squared: {}".format(r_squared))
+
+            fitted_curve_coeff = abc[1]
+            d_fitted_curve_coeff[label] = fitted_curve_coeff
+
+            # if we estimated a concave curve, take the final TES as end site
+            if fitted_curve_coeff <= 1 and row['strand'] == "-":
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                continue
+
+            if fitted_curve_coeff >= 1 and row['strand'] == "+":
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][-1][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                continue
+
+            # as the genomic position increases, the splitpoint readthrough proportion gets bigger
+            kneedle = KneeLocator(x_interp, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
+
+            # convert normalised elbow point back to genomic space
+            if kneedle.knee:
+                normalised_elbow_pos = kneedle.knee
+            else:
+                print("WARNING: {} - couldn't determine knee, setting as max TES".format(row['ID']))
+                if row['strand'] == "-":
+                    normalised_elbow_pos = 0
+                else:
+                    normalised_elbow_pos = 1
+
+            genomic_elbow_pos = pos[0] + ((max(pos) - min(pos)) * normalised_elbow_pos)
+            d_readthrough_split_points[label] = genomic_elbow_pos
+            d_fitted_curve_r_squared[label] = r_squared
+
+        if DEBUG:
+            print("{} - readthrough_split_points: {}".format(row['ID'], d_readthrough_split_points))
+
+        # take the average of the control readthrough splitpoints and r^2
+        readthrough_split_point = 0
+        # average_r_squared = 0
+        for label in bam_labels_control:
+            readthrough_split_point += d_readthrough_split_points[label]
+            # average_r_squared += d_fitted_curve_r_squared[label]
+
+        readthrough_split_point = int(readthrough_split_point / len(bam_labels_control))
+        d_approximated_tes[row.ID] = readthrough_split_point
+
+
+    return d_approximated_tes
+
+def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_threshold, read_depth_threshold, padding, cannonical_mods_start_pos, approximated_tes = None):
     print("LOG - filtering reads...")
 
     print("" \
@@ -1398,6 +1585,8 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
             )
             reads_in_region = list(reads_in_region)
 
+            samfile.close()
+
             d_filtered_read_ids = {}
             d_filtered_read_ids['different_strand'] = []
             d_filtered_read_ids['3p'] = []
@@ -1409,15 +1598,26 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
 
             d_filtered_read_ids['mods']['None'] = []
             d_filtered_read_ids['tx_end_sites']['all'] = []
+            d_filtered_read_ids['tx_end_sites']['None'] = []
+
             for mod in cannonical_mods_start_pos[row.ID]:
                 d_filtered_read_ids['mods'][mod] = []
                 d_filtered_read_ids['tx_end_sites'][mod] = []
 
-
-
             if FILTER_FOR_FEATURE_COUNTS:
                 gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
                 gene_read_ids_fc = set(gene_reads['read_id'])
+
+            if approximated_tes:
+                gene_3p_end = approximated_tes[row.ID]
+                print("LOG - using approximated tes {}".format(gene_3p_end))
+            else:
+                if row.strand == "-":
+                    gene_3p_end = row.start
+                    gene_5p_end = row.end
+                else:
+                    gene_3p_end = row.end
+                    gene_5p_end = row.start
 
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
@@ -1425,7 +1625,10 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
 
                 # keep only reads in the same direction as this strand
                 if (row.strand == "+" and r.is_forward) or (row.strand == "-" and r.is_reverse):
-                    if (row.strand == "-" and r.reference_start <= row.start) or (row.strand == "+" and r.reference_end >= row.start):
+                    if (row.strand == "-" and r.reference_start <= gene_3p_end and r.reference_end >= gene_3p_end) \
+                    or (row.strand == "+" and r.reference_end >= gene_3p_end and r.reference_start <= gene_3p_end) \
+                    or (row.strand == "-" and r.reference_start >= gene_3p_end and r.reference_end <= gene_5p_end) \
+                    or (row.strand == "+" and r.reference_end <= gene_3p_end and r.reference_start >= gene_5p_end):
                         # get mod sites for this read. this is [(read index, 256 * mod_prob)...]
                         if FILTER_FOR_FEATURE_COUNTS and (r.qname not in gene_read_ids_fc):
                             d_filtered_read_ids['featureCounts'].append(i)
@@ -1447,11 +1650,11 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                                 read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
                                 
                                 # read mod positions is the position from the start of the read
-                                # aligned reads mayu contain indels, so we need to get reference index from get_reference_positions
+                                # aligned reads may contain indels, so we need to get reference index from get_reference_positions
                                 canonical_mods_in_read = set(cannonical_mods_start_pos[row.ID]).intersection(ref_pos[read_mod_positions])
                                 if len(canonical_mods_in_read) == 0:
                                     d_filtered_read_ids['mods']['None'].append(i)
-                                    d_filtered_read_ids['tx_end_sites']['all'].append(tx_end_site)
+                                    d_filtered_read_ids['tx_end_sites']['None'].append(tx_end_site)
                                 else:
                                     for mod in canonical_mods_in_read:
                                         d_filtered_read_ids['mods'][mod].append(i)
@@ -1472,8 +1675,6 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                 ))
             
             d_sample_filtered_read_ids[label][row.ID] = d_filtered_read_ids
-            
-        samfile.close()
 
     return d_sample_filtered_read_ids
 
@@ -1497,16 +1698,26 @@ if COMMAND == "m6A_specific_tes_analysis":
         READ_DEPTH_THRESHOLD, 
         COVERAGE_PADDING
     )
+    print(canonical_mods)
+
+    # approximated_tes = approximate_tes(target_features, input_files, bam_labels)
+    approximated_tes = None
 
     filtered_read_ids = get_filtered_reads_ids(
         target_features, 
         input_files,
         bam_labels, 
-        CANNONICAL_MOD_PROP_THRESHOLD,
+        0.95,
         READ_DEPTH_THRESHOLD,
         COVERAGE_PADDING,
         canonical_mods
+        # approximated_tes = approximated_tes
     )
+
+    # HACK manually remove total coverage for all mods
+    for _, row in target_features.iterrows():
+        for label in bam_labels:
+            filtered_read_ids[label][row.ID]['tx_end_sites'].pop('None', None)
 
     # TODO: make more readable, refactor
     for _, row in target_features.iterrows():
@@ -1530,16 +1741,24 @@ if COMMAND == "m6A_specific_tes_analysis":
 
                 # calculate hists
                 unique_tes = set(tx_end_sites)
-                tes_hist = [(tx_end_sites.count(i), i) for i in unique_tes]
+                tes_hist = [(i, tx_end_sites.count(i)) for i in unique_tes]
 
                 # split the tuple cause here we're interested in the biggest count in the hist
-                e0 = [e[0] for e in tes_hist]
-                if max_hist_count_tes < max(e0):
-                    max_hist_count_tes = max(e0)
+                e1 = [e[1] for e in tes_hist]
+                if max_hist_count_tes < max(e1):
+                    max_hist_count_tes = max(e1)
 
                 d_tes_hist[label][key] = tes_hist
 
-        x_ticks = range(min_tes, max_tes)
+        min_x = min_tes
+        max_x = max_tes
+        if min(canonical_mods[row.ID]) < min_x:
+            min_x = min(canonical_mods[row.ID])
+        if max(canonical_mods[row.ID]) > max_x:
+            max_x = min(canonical_mods[row.ID])
+
+        x_width = max_x - min_x
+        x_ticks = range(min_x - int(x_width * 0.1), max_x + int(x_width * 0.1))
 
         for label in bam_labels:
             # generate dennsity plots
@@ -1548,7 +1767,7 @@ if COMMAND == "m6A_specific_tes_analysis":
             
             for key, tx_end_sites in filtered_read_ids[label][row.ID]['tx_end_sites'].items():
                 
-                kernel = scipy.stats.gaussian_kde(tx_end_sites)
+                kernel = scipy.stats.gaussian_kde(tx_end_sites, bw_method=0.3)
                 smoothed_tes_hist = kernel(x_ticks)
                 d_kdes[label][key] = smoothed_tes_hist
 
@@ -1560,53 +1779,96 @@ if COMMAND == "m6A_specific_tes_analysis":
         else:
             row_annotation_3p_end = row.end
 
+        # assign mod colours to mod locations
+        d_mod_colours = {
+            'all': 'lightsteelblue',
+            'None': 'black'
+        }
+        mod_colours = ['green', 'orange', 'olive', 'cyan']
+        for mod_location in canonical_mods[row.ID]:
+            d_mod_colours[mod_location] = mod_colours.pop(0)
+
 
         NUM_VERT_PLOTS = 1 + len(filtered_read_ids[label][row.ID]['tx_end_sites'].keys())
-        fig, axes = plt.subplots(NUM_VERT_PLOTS, len(bam_labels))
+        # HISTS
+        fig, axes = plt.subplots(len(bam_labels), sharex=True, sharey=True)
         axes_index = 0
         for label in bam_labels:
-            # NOTE: is this needed?
-            sorted_tes_counts_by_pos = sorted(d_tes_hist[label]['all'], key=lambda a: a[1])
-            d_tes_hist_y = [e[0] for e in sorted_tes_counts_by_pos]
-            d_tes_hist_x = [e[1] for e in sorted_tes_counts_by_pos]
+            if len(bam_labels) == 1:
+                this_axes = axes
+            else:
+                this_axes = axes[axes_index]
 
-            axes[0, axes_index].plot(d_tes_hist_x, d_tes_hist_y)
-            axes[0, axes_index].set_ylim(ymin=0, ymax=max_hist_count_tes*1.1)
-            axes[0, axes_index].set_xlim(xmin=x_ticks[0], xmax=x_ticks[-1])
-            axes[0, axes_index].get_xaxis().set_visible(False)
+            for key, hist in d_tes_hist[label].items():
+                l = "{}, n={}".format(key, len(filtered_read_ids[label][row.ID]['tx_end_sites'][key]))
+                sorted_tes_counts_by_pos = sorted(hist, key=lambda a: a[0])
+                x_coords, y_coords = zip(*sorted_tes_counts_by_pos)
+                # add y=0
+                y_coords_w_0 = []
+                for x in x_ticks:
+                    try:
+                        idx = x_coords.index(x)
+                        y_coords_w_0.append(y_coords[idx])
+                    except ValueError:
+                        y_coords_w_0.append(0)
 
-            subplot_idx = 1
-            for key, kde in d_kdes[label].items():
-                axes[subplot_idx, axes_index].plot(x_ticks, kde, label=key)
-                axes[subplot_idx, axes_index].set_ylim(ymin=0, ymax=max_density*1.1)
-                axes[subplot_idx, axes_index].set_xlim(xmin=x_ticks[0], xmax=x_ticks[-1])
-                axes[subplot_idx, axes_index].set(xlabel='transcription end site (nt)')
-                axes[subplot_idx, axes_index].legend()
+                this_axes.plot(x_ticks, y_coords_w_0, label=l, color=d_mod_colours[key])
+                this_axes.fill_between(x_ticks, y_coords_w_0, alpha=0.2, color=d_mod_colours[key])
 
-                subplot_idx += 1
+            this_axes.set_ylim(ymin=0, ymax=max_hist_count_tes*1.1)
+            this_axes.set_xlim(xmin=x_ticks[0], xmax=x_ticks[-1])
+            this_axes.legend()
+
+            # PLOT APPROXIMATED TES AS VERT LINE
+            if approximated_tes:
+                this_axes.axvline(x=approximated_tes[row.ID], color='darkgray', ls=":", linewidth=1.0)
 
             # PLOT GENE END AS VERT LINE
-            axes[0, axes_index].axvline(x=row_annotation_3p_end, color='darkgray', ls="--", linewidth=1.0)
-            axes[1, axes_index].axvline(x=row_annotation_3p_end, color='darkgray', ls="--", linewidth=1.0)
+            this_axes.axvline(x=row_annotation_3p_end, color='darkgray', ls="--", linewidth=1.0)
 
-                # # PLOT MOD LOCATION AS VERT LINES
+            # # PLOT MOD LOCATION AS VERT LINES
             for mod_location in canonical_mods[row.ID]:
-                axes[0, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
-                axes[1, axes_index].axvline(x= mod_location, color='red', ls="--", linewidth=1.0)
+                this_axes.axvline(x=mod_location, color=d_mod_colours[mod_location], ls="--", linewidth=1.0)
 
             # add axis labels
-            if axes_index == 0:
-                axes[0, axes_index].set(ylabel='count')
-                axes[1, axes_index].set(xlabel='transcription end site (nt)', ylabel='density (au)')
-            else:
-                axes[0, axes_index].get_yaxis().set_visible(False)
-                axes[1, axes_index].get_yaxis().set_visible(False)
+            sample_name = label.split('_')[0]
+            this_axes.set(xlabel='transcription end site (nt)', ylabel='{} - count'.format(sample_name))
                 
-
             axes_index += 1
 
+        fig.tight_layout()
+        # fig.suptitle("transcript end sites filtered for reads containing a cm6A")
         fig.subplots_adjust(hspace=0, wspace=0.1)
-        plt.legend(loc="upper right")
+
+        # KDEs
+        # fig, axes = plt.subplots(len(bam_labels), sharex=True, sharey=True)
+        # axes_index = 0
+        # for label in bam_labels:
+        #     for key, kde in d_kdes[label].items():
+        #         l = "{}, n={}".format(key, len(d_tes_hist[label][key]))
+        #         axes[axes_index].plot(x_ticks, kde, label=l, color=d_mod_colours[key])
+        #         axes[axes_index].fill_between(x_ticks, kde, alpha=0.2, color=d_mod_colours[key])
+
+        #     axes[axes_index].set_ylim(ymin=0, ymax=max_density*1.1)
+        #     axes[axes_index].set_xlim(xmin=x_ticks[0], xmax=x_ticks[-1])
+        #     axes[axes_index].legend()
+
+        #     # PLOT GENE END AS VERT LINE
+        #     axes[axes_index].axvline(x=row_annotation_3p_end, color='darkgray', ls="--", linewidth=1.0)
+
+        #     # # PLOT MOD LOCATION AS VERT LINES
+        #     for mod_location in canonical_mods[row.ID]:
+        #         axes[axes_index].axvline(x= mod_location, color=d_mod_colours[mod_location], ls="--", linewidth=1.0)
+
+        #     # add axis labels
+        #     sample_name = label.split('_')[0]
+        #     axes[axes_index].set(xlabel='transcription end site (nt)', ylabel='density (au) ({})'.format(sample_name))
+                
+        #     axes_index += 1
+
+        # fig.tight_layout()
+        # # fig.suptitle("transcript end sites filtered for reads containing a cm6A")
+        # fig.subplots_adjust(hspace=0, wspace=0.1)
         plt.show()
 
 
