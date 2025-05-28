@@ -37,6 +37,7 @@ parser.add_argument('-v', '--verbose', type=bool, default=False)
 parser.add_argument('-o', '--outfile', type=str)
 parser.add_argument('-f', '--feature', type=str)
 parser.add_argument('-a', '--annotation_file', type=str)
+parser.add_argument('-g', '--genome', type=str)
 parser.add_argument('--coverage_type', type=str, default = "gene")
 parser.add_argument('--coverage_padding', type=int, default = 0)
 parser.add_argument('--coverage_bins', type=int, default = 100)
@@ -60,6 +61,8 @@ parser.add_argument('--filter_for_feature_counts', type=bool, default=False)
 parser.add_argument('--filter_by_neighbour_type', type=str, default="all")
 parser.add_argument('--split_by_canonical_mods', type=bool, default=False)
 parser.add_argument('--num_canonical_mods_filter', type=int, default=0)
+parser.add_argument('--feature_filter', type=str, default=None)
+
 
 # find neighbors
 parser.add_argument('--type', type=str, default="TES")
@@ -80,6 +83,7 @@ REVERSE_SEARCH = args.reverse_search
 SORT_BY = args.sort_by
 FEATURE = args.feature
 ANNOTATION_FILE_PATH= args.annotation_file
+GENOME_FILE_PATH= args.genome
 COVERAGE_TYPE= args.coverage_type
 COVERAGE_PADDING=args.coverage_padding
 COVERAGE_BINS=args.coverage_bins
@@ -101,6 +105,7 @@ REFERENCE_POINT = args.reference_point
 FILTER_FOR_FEATURE_COUNTS = args.filter_for_feature_counts
 FILTER_BY_NEIGHBOUR_TYPE = args.filter_by_neighbour_type
 NUM_CANONICAL_MODS_FILTER = args.num_canonical_mods_filter
+FEATURE_FILTER = args.feature_filter
 
 
 
@@ -679,610 +684,6 @@ def STOP_CLOCK(name, stop_name):
     diff = clock_stop - CLOCKS[name]
     print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
 
-# ------------------- COMMANDS -------------------  #
-# ------------------- COMMANDS -------------------  #
-# ------------------- COMMANDS -------------------  #
-
-if COMMAND == "gene_neighbour_analysis":
-    gene_neighbour_tsv_file_path = INPUT[0]
-    print("LOADING: {}".format(gene_neighbour_tsv_file_path))
-    gene_neighbour_df = pandas.read_csv(gene_neighbour_tsv_file_path, sep='\t')
-    gene_neighbour_df['ID'] = gene_neighbour_df['ID'].astype('category')
-    gene_neighbour_df['type'] = gene_neighbour_df['type'].astype('category')
-    gene_neighbour_df['seq_id'] = gene_neighbour_df['seq_id'].astype('category')
-    gene_neighbour_df['strand'] = gene_neighbour_df['strand'].astype('category')
-
-    gene_neighbour_df["neighbours"] = gene_neighbour_df.neighbours.apply(lambda s: ast.literal_eval(s))
-
-    print("gene_neighbour_df size: {}".format(len(gene_neighbour_df)))
-
-    all_neighbour_pairs = []
-    lonely_genes = []
-
-    # returns true if a is greater than b and less than c
-    def is_between(a, b, c):
-        if (a >= b) and (a <= c):
-            return True
-        else:
-            return False 
-
-    for a_idx, a in gene_neighbour_df.iterrows():
-        if len(a['neighbours']) == 0:
-            lonely_genes.append(a.ID)
-
-        else:
-            for b_id in a['neighbours']:
-
-                smaller = min(a.ID, b_id)
-                bigger = max(a.ID, b_id)
-
-                all_neighbour_pairs.append((smaller, bigger))
-
-    unique_neighbour_pairs = set(all_neighbour_pairs)
-
-    d_neighbour_types = {}
-    d_neighbour_types['co_directional'] = []
-    d_neighbour_types['embedded_antiparallel'] = []
-    d_neighbour_types['divergent'] = []
-    d_neighbour_types['convergent'] = []
-    d_neighbour_types['warning'] = []
-    d_neighbour_types['embedded_co_directional'] = []
-    d_neighbour_types['lonely'] = lonely_genes
-
-    for pair in unique_neighbour_pairs:
-        print(pair)
-        a = gene_neighbour_df[gene_neighbour_df['ID'] == pair[0]].iloc[0]
-        b = gene_neighbour_df[gene_neighbour_df['ID'] == pair[1]].iloc[0]
-
-        if a.strand == "+":
-            a_5p_pos = a.start
-            a_3p_pos = a.end
-        else:
-            a_5p_pos = a.end
-            a_3p_pos = a.start
-
-        if b.strand == "+":
-            b_5p_pos = b.start
-            b_3p_pos = b.end
-        else:
-            b_5p_pos = b.end
-            b_3p_pos = b.start
-
-        # parallel / co-directional
-        # if a and b are on same strand
-        if (b.strand == a.strand) and is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
-            # embedded co directional (complete)
-            print("{} and {}: EMBEDDED CO DIRECTIONAL".format(a.ID, b.ID))
-            d_neighbour_types['embedded_co_directional'].append(pair)
-        elif (b.strand == a.strand) and is_between(b.start, a.start, a.end) and is_between(b.end, a.start, a.end):
-            # embedded co directional (complete)
-            print("{} and {}: EMBEDDED CO DIRECTIONAL".format(a.ID, b.ID))
-            d_neighbour_types['embedded_co_directional'].append(pair)
-        elif b.strand == a.strand:
-            print("{} and {}: CO DIRECTIONAL".format(a.ID, b.ID))
-            d_neighbour_types['co_directional'].append(pair)
-        elif is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
-            # embedded anti parallel (complete)
-            print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
-            d_neighbour_types['embedded_antiparallel'].append(pair)
-
-        elif is_between(b.start, a.start, a.end) and is_between(b.end, a.start, a.end):
-            # embedded anti parallel (complete)
-            print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
-            d_neighbour_types['embedded_antiparallel'].append(pair)
-
-        elif is_between(a_5p_pos, b.start - NEIGHBOUR_DISTANCE, b.end + NEIGHBOUR_DISTANCE):
-            # divergent (partial, 5' ends overlap)
-            print("{} and {}: DIVERGENT".format(a.ID, b.ID))
-            d_neighbour_types['divergent'].append(pair)
-
-        elif is_between(a_3p_pos, b.start - NEIGHBOUR_DISTANCE, b.end + NEIGHBOUR_DISTANCE):
-            # convergent (partial, 3' ends overlap)
-            print("{} and {}: CONVERGENT".format(a.ID, b.ID))
-            d_neighbour_types['convergent'].append(pair)
-
-        else:
-            print("WARNING: COULDN'T DETERMINE NEIGHBOUR NATURE OF {} and {}".format(a.ID, b.ID))
-            d_neighbour_types['warning'].append(pair)
-
-
-    outfile = "./gene_neighbour_analysis.json"
-    with open(outfile, 'w') as f:
-        json.dump(d_neighbour_types, f)
-
-    d_neighbour_types_counts = d_neighbour_types.copy()
-    for k, v in d_neighbour_types_counts.items():
-        d_neighbour_types_counts[k] = len(v)
-
-    pprint(d_neighbour_types)
-    print(d_neighbour_types_counts)
-
-    d_neighbour_types_counts.pop("warning")
-    plt.bar(*zip(*d_neighbour_types_counts.items()))
-    plt.show()
-
-if COMMAND == "find_gene_neighbours":
-    type = INPUT[0]
-
-    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
-    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
-    GFF_DF['ID'] = GFF_DF['ID'].astype('category')
-    GFF_DF['type'] = GFF_DF['type'].astype('category')
-    GFF_DF['seq_id'] = GFF_DF['seq_id'].astype('category')
-
-    # keep only entries that don't have a parent (removes exons, utrs etc)
-    # print(GFF_DF['Parent'])
-    GFF_DF = GFF_DF[GFF_DF['Parent'].isna()]
-
-    print(GFF_DF)
-    
-    if type == 'all':
-        all_types = set(GFF_DF['type'])
-        print(all_types)
-        gff_matching_type = GFF_DF[GFF_DF['type'].isin(all_types)]
-    else:
-        gff_matching_type = GFF_DF[GFF_DF['type'] == type]
-
-    neighbours_series = [[]] * len(gff_matching_type)
-    i = 0
-
-    print("FOUND {} MATCHES FOR TYPE {}".format(len(gff_matching_type), TYPE))
-
-    for a_idx, a in gff_matching_type.iterrows():
-        print("processing: {}".format(a['ID']))
-        neighbours = []
-
-        same_contig = gff_matching_type[gff_matching_type['seq_id'] == a['seq_id']]
-        for b_idx, b in same_contig.iterrows():
-            
-            #skip checking the same gene
-            if (a_idx != b_idx) and (a.seq_id == b.seq_id):
-
-                # do the to genes overlap? add it to the list of neighbours
-                if (a.end <= (b.end + NEIGHBOUR_DISTANCE) and a.end >= (b.start - NEIGHBOUR_DISTANCE)) \
-                    or (a.start <= (b.end + NEIGHBOUR_DISTANCE) and a.start >= (b.start - NEIGHBOUR_DISTANCE)):
-                    
-                    neighbours.append(b['ID'])
-
-        print("neighbours: {}".format(neighbours))
-        neighbours_series[i] = neighbours
-        i += 1
-
-    neighbours_df = gff_matching_type[['ID', 'strand', 'type', 'start', 'end', 'seq_id']].copy()
-    neighbours_df['neighbours'] = neighbours_series
-
-    TES_SUMMARY_PATH = "./gene_neighbours.tsv"
-    print(neighbours_df)
-    neighbours_df.to_csv(TES_SUMMARY_PATH, sep='\t', index=False)
-
-if COMMAND == "search":
-    print("searching...")
-    process_bamfiles()
-
-    for sample in dataframes.keys():
-        print(sample)
-
-        if (SORT_BY):
-            dataframes[sample].sort_values(SORT_BY, inplace=True, ascending=(not REVERSE_SEARCH))
-
-        if (NUM_RESULTS):
-            print(dataframes[sample].head(NUM_RESULTS))
-            # print(len(dataframes[sample].cigar_tuples))
-        else:
-            print(dataframes[sample])
-
-    if CHECK_DUPLICATE_READS:
-        find_multi_reference_alignments(d_read_ids)
-
-    df = calc_tlen_distribution(d_tlen)
-    print(df)
-
-if COMMAND == "inspect":
-    print("inspecting...")
-
-    read_id = INPUT[0]
-    alignments = []
-
-    for i in range(1, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
-
-        samfile = pysam.AlignmentFile(filename, 'rb')
-        iter = samfile.fetch()
-
-        for x in iter:
-            if (x.query_name == read_id):
-                alignments.append(x)
-
-        samfile.close()
-
-    for a in alignments:
-        print(a)
-
-if COMMAND == "base_coverage":
-    # load annotation file
-    feature_id = INPUT[0]
-    print("summarising base coverage for {}...".format(feature_id))
-
-    annotation_file = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
-
-    if feature_id == "chromosome":
-        matches = pandas.DataFrame(columns = ["seq_id", "start", "end"])
-        i = 0
-        for line in annotation_file.header.splitlines():
-            if "sequence-region" in line:
-                s = line.split(" ")
-
-                matches.loc[i] = [s[1]] + [int(s[2])] + [int(s[3])]
-                i += 1
-        num_matches = len(matches)
-    else:
-        matches = annotation_file.filter_feature_of_type([feature_id])
-        if len(matches.df) == 0:
-            print("WARNING: no matches of type {}".format(feature_id))
-            matches = annotation_file.get_feature_by_attribute("ID", [feature_id])
-
-            if len(matches.df) > 1:
-                print("ERROR: multiple entries for {} found in gff file. exiting...".format(feature_id))
-                sys.exit()
-
-        num_matches = len(matches.df)
-        matches = matches.df
-
-    print("FOUND {} MATCHES FOR {}".format(num_matches, feature_id))
-
-
-    for i in range(1, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
-        samfile = pysam.AlignmentFile(filename, 'rb')
-
-        output = pandas.DataFrame(columns = ["seq_id", "start", "end", "count_a", "count_c", "count_g", "count_t"])
-
-        for index, row in matches.iterrows():
-            # DEBUGGING
-            print(index)
-            # if i == num_matches:
-            #     break
-
-            # TODO: if two genes are close to each other, then this doesn't discern for only reads mapped to our gene of interest
-            # so we can end up with weird lumps in the 5' end
-            a, c, g, t = samfile.count_coverage(
-                contig=row['seq_id'], 
-                start=row['start'], 
-                stop=row['end'],
-                quality_threshold=0
-            )
-            # for column in samfile.pileup(
-            #     contig=row['seq_id'], 
-            #     start=row['start'], 
-            #     stop=row['end'], 
-            #     min_mapping_quality=MIN_MAPQ,
-            #     truncate = True
-            # ):
-            #     print(column)
-
-            sum_a = sum(a)
-            sum_c = sum(c)
-            sum_g = sum(g)
-            sum_t = sum(t)
-
-            output.loc[index] = [row['seq_id']] + [row['start']] + [row['end']] + [sum_a] + [sum_c] + [sum_g] + [sum_t]
-
-
-        print(output)
-        print("total {} {} {} {}".format(
-            output['count_a'].sum(),
-            output['count_c'].sum(),
-            output['count_g'].sum(),
-            output['count_t'].sum()
-        ))
-
-if COMMAND == "plot_tes_vs_wam":
-    tes_tsv_file_path = INPUT[0]
-    print("LOADING: {}".format(tes_tsv_file_path))
-    tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
-
-    print(NEIGHBOUR_FILE)
-
-    neighbour_file_df = {}
-
-    if NEIGHBOUR_FILE:
-        with open(NEIGHBOUR_FILE) as json_data:
-            neighbour_file_df = json.load(json_data)
-
-    print(neighbour_file_df.keys())
-
-    # FILTER_BY_NEIGHBOUR_TYPE = "lonely"
-    tes_file_df_len_raw = len(tes_file_df)
-    print("INPUT: {}".format(tes_file_df_len_raw))
-
-    if FILTER_BY_NEIGHBOUR_TYPE != "all":
-        gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
-        tes_file_df["parent_id"] = tes_file_df.gene_id.apply(lambda s: s.split('.')[0])
-
-        # flatten list if required
-        if len(gene_list_filter) > 0 and isinstance(gene_list_filter[0], list):
-            gene_list_filter = [x for xs in gene_list_filter for x in xs]
-
-        gene_list_filter = set(gene_list_filter)
-
-        # remove all entries from tes_file if the gene isn't in the gene list
-        tes_file_df = tes_file_df[
-                (tes_file_df['parent_id'].isin(gene_list_filter))
-        ]
-
-        print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(tes_file_df_len_raw - len(tes_file_df), FILTER_BY_NEIGHBOUR_TYPE))
-
-
-    tes_file_df['minus_log10_p_inter_treatment'] = (numpy.log10(tes_file_df['p_inter_treatment']) * -1)
-    tes_file_df['log2_average_expression'] = (numpy.log2(tes_file_df['average_expression']))
-    tes_file_df['-log2_wam_change'] = (numpy.log2(tes_file_df['wam_change']) * -1)
-    tes_file_df['log2_wart_change'] = numpy.log2(tes_file_df['wart_change'])
-
-    tes_file_df['wam_diff'] = tes_file_df['wam_before'] - tes_file_df['wam_after']
-    tes_file_df['tes_diff'] = tes_file_df['wart_after'] - tes_file_df['wart_before']
-
-
-    # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
-    # drop all genes where wam_change == 0
-    p_same_treatment_cutoff = 0.05
-    MIN_GAP_BETWEEN_M6A = 1
-
-    num_canonical_mods = []
-    for _, row in tes_file_df.iterrows():
-        canonical_mods = sorted([int(s) for s in ast.literal_eval(row['cannonical_mods'])])
-        this_num_canonical_mods = len(canonical_mods)
-
-        if this_num_canonical_mods == 1:
-            num_canonical_mods.append(this_num_canonical_mods)
-        else:
-            mod_distances = []
-            prev = 0
-            for x in canonical_mods:
-                if prev == 0:
-                    prev = x
-                else:
-                    mod_distances.append(x - prev)
-                    prev = x
-
-            mod_distances = [x for x in mod_distances if x > MIN_GAP_BETWEEN_M6A]
-
-            num_canonical_mods.append(len(mod_distances) + 1)
-
-            if this_num_canonical_mods > 1 and len(mod_distances) != this_num_canonical_mods - 1:
-                print(canonical_mods)
-                print(mod_distances)
-                print("NOTE: {} had {} m6As that were too close (<={}nt), ...".format(row['gene_id'], this_num_canonical_mods - len(mod_distances), MIN_GAP_BETWEEN_M6A))
-
-    tes_file_df["num_cannonical_mods"] = num_canonical_mods
-
-    filtered_genes_tes_wam = tes_file_df[
-        # (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
-        (tes_file_df.num_cannonical_mods > 0) & 
-        (tes_file_df.average_expression >= READ_DEPTH_THRESHOLD)
-    ]
-    print("REMOVING {} DUE TO FILTER (num canonical mods > 0, avg expression > {})".format(len(tes_file_df) - len(filtered_genes_tes_wam), READ_DEPTH_THRESHOLD))
-
-    import mplcursors
-
-
-    axes = None
-    if SPLIT_BY_CANONICAL_MODS:
-        for i in range(1, max(filtered_genes_tes_wam["num_cannonical_mods"].to_list()) + 1):
-            filtered_genes_tes_wam_mods = filtered_genes_tes_wam[
-                (filtered_genes_tes_wam.num_cannonical_mods == i)
-            ]
-
-            if len(filtered_genes_tes_wam_mods) == 0:
-                continue
-
-            x_col = 'wam_diff'
-            y_col = 'tes_diff'
-
-            print("REMOVING {} DUE TO FILTER (MODS={})".format(len(filtered_genes_tes_wam) - len(filtered_genes_tes_wam_mods), i))
-
-            axes = filtered_genes_tes_wam_mods.plot.scatter(
-                x='wam_diff',
-                y='tes_diff',
-                c='log2_average_expression'
-            )
-
-            m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam_mods[x_col], filtered_genes_tes_wam_mods[y_col])
-            axes.plot(filtered_genes_tes_wam_mods[x_col], m * filtered_genes_tes_wam_mods[x_col] + c)
-            axes.text(1, 1, "R^2: {}".format(round(r_value ** 2, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
-
-            axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, i, len(filtered_genes_tes_wam_mods)))
-    else:
-        if NUM_CANONICAL_MODS_FILTER > 0:
-            filtered_genes_tes_wam = filtered_genes_tes_wam[
-                (filtered_genes_tes_wam.num_cannonical_mods == NUM_CANONICAL_MODS_FILTER)
-            ]
-        
-        x_col = 'wam_diff'
-        y_col = 'tes_diff'
-
-        axes = filtered_genes_tes_wam.plot.scatter(
-            x='wam_diff',
-            y='tes_diff',
-            c='log2_average_expression',
-            s=2
-        )
-        m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
-        axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
-        axes.text(1, 1, "R: {}".format(round(r_value, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
-        # axes.set_xticks([round(x*0.1, 1) for x in range(0, 11)])
-
-        if NUM_CANONICAL_MODS_FILTER > 0:
-            axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, NUM_CANONICAL_MODS_FILTER, len(filtered_genes_tes_wam)))
-        else:
-            axes.set_title("{} genes with cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, len(filtered_genes_tes_wam)))
-
-        def show_label(sel):
-            index = sel.index
-            sel.annotation.set_text(filtered_genes_tes_wam['gene_id'].to_list()[index])
-            print(filtered_genes_tes_wam['gene_id'].to_list()[index])
-            
-        mplcursors.cursor(axes, hover=True).connect("add", show_label)
-
-    plt.show()
-
-
-if COMMAND == "plot_tes_wam_distance":
-    tes_tsv_file_path = INPUT[0]
-    print("LOADING: {}".format(tes_tsv_file_path))
-    tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
-
-    # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
-    # drop all genes where wam_change == 0
-    p_same_treatment_cutoff = 0.05
-
-    tes_file_df["num_cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
-    tes_file_df["cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: list(ast.literal_eval(s)))
-
-    # flatten 2d list of cannonical mods
-    all_cannonical_mods = [x for xs in tes_file_df["cannonical_mods"].to_list() for x in xs]
-
-    tes_split_sites = tes_file_df["tes"].to_list()
-
-    # load annotation file and find indexes for all parent children
-    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
-    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
-    GFF_DF['ID'] = GFF_DF['ID'].astype('category')
-
-    cannonical_mod_offsets = []
-    annotation_start_offsets = []
-    annotation_end_offsets = []
-    tes_end_offsets = []
-
-
-    # TODO also plot DRACH sites
-    # TODO also plot DRACH sites
-    # TODO also plot DRACH sites
-
-    for row_index, row in tes_file_df.iterrows():
-        this_row_gff = GFF_DF[GFF_DF['ID'] == row['gene_id']]
-        num_matches = len(this_row_gff)
-        if num_matches != 1:
-            print("ERROR: found {} matches for {}".format(num_matches, row['ID']))
-            continue
-
-        row_strand = this_row_gff.iloc[0]['strand']
-        row_start = this_row_gff.iloc[0]['start']
-        row_end = this_row_gff.iloc[0]['end']
-
-        if REFERENCE_POINT == "3_PRIME":
-            if row_strand == "-":
-                reference_point = row_start
-            else:
-                reference_point = row_end
-
-            reference_label = "annotated 3' end"
-        if REFERENCE_POINT == "TES":
-            reference_point = row["tes"]
-            reference_label = "approximated TES"
-
-        # assume it's -ve
-        row_mod_offsets = reference_point - numpy.array(row["cannonical_mods"])
-        row_start_offset = reference_point - row_end
-        row_end_offset = reference_point - row_start
-        row_tes_offset = reference_point - row['tes']
-
-        if row_strand == "+":
-            row_mod_offsets *= -1
-            row_start_offset = row_start - reference_point
-            row_end_offset = row_end - reference_point
-            row_tes_offset = row['tes'] - reference_point
-
-        for x in row_mod_offsets:
-            cannonical_mod_offsets.append(x)
-
-        annotation_start_offsets.append(row_start_offset)
-        annotation_end_offsets.append(row_end_offset)
-        tes_end_offsets.append(row_tes_offset)
-
-    min_x = int(min([
-        min(cannonical_mod_offsets),
-        # min(annotation_start_offsets),
-        min(tes_end_offsets),
-        min(annotation_end_offsets)
-    ]) * 1.1)
-    max_x = int(max([
-        max(cannonical_mod_offsets),
-        # max(annotation_start_offsets),
-        max(tes_end_offsets),
-        max(annotation_end_offsets)
-    ]) * 1.1)
-
-    x_ticks = numpy.linspace(
-        min_x, 
-        max_x, 
-        max_x - min_x
-    )
-    if len(tes_file_df) > 1:
-        kernel = scipy.stats.gaussian_kde(cannonical_mod_offsets)
-        cannonical_mod_offset_kde = kernel(x_ticks)
-        kernel = scipy.stats.gaussian_kde(annotation_start_offsets)
-        annotation_start_offset_kde = kernel(x_ticks)
-        if REFERENCE_POINT == "TES":
-            kernel = scipy.stats.gaussian_kde(annotation_end_offsets)
-            annotation_end_offset_kde = kernel(x_ticks)
-        if REFERENCE_POINT == "3_PRIME":
-            kernel = scipy.stats.gaussian_kde(tes_end_offsets)
-            tes_offset_kde = kernel(x_ticks)
-
-    cannonical_mod_offsets_hist = [cannonical_mod_offsets.count(i) for i in range(min_x, max_x)]
-    annotation_start_offsets_hist = [annotation_start_offsets.count(i) for i in range(min_x, max_x)]
-    annotation_end_offsets_hist = [annotation_end_offsets.count(i) for i in range(min_x, max_x)]
-    tes_offsets_hist = [tes_end_offsets.count(i) for i in range(min_x, max_x)]
-
-    d_colors = {
-        'mods': 'green',
-        'start': 'red',
-        'end': 'blue',
-    }
-    if len(tes_file_df) > 1:
-        fig, axes = plt.subplots()
-        axes.plot(x_ticks, cannonical_mod_offset_kde, label='cannonical m6A', color=d_colors['mods'])
-        axes.fill_between(x_ticks, cannonical_mod_offset_kde, alpha=0.2, color=d_colors['mods'])
-
-        if REFERENCE_POINT == "TES":
-            axes.plot(x_ticks, annotation_end_offset_kde, label='annotation end 3\'', color=d_colors['end'])
-            axes.fill_between(x_ticks, annotation_end_offset_kde, alpha=0.2, color=d_colors['end'])
-            axes.set_xlabel('distance from TES (nt)')
-
-        if REFERENCE_POINT == "3_PRIME":
-            axes.plot(x_ticks, tes_offset_kde, label='TES', color=d_colors['end'])
-            axes.fill_between(x_ticks, tes_offset_kde, alpha=0.2, color=d_colors['end'])
-            axes.set_xlabel('distance from 3\' (nt)')
-
-        axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
-        axes.set_ylabel('density (au)')
-        axes.legend()
-        plt.legend(loc="upper right")
-
-
-    fig, axes = plt.subplots()
-    axes.plot(x_ticks, cannonical_mod_offsets_hist, label='cannonical m6A', color=d_colors['mods'])
-    axes.fill_between(x_ticks, cannonical_mod_offsets_hist, alpha=0.2, color=d_colors['mods'])
-
-    if REFERENCE_POINT == "TES":
-        axes.plot(x_ticks, annotation_end_offsets_hist, label='annotation end 3\'', color=d_colors['end'])
-        axes.fill_between(x_ticks, annotation_end_offsets_hist, alpha=0.2, color=d_colors['end'])
-        axes.set_xlabel('distance from TES (nt)')
-
-    if REFERENCE_POINT == "3_PRIME":
-        axes.plot(x_ticks, tes_offsets_hist, label='TES', color=d_colors['end'])
-        axes.fill_between(x_ticks, tes_offsets_hist, alpha=0.2, color=d_colors['end'])
-        axes.set_xlabel('distance from 3\' (nt)')
-
-    axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
-    axes.set_ylabel('count')
-    axes.legend()
-    plt.legend(loc="upper right")
-
-    plt.show()
-
 def process_input_files():
     print("LOG - processing input files...")
     # process input file. Each line contains a label, the type of file, and the filepath
@@ -1317,6 +718,49 @@ def process_annotation_file():
             GFF_PARENT_TREE[row['Parent']] = [row_index]
 
     return ANNOTATION_FILE
+
+def process_genome_file():
+    print("LOG - loading fasta file...")
+
+    FASTA_DICT = {}
+    FASTA_LINE_LENGTH = 60
+
+    if os.path.isfile(GENOME_FILE_PATH):
+        with open(GENOME_FILE_PATH) as f:
+            line = f.readline()
+            current_contig = None
+
+            while line:
+                # is line a header
+                if line.startswith('>'):
+                    header_attrs = line.split('|')
+                    for h in header_attrs:
+                        h = h.strip()
+                        if h.startswith('>'):
+                            contig = h[1:]
+                            FASTA_DICT[contig] = {}
+                            current_contig = contig
+                        else:
+                            k, v = h.split('=')
+                            FASTA_DICT[current_contig][k] = v
+                    FASTA_DICT[current_contig]['length'] = int(FASTA_DICT[current_contig]['length'])
+                    num_lines_seq_fasta = math.ceil(FASTA_DICT[current_contig]['length'] / FASTA_LINE_LENGTH) 
+                    FASTA_DICT[current_contig]['sequence'] = [None] * num_lines_seq_fasta
+                    i = 0
+                else:
+                    # FASTA_DICT[current_contig]['sequence'] += line.strip()
+                    FASTA_DICT[current_contig]['sequence'][i] = line.strip()
+                    i += 1
+
+                line = f.readline()
+    
+    # verify each chromosome is the correct length
+    for k, v, in FASTA_DICT.items():
+        FASTA_DICT[k]['sequence'] = "".join(FASTA_DICT[k]['sequence'])
+        print("{} - loaded seq: {}, header length: {}".format(k, len(v['sequence']), v['length']))
+
+    return FASTA_DICT
+
 
 def filter_gff_for_target_features(annotation_file):
     print("LOG - filtering gff file for target features...")
@@ -1677,6 +1121,716 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
             d_sample_filtered_read_ids[label][row.ID] = d_filtered_read_ids
 
     return d_sample_filtered_read_ids
+
+
+# ------------------- COMMANDS -------------------  #
+# ------------------- COMMANDS -------------------  #
+# ------------------- COMMANDS -------------------  #
+
+import re
+
+BASE_COMPLEMENTS = {
+    'A': 'T',
+    'T': 'A',
+    'C': 'G',
+    'G': 'C',
+    '[': ']',
+    ']': '['
+}
+
+def reverse_complement(s):
+    MOTIF_REVERSED = s[::-1]
+
+    MOTIF_REVERSE_COMPLEMENT = ""
+    for l in MOTIF_REVERSED:
+        if l in BASE_COMPLEMENTS.keys():
+            MOTIF_REVERSE_COMPLEMENT += BASE_COMPLEMENTS[l]
+        else:
+            MOTIF_REVERSE_COMPLEMENT += l
+
+    return MOTIF_REVERSE_COMPLEMENT
+
+if COMMAND == "motif_finder":
+    MOTIF = INPUT[0]
+
+    # if filter by genomic regions
+    # filter=exons
+    # filter=first_exon
+    # filter=last_exon
+    if FEATURE_FILTER:
+        gff = process_annotation_file()
+        gff_df = gff.attributes_to_columns()
+        gff_df['strand'] = gff_df['strand'].astype('category')
+        gff_df['seq_id'] = gff_df['seq_id'].astype('category')
+        gff_df['ID'] = gff_df['ID'].astype('category')
+        gff_df['type'] = gff_df['type'].astype('category')
+
+
+
+    pprint(GFF_PARENT_TREE)
+
+    fasta = process_genome_file()
+
+    MOTIF_RC = reverse_complement(MOTIF)
+    print("LOG - looking for motif: {} (rc={})".format(MOTIF, MOTIF_RC))
+    forward_lookahead_regex = re.compile("(?=({}))".format(MOTIF))
+    reverse_lookahead_regex = re.compile("(?=({}))".format(MOTIF_RC))
+
+    # create output file
+    GENERIC_BED_HEADER = [
+        "contig",
+        "start",
+        "end",
+        "name",
+        "score",
+        "strand"
+    ]
+
+    rows = []
+
+    for contig in fasta.keys():
+        print("LOG - searching: {}".format(contig))
+
+        forward_matches = re.finditer(forward_lookahead_regex, fasta[contig]['sequence'])
+        reverse_matches = re.finditer(reverse_lookahead_regex, fasta[contig]['sequence'])
+
+        # if feature filter the output is different
+        # the contig is the parent gene ID
+        if FEATURE_FILTER:
+            this_contig_genes = gff_df[gff_df.contig == contig]
+
+
+
+        strand = "+"
+        forward_count = 0
+        for m in forward_matches:
+            row_summary = [contig, m.start(), m.start()+len(m.group(1)), m.group(1), 0, strand]
+            rows.append(row_summary)
+            forward_count += 1
+
+        strand = "-"
+        reverse_count = 0
+        for m in reverse_matches:
+            row_summary = [contig, m.start(), m.start()+len(m.group(1)), reverse_complement(m.group(1)), 0, strand]
+            rows.append(row_summary)
+            reverse_count += 1
+
+        print("LOG - {} matches: {} forward, {} reverse".format(contig, forward_count, reverse_count))
+
+    motif_matches_df = pandas.DataFrame(columns=GENERIC_BED_HEADER, data=rows)
+
+    motif_matches_df.to_csv(OUTFILE, sep='\t', index=False)
+    
+
+if COMMAND == "gene_neighbour_analysis":
+    gene_neighbour_tsv_file_path = INPUT[0]
+    print("LOADING: {}".format(gene_neighbour_tsv_file_path))
+    gene_neighbour_df = pandas.read_csv(gene_neighbour_tsv_file_path, sep='\t')
+    gene_neighbour_df['ID'] = gene_neighbour_df['ID'].astype('category')
+    gene_neighbour_df['type'] = gene_neighbour_df['type'].astype('category')
+    gene_neighbour_df['seq_id'] = gene_neighbour_df['seq_id'].astype('category')
+    gene_neighbour_df['strand'] = gene_neighbour_df['strand'].astype('category')
+
+    gene_neighbour_df["neighbours"] = gene_neighbour_df.neighbours.apply(lambda s: ast.literal_eval(s))
+
+    print("gene_neighbour_df size: {}".format(len(gene_neighbour_df)))
+
+    all_neighbour_pairs = []
+    lonely_genes = []
+
+    # returns true if a is greater than b and less than c
+    def is_between(a, b, c):
+        if (a >= b) and (a <= c):
+            return True
+        else:
+            return False 
+
+    for a_idx, a in gene_neighbour_df.iterrows():
+        if len(a['neighbours']) == 0:
+            lonely_genes.append(a.ID)
+
+        else:
+            for b_id in a['neighbours']:
+
+                smaller = min(a.ID, b_id)
+                bigger = max(a.ID, b_id)
+
+                all_neighbour_pairs.append((smaller, bigger))
+
+    unique_neighbour_pairs = set(all_neighbour_pairs)
+
+    d_neighbour_types = {}
+    d_neighbour_types['co_directional'] = []
+    d_neighbour_types['embedded_antiparallel'] = []
+    d_neighbour_types['divergent'] = []
+    d_neighbour_types['convergent'] = []
+    d_neighbour_types['warning'] = []
+    d_neighbour_types['embedded_co_directional'] = []
+    d_neighbour_types['lonely'] = lonely_genes
+
+    for pair in unique_neighbour_pairs:
+        print(pair)
+        a = gene_neighbour_df[gene_neighbour_df['ID'] == pair[0]].iloc[0]
+        b = gene_neighbour_df[gene_neighbour_df['ID'] == pair[1]].iloc[0]
+
+        if a.strand == "+":
+            a_5p_pos = a.start
+            a_3p_pos = a.end
+        else:
+            a_5p_pos = a.end
+            a_3p_pos = a.start
+
+        if b.strand == "+":
+            b_5p_pos = b.start
+            b_3p_pos = b.end
+        else:
+            b_5p_pos = b.end
+            b_3p_pos = b.start
+
+        # parallel / co-directional
+        # if a and b are on same strand
+        if (b.strand == a.strand) and is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
+            # embedded co directional (complete)
+            print("{} and {}: EMBEDDED CO DIRECTIONAL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_co_directional'].append(pair)
+        elif (b.strand == a.strand) and is_between(b.start, a.start, a.end) and is_between(b.end, a.start, a.end):
+            # embedded co directional (complete)
+            print("{} and {}: EMBEDDED CO DIRECTIONAL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_co_directional'].append(pair)
+        elif b.strand == a.strand:
+            print("{} and {}: CO DIRECTIONAL".format(a.ID, b.ID))
+            d_neighbour_types['co_directional'].append(pair)
+        elif is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
+            # embedded anti parallel (complete)
+            print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_antiparallel'].append(pair)
+
+        elif is_between(b.start, a.start, a.end) and is_between(b.end, a.start, a.end):
+            # embedded anti parallel (complete)
+            print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
+            d_neighbour_types['embedded_antiparallel'].append(pair)
+
+        elif is_between(a_5p_pos, b.start - NEIGHBOUR_DISTANCE, b.end + NEIGHBOUR_DISTANCE):
+            # divergent (partial, 5' ends overlap)
+            print("{} and {}: DIVERGENT".format(a.ID, b.ID))
+            d_neighbour_types['divergent'].append(pair)
+
+        elif is_between(a_3p_pos, b.start - NEIGHBOUR_DISTANCE, b.end + NEIGHBOUR_DISTANCE):
+            # convergent (partial, 3' ends overlap)
+            print("{} and {}: CONVERGENT".format(a.ID, b.ID))
+            d_neighbour_types['convergent'].append(pair)
+
+        else:
+            print("WARNING: COULDN'T DETERMINE NEIGHBOUR NATURE OF {} and {}".format(a.ID, b.ID))
+            d_neighbour_types['warning'].append(pair)
+
+
+    outfile = "./gene_neighbour_analysis.json"
+    with open(outfile, 'w') as f:
+        json.dump(d_neighbour_types, f)
+
+    d_neighbour_types_counts = d_neighbour_types.copy()
+    for k, v in d_neighbour_types_counts.items():
+        d_neighbour_types_counts[k] = len(v)
+
+    pprint(d_neighbour_types)
+    print(d_neighbour_types_counts)
+
+    d_neighbour_types_counts.pop("warning")
+    plt.bar(*zip(*d_neighbour_types_counts.items()))
+    plt.show()
+
+if COMMAND == "find_gene_neighbours":
+    type = INPUT[0]
+
+    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+    GFF_DF['ID'] = GFF_DF['ID'].astype('category')
+    GFF_DF['type'] = GFF_DF['type'].astype('category')
+    GFF_DF['seq_id'] = GFF_DF['seq_id'].astype('category')
+
+    # keep only entries that don't have a parent (removes exons, utrs etc)
+    # print(GFF_DF['Parent'])
+    GFF_DF = GFF_DF[GFF_DF['Parent'].isna()]
+
+    print(GFF_DF)
+    
+    if type == 'all':
+        all_types = set(GFF_DF['type'])
+        print(all_types)
+        gff_matching_type = GFF_DF[GFF_DF['type'].isin(all_types)]
+    else:
+        gff_matching_type = GFF_DF[GFF_DF['type'] == type]
+
+    neighbours_series = [[]] * len(gff_matching_type)
+    i = 0
+
+    print("FOUND {} MATCHES FOR TYPE {}".format(len(gff_matching_type), TYPE))
+
+    for a_idx, a in gff_matching_type.iterrows():
+        print("processing: {}".format(a['ID']))
+        neighbours = []
+
+        same_contig = gff_matching_type[gff_matching_type['seq_id'] == a['seq_id']]
+        for b_idx, b in same_contig.iterrows():
+            
+            #skip checking the same gene
+            if (a_idx != b_idx) and (a.seq_id == b.seq_id):
+
+                # do the to genes overlap? add it to the list of neighbours
+                if (a.end <= (b.end + NEIGHBOUR_DISTANCE) and a.end >= (b.start - NEIGHBOUR_DISTANCE)) \
+                    or (a.start <= (b.end + NEIGHBOUR_DISTANCE) and a.start >= (b.start - NEIGHBOUR_DISTANCE)):
+                    
+                    neighbours.append(b['ID'])
+
+        print("neighbours: {}".format(neighbours))
+        neighbours_series[i] = neighbours
+        i += 1
+
+    neighbours_df = gff_matching_type[['ID', 'strand', 'type', 'start', 'end', 'seq_id']].copy()
+    neighbours_df['neighbours'] = neighbours_series
+
+    TES_SUMMARY_PATH = "./gene_neighbours.tsv"
+    print(neighbours_df)
+    neighbours_df.to_csv(TES_SUMMARY_PATH, sep='\t', index=False)
+
+if COMMAND == "search":
+    print("searching...")
+    process_bamfiles()
+
+    for sample in dataframes.keys():
+        print(sample)
+
+        if (SORT_BY):
+            dataframes[sample].sort_values(SORT_BY, inplace=True, ascending=(not REVERSE_SEARCH))
+
+        if (NUM_RESULTS):
+            print(dataframes[sample].head(NUM_RESULTS))
+            # print(len(dataframes[sample].cigar_tuples))
+        else:
+            print(dataframes[sample])
+
+    if CHECK_DUPLICATE_READS:
+        find_multi_reference_alignments(d_read_ids)
+
+    df = calc_tlen_distribution(d_tlen)
+    print(df)
+
+if COMMAND == "inspect":
+    print("inspecting...")
+
+    read_id = INPUT[0]
+    alignments = []
+
+    for i in range(1, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+
+        samfile = pysam.AlignmentFile(filename, 'rb')
+        iter = samfile.fetch()
+
+        for x in iter:
+            if (x.query_name == read_id):
+                alignments.append(x)
+
+        samfile.close()
+
+    for a in alignments:
+        print(a)
+
+if COMMAND == "base_coverage":
+    # load annotation file
+    feature_id = INPUT[0]
+    print("summarising base coverage for {}...".format(feature_id))
+
+    annotation_file = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+
+    if feature_id == "chromosome":
+        matches = pandas.DataFrame(columns = ["seq_id", "start", "end"])
+        i = 0
+        for line in annotation_file.header.splitlines():
+            if "sequence-region" in line:
+                s = line.split(" ")
+
+                matches.loc[i] = [s[1]] + [int(s[2])] + [int(s[3])]
+                i += 1
+        num_matches = len(matches)
+    else:
+        matches = annotation_file.filter_feature_of_type([feature_id])
+        if len(matches.df) == 0:
+            print("WARNING: no matches of type {}".format(feature_id))
+            matches = annotation_file.get_feature_by_attribute("ID", [feature_id])
+
+            if len(matches.df) > 1:
+                print("ERROR: multiple entries for {} found in gff file. exiting...".format(feature_id))
+                sys.exit()
+
+        num_matches = len(matches.df)
+        matches = matches.df
+
+    print("FOUND {} MATCHES FOR {}".format(num_matches, feature_id))
+
+
+    for i in range(1, len(INPUT), 2):
+        label = INPUT[i]
+        filename = INPUT[i+1]
+        samfile = pysam.AlignmentFile(filename, 'rb')
+
+        output = pandas.DataFrame(columns = ["seq_id", "start", "end", "count_a", "count_c", "count_g", "count_t"])
+
+        for index, row in matches.iterrows():
+            # DEBUGGING
+            print(index)
+            # if i == num_matches:
+            #     break
+
+            # TODO: if two genes are close to each other, then this doesn't discern for only reads mapped to our gene of interest
+            # so we can end up with weird lumps in the 5' end
+            a, c, g, t = samfile.count_coverage(
+                contig=row['seq_id'], 
+                start=row['start'], 
+                stop=row['end'],
+                quality_threshold=0
+            )
+            # for column in samfile.pileup(
+            #     contig=row['seq_id'], 
+            #     start=row['start'], 
+            #     stop=row['end'], 
+            #     min_mapping_quality=MIN_MAPQ,
+            #     truncate = True
+            # ):
+            #     print(column)
+
+            sum_a = sum(a)
+            sum_c = sum(c)
+            sum_g = sum(g)
+            sum_t = sum(t)
+
+            output.loc[index] = [row['seq_id']] + [row['start']] + [row['end']] + [sum_a] + [sum_c] + [sum_g] + [sum_t]
+
+
+        print(output)
+        print("total {} {} {} {}".format(
+            output['count_a'].sum(),
+            output['count_c'].sum(),
+            output['count_g'].sum(),
+            output['count_t'].sum()
+        ))
+
+if COMMAND == "plot_tes_vs_wam":
+    tes_tsv_file_path = INPUT[0]
+    print("LOADING: {}".format(tes_tsv_file_path))
+    tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
+
+    neighbour_file_df = {}
+
+    if NEIGHBOUR_FILE:
+        with open(NEIGHBOUR_FILE) as json_data:
+            neighbour_file_df = json.load(json_data)
+
+    # print(neighbour_file_df.keys())
+
+    # FILTER_BY_NEIGHBOUR_TYPE = "lonely"
+    tes_file_df_len_raw = len(tes_file_df)
+    print("INPUT: {}".format(tes_file_df_len_raw))
+
+    if FILTER_BY_NEIGHBOUR_TYPE != "all":
+        gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
+        tes_file_df["parent_id"] = tes_file_df.gene_id.apply(lambda s: s.split('.')[0])
+
+        # flatten list if required
+        if len(gene_list_filter) > 0 and isinstance(gene_list_filter[0], list):
+            gene_list_filter = [x for xs in gene_list_filter for x in xs]
+
+        gene_list_filter = set(gene_list_filter)
+
+        # remove all entries from tes_file if the gene isn't in the gene list
+        tes_file_df = tes_file_df[
+                (tes_file_df['parent_id'].isin(gene_list_filter))
+        ]
+
+        print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(tes_file_df_len_raw - len(tes_file_df), FILTER_BY_NEIGHBOUR_TYPE))
+
+    # tes_file_df_len_raw = len(tes_file_df)
+    # tes_file_df = tes_file_df[
+    #     (tes_file_df.wart_after < 1.0) & 
+    #     (tes_file_df.wart_before < 1.0)
+    # ]
+    # print("REMOVED {} DUE TO 'IMPOSSIBLE' WEIRD TES CHANGE".format(tes_file_df_len_raw - len(tes_file_df)))
+
+
+
+    tes_file_df['minus_log10_p_inter_treatment'] = (numpy.log10(tes_file_df['p_inter_treatment']) * -1)
+    tes_file_df['log2_average_expression'] = (numpy.log2(tes_file_df['average_expression']))
+    tes_file_df['-log2_wam_change'] = (numpy.log2(tes_file_df['wam_change']) * -1)
+    tes_file_df['log2_wart_change'] = numpy.log2(tes_file_df['wart_change'])
+
+    tes_file_df['wam_diff'] = tes_file_df['wam_before'] - tes_file_df['wam_after']
+    tes_file_df['tes_diff'] = tes_file_df['wart_after'] - tes_file_df['wart_before']
+
+
+    # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
+    # drop all genes where wam_change == 0
+    p_same_treatment_cutoff = 0.05
+    MIN_GAP_BETWEEN_M6A = 1
+    num_smeared = 0
+
+    num_canonical_mods = []
+    for _, row in tes_file_df.iterrows():
+        canonical_mods = sorted([int(s) for s in ast.literal_eval(row['cannonical_mods'])])
+        this_num_canonical_mods = len(canonical_mods)
+
+        if this_num_canonical_mods <= 1:
+            num_canonical_mods.append(this_num_canonical_mods)
+        else:
+            mod_distances = []
+            prev = 0
+            for x in canonical_mods:
+                if prev == 0:
+                    prev = x
+                else:
+                    mod_distances.append(x - prev)
+                    prev = x
+
+            mod_distances = [x for x in mod_distances if x > MIN_GAP_BETWEEN_M6A]
+
+            num_canonical_mods.append(len(mod_distances) + 1)
+
+            if this_num_canonical_mods > 1 and len(mod_distances) != this_num_canonical_mods - 1:
+                #print(canonical_mods)
+                #print(mod_distances)
+                num_smeared += 1
+                #print("NOTE: {} had {} m6As that were too close (<={}nt), ...".format(row['gene_id'], this_num_canonical_mods - len(mod_distances), MIN_GAP_BETWEEN_M6A))
+
+    print("NOTE: {} GENES HAD m6A SMEARING".format(num_smeared))
+
+    tes_file_df["num_cannonical_mods"] = num_canonical_mods
+
+    filtered_genes_tes_wam = tes_file_df[
+        # (tes_file_df.p_same_treatment >= p_same_treatment_cutoff) &
+        (tes_file_df.num_cannonical_mods > 0) & 
+        (tes_file_df.average_expression >= READ_DEPTH_THRESHOLD)
+    ]
+    print("REMOVING {} DUE TO FILTER (num canonical mods > 0, avg expression > {})".format(len(tes_file_df) - len(filtered_genes_tes_wam), READ_DEPTH_THRESHOLD))
+
+    import mplcursors
+
+
+    axes = None
+    if SPLIT_BY_CANONICAL_MODS:
+        for i in range(1, max(filtered_genes_tes_wam["num_cannonical_mods"].to_list()) + 1):
+            filtered_genes_tes_wam_mods = filtered_genes_tes_wam[
+                (filtered_genes_tes_wam.num_cannonical_mods == i)
+            ]
+
+            if len(filtered_genes_tes_wam_mods) == 0:
+                continue
+
+            x_col = 'wam_diff'
+            y_col = 'tes_diff'
+
+            print("REMOVING {} DUE TO FILTER (MODS={})".format(len(filtered_genes_tes_wam) - len(filtered_genes_tes_wam_mods), i))
+
+            axes = filtered_genes_tes_wam_mods.plot.scatter(
+                x='wam_diff',
+                y='tes_diff',
+                c='log2_average_expression'
+            )
+
+            m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam_mods[x_col], filtered_genes_tes_wam_mods[y_col])
+            axes.plot(filtered_genes_tes_wam_mods[x_col], m * filtered_genes_tes_wam_mods[x_col] + c)
+            axes.text(1, 1, "R^2: {}".format(round(r_value ** 2, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+
+            axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, i, len(filtered_genes_tes_wam_mods)))
+    else:
+        if NUM_CANONICAL_MODS_FILTER > 0:
+            filtered_genes_tes_wam = filtered_genes_tes_wam[
+                (filtered_genes_tes_wam.num_cannonical_mods == NUM_CANONICAL_MODS_FILTER)
+            ]
+        
+        x_col = 'wam_diff'
+        y_col = 'tes_diff'
+
+        axes = filtered_genes_tes_wam.plot.scatter(
+            x='wam_diff',
+            y='tes_diff',
+            c='log2_average_expression',
+            s=5
+        )
+        m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
+        axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
+        axes.text(1, 1, "R: {}".format(round(r_value, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+        # axes.set_xticks([round(x*0.1, 1) for x in range(0, 11)])
+
+        if NUM_CANONICAL_MODS_FILTER > 0:
+            axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, NUM_CANONICAL_MODS_FILTER, len(filtered_genes_tes_wam)))
+        else:
+            axes.set_title("{} genes with cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, len(filtered_genes_tes_wam)))
+
+        def show_label(sel):
+            index = sel.index
+            sel.annotation.set_text(filtered_genes_tes_wam['gene_id'].to_list()[index])
+            print(filtered_genes_tes_wam['gene_id'].to_list()[index])
+            
+        mplcursors.cursor(axes, hover=True).connect("add", show_label)
+
+    plt.show()
+
+
+if COMMAND == "plot_tes_wam_distance":
+    tes_tsv_file_path = INPUT[0]
+    print("LOADING: {}".format(tes_tsv_file_path))
+    tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
+
+    # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
+    # drop all genes where wam_change == 0
+    p_same_treatment_cutoff = 0.05
+
+    tes_file_df["num_cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: len(list(ast.literal_eval(s))))
+    tes_file_df["cannonical_mods"] = tes_file_df.cannonical_mods.apply(lambda s: list(ast.literal_eval(s)))
+
+    # flatten 2d list of cannonical mods
+    all_cannonical_mods = [x for xs in tes_file_df["cannonical_mods"].to_list() for x in xs]
+
+    tes_split_sites = tes_file_df["tes"].to_list()
+
+    # load annotation file and find indexes for all parent children
+    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
+    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+    GFF_DF['ID'] = GFF_DF['ID'].astype('category')
+
+    cannonical_mod_offsets = []
+    annotation_start_offsets = []
+    annotation_end_offsets = []
+    tes_end_offsets = []
+
+
+    # TODO also plot DRACH sites
+    # TODO also plot DRACH sites
+    # TODO also plot DRACH sites
+
+    for row_index, row in tes_file_df.iterrows():
+        this_row_gff = GFF_DF[GFF_DF['ID'] == row['gene_id']]
+        num_matches = len(this_row_gff)
+        if num_matches != 1:
+            print("ERROR: found {} matches for {}".format(num_matches, row['ID']))
+            continue
+
+        row_strand = this_row_gff.iloc[0]['strand']
+        row_start = this_row_gff.iloc[0]['start']
+        row_end = this_row_gff.iloc[0]['end']
+
+        if REFERENCE_POINT == "3_PRIME":
+            if row_strand == "-":
+                reference_point = row_start
+            else:
+                reference_point = row_end
+
+            reference_label = "annotated 3' end"
+        if REFERENCE_POINT == "TES":
+            reference_point = row["tes"]
+            reference_label = "approximated TES"
+
+        # assume it's -ve
+        row_mod_offsets = reference_point - numpy.array(row["cannonical_mods"])
+        row_start_offset = reference_point - row_end
+        row_end_offset = reference_point - row_start
+        row_tes_offset = reference_point - row['tes']
+
+        if row_strand == "+":
+            row_mod_offsets *= -1
+            row_start_offset = row_start - reference_point
+            row_end_offset = row_end - reference_point
+            row_tes_offset = row['tes'] - reference_point
+
+        for x in row_mod_offsets:
+            cannonical_mod_offsets.append(x)
+
+        annotation_start_offsets.append(row_start_offset)
+        annotation_end_offsets.append(row_end_offset)
+        tes_end_offsets.append(row_tes_offset)
+
+    min_x = int(min([
+        min(cannonical_mod_offsets),
+        # min(annotation_start_offsets),
+        min(tes_end_offsets),
+        min(annotation_end_offsets)
+    ]) * 1.1)
+    max_x = int(max([
+        max(cannonical_mod_offsets),
+        # max(annotation_start_offsets),
+        max(tes_end_offsets),
+        max(annotation_end_offsets)
+    ]) * 1.1)
+
+    x_ticks = numpy.linspace(
+        min_x, 
+        max_x, 
+        max_x - min_x
+    )
+    if len(tes_file_df) > 1:
+        kernel = scipy.stats.gaussian_kde(cannonical_mod_offsets)
+        cannonical_mod_offset_kde = kernel(x_ticks)
+        kernel = scipy.stats.gaussian_kde(annotation_start_offsets)
+        annotation_start_offset_kde = kernel(x_ticks)
+        if REFERENCE_POINT == "TES":
+            kernel = scipy.stats.gaussian_kde(annotation_end_offsets)
+            annotation_end_offset_kde = kernel(x_ticks)
+        if REFERENCE_POINT == "3_PRIME":
+            kernel = scipy.stats.gaussian_kde(tes_end_offsets)
+            tes_offset_kde = kernel(x_ticks)
+
+    cannonical_mod_offsets_hist = [cannonical_mod_offsets.count(i) for i in range(min_x, max_x)]
+    annotation_start_offsets_hist = [annotation_start_offsets.count(i) for i in range(min_x, max_x)]
+    annotation_end_offsets_hist = [annotation_end_offsets.count(i) for i in range(min_x, max_x)]
+    tes_offsets_hist = [tes_end_offsets.count(i) for i in range(min_x, max_x)]
+
+    d_colors = {
+        'mods': 'green',
+        'start': 'red',
+        'end': 'blue',
+    }
+    if len(tes_file_df) > 1:
+        fig, axes = plt.subplots()
+        axes.plot(x_ticks, cannonical_mod_offset_kde, label='cannonical m6A', color=d_colors['mods'])
+        axes.fill_between(x_ticks, cannonical_mod_offset_kde, alpha=0.2, color=d_colors['mods'])
+
+        if REFERENCE_POINT == "TES":
+            axes.plot(x_ticks, annotation_end_offset_kde, label='annotation end 3\'', color=d_colors['end'])
+            axes.fill_between(x_ticks, annotation_end_offset_kde, alpha=0.2, color=d_colors['end'])
+            axes.set_xlabel('distance from TES (nt)')
+
+        if REFERENCE_POINT == "3_PRIME":
+            axes.plot(x_ticks, tes_offset_kde, label='TES', color=d_colors['end'])
+            axes.fill_between(x_ticks, tes_offset_kde, alpha=0.2, color=d_colors['end'])
+            axes.set_xlabel('distance from 3\' (nt)')
+
+        axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
+        axes.set_ylabel('density (au)')
+        axes.legend()
+        plt.legend(loc="upper right")
+
+
+    fig, axes = plt.subplots()
+    axes.plot(x_ticks, cannonical_mod_offsets_hist, label='cannonical m6A', color=d_colors['mods'])
+    axes.fill_between(x_ticks, cannonical_mod_offsets_hist, alpha=0.2, color=d_colors['mods'])
+
+    if REFERENCE_POINT == "TES":
+        axes.plot(x_ticks, annotation_end_offsets_hist, label='annotation end 3\'', color=d_colors['end'])
+        axes.fill_between(x_ticks, annotation_end_offsets_hist, alpha=0.2, color=d_colors['end'])
+        axes.set_xlabel('distance from TES (nt)')
+
+    if REFERENCE_POINT == "3_PRIME":
+        axes.plot(x_ticks, tes_offsets_hist, label='TES', color=d_colors['end'])
+        axes.fill_between(x_ticks, tes_offsets_hist, alpha=0.2, color=d_colors['end'])
+        axes.set_xlabel('distance from 3\' (nt)')
+
+    axes.axvline(x=0, color='grey', label=reference_label, ls="--", linewidth=1.0)
+    axes.set_ylabel('count')
+    axes.legend()
+    plt.legend(loc="upper right")
+
+    plt.show()
 
 if COMMAND == "m6A_specific_tes_analysis":
     print("m6A_specific_tes_analysis...")
