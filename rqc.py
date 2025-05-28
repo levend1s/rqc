@@ -15,6 +15,7 @@ import sys
 import itertools
 import os
 import json
+import re
 
 from kneed import KneeLocator
 from statsmodels.stats.proportion import proportions_ztest
@@ -57,6 +58,7 @@ parser.add_argument('--generate_filtered_bam', type=bool, default=False)
 parser.add_argument('--separate_y_axes', type=bool, default=False)
 parser.add_argument('--reference_point', type=str, default="TES")
 parser.add_argument('--neighbour_file', type=str, default=None)
+parser.add_argument('--tes_analysis_file', type=str, default=None)
 parser.add_argument('--filter_for_feature_counts', type=bool, default=False)
 parser.add_argument('--filter_by_neighbour_type', type=str, default="all")
 parser.add_argument('--split_by_canonical_mods', type=bool, default=False)
@@ -112,6 +114,7 @@ FEATURE_FILTER = args.feature_filter
 TYPE = args.type
 NEIGHBOUR_DISTANCE = args.neighbour_distance
 NEIGHBOUR_FILE = args.neighbour_file
+TES_ANALYSIS_FILE = args.tes_analysis_file
 SPLIT_BY_CANONICAL_MODS = args.split_by_canonical_mods
 
 
@@ -1122,13 +1125,6 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
 
     return d_sample_filtered_read_ids
 
-
-# ------------------- COMMANDS -------------------  #
-# ------------------- COMMANDS -------------------  #
-# ------------------- COMMANDS -------------------  #
-
-import re
-
 BASE_COMPLEMENTS = {
     'A': 'T',
     'T': 'A',
@@ -1149,6 +1145,11 @@ def reverse_complement(s):
             MOTIF_REVERSE_COMPLEMENT += l
 
     return MOTIF_REVERSE_COMPLEMENT
+
+
+# ------------------- COMMANDS -------------------  #
+# ------------------- COMMANDS -------------------  #
+# ------------------- COMMANDS -------------------  #
 
 if COMMAND == "motif_finder":
     MOTIF = INPUT[0]
@@ -3431,12 +3432,111 @@ if COMMAND == "plot":
     except:
         pass
 
-if COMMAND == "de":
-    de = pandas.read_csv(INPUT[0], sep='\t')
-    # print(de.head())
+if COMMAND == "plot_de":
+    import mplcursors
 
-    de_filtered = de[de["adj.P.Val"] < 0.05]
+    de = pandas.read_csv(INPUT[0], sep='\t')
+
+    pval_cutoff = 0.05
+    log10_pval_cutoff = 10 ** pval_cutoff
+    fc_cutoff = 1
+
+    # de_filtered = de[de["adj.P.Val"] < 0.05]
+    de_filtered = de
+    # print(de_filtered)
+
+    de_filtered['-log10_adj_pval'] = (numpy.log10(de_filtered['adj.P.Val']) * -1)
+    de_filtered['gene_id'] = de_filtered['gene_id'].astype('category')
+    de_filtered['parent_id'] = de_filtered['gene_id'].astype('category')
+
+    
+    de_filtered_raw_size = len(de_filtered)
+
+    # 1 - colour by number of canonical mods
+    # 2 - colour by change in delta TES score
+    # 3 - paired line for convergent neighbours, coloured by delta TES score
+    # - do convergent gene polymerases run into each other?
+    # - do codirectional genes that have readthroughs cause readthroughs into the next gene, causing lower expression?
+
+
+    tes_file_df = {}
+
+    if TES_ANALYSIS_FILE:
+        print("LOADING: {}".format(TES_ANALYSIS_FILE))
+        tes_file_df = pandas.read_csv(TES_ANALYSIS_FILE, sep='\t')
+        tes_file_df['gene_id'] = tes_file_df['gene_id'].astype('category')
+        tes_file_df["parent_id"] = tes_file_df.gene_id.apply(lambda s: s.split('.')[0])
+
+    neighbour_file_df = {}
+
+    if NEIGHBOUR_FILE:
+        with open(NEIGHBOUR_FILE) as json_data:
+            neighbour_file_df = json.load(json_data)
+
+    if FILTER_BY_NEIGHBOUR_TYPE != "all":
+        gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
+        # de_filtered["parent_id"] = de_filtered.gene_id.apply(lambda s: s.split('.')[0])
+
+        # flatten list if required
+        if len(gene_list_filter) > 0 and isinstance(gene_list_filter[0], list):
+            gene_list_filter = [x for xs in gene_list_filter for x in xs]
+
+        gene_list_filter = set(gene_list_filter)
+
+        # remove all entries from tes_file if the gene isn't in the gene list
+        de_filtered = de_filtered[
+                (de_filtered['gene_id'].isin(gene_list_filter))
+        ]
+
+        print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(de_filtered_raw_size - len(de_filtered), FILTER_BY_NEIGHBOUR_TYPE))
+
+
+    fig, axes = plt.subplots()
+
+    connecting_lines = []
+    de_filtered = de_filtered.set_index('gene_id')
+    de_dict = de_filtered.to_dict('index')
+    # x coords are logFC, y coords are -log10_adj_pval
+    # for each pair, get the xy coords of each element and plot a connecting line
+    for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
+        x = [de_dict[a]['logFC'], de_dict[b]['logFC']]
+        y = [de_dict[a]['-log10_adj_pval'], de_dict[b]['-log10_adj_pval']]
+
+        xy1 = [de_dict[a]['logFC'], de_dict[a]['-log10_adj_pval']]
+        xy2 = [de_dict[b]['logFC'], de_dict[b]['-log10_adj_pval']]
+
+
+        if y[0] >= log10_pval_cutoff or y[1] >= log10_pval_cutoff:
+            # axes.plot(a, b, color='red', ls='-', data={a: xy1, b: xy2})
+            axes.plot(x, y, color='red', ls='-', linewidth=1.0)
+
+    axes.scatter(
+        de_filtered['logFC'].to_list(), 
+        de_filtered['-log10_adj_pval'].to_list(), 
+        s=10
+    )
+
+    # axes = de_filtered.plot.scatter(
+    #     x='logFC',
+    #     y='-log10_adj_pval',
+    #     s=5
+    # )
+
+    axes.axhline(y=log10_pval_cutoff, color='grey', ls="--", linewidth=1.0)
+    axes.set_ylabel('-log10 adjusted p val')
+    axes.set_xlabel('log2FC')
+
     print(de_filtered)
+    def show_label(sel):
+        index = sel.index
+        if index < len(de_filtered):
+            sel.annotation.set_text(de_filtered.iloc[index].parent_id)
+            print(de_filtered.iloc[index].parent_id)
+            
+    mplcursors.cursor(axes, hover=True).connect("add", show_label)
+
+    plt.show()
+
 
 if COMMAND == "plot_dmr":
     # plot transcript against dmr score
