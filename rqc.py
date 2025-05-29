@@ -1168,7 +1168,7 @@ if COMMAND == "motif_finder":
 
 
 
-    pprint(GFF_PARENT_TREE)
+    # pprint(GFF_PARENT_TREE)
 
     fasta = process_genome_file()
 
@@ -1192,29 +1192,48 @@ if COMMAND == "motif_finder":
     for contig in fasta.keys():
         print("LOG - searching: {}".format(contig))
 
-        forward_matches = re.finditer(forward_lookahead_regex, fasta[contig]['sequence'])
-        reverse_matches = re.finditer(reverse_lookahead_regex, fasta[contig]['sequence'])
+        forward_count = 0
+        reverse_count = 0
 
         # if feature filter the output is different
         # the contig is the parent gene ID
         if FEATURE_FILTER:
-            this_contig_genes = gff_df[gff_df.contig == contig]
+            this_contig_genes = gff_df[
+                (gff_df.seq_id == contig) & 
+                (gff_df.type == FEATURE_FILTER)
+            ]
 
+            for _, row in this_contig_genes.iterrows():
+                if row.strand == "+":
+                    this_regex = forward_lookahead_regex
+                else:
+                    this_regex = reverse_lookahead_regex
+                    
+                matches_in_gene = re.finditer(this_regex, fasta[contig]['sequence'][row.start:row.end])
 
+                for m in matches_in_gene:
+                    row_summary = [row.ID, m.start(), m.start()+len(m.group(1)), m.group(1), 0, row.strand]
+                    rows.append(row_summary)
 
-        strand = "+"
-        forward_count = 0
-        for m in forward_matches:
-            row_summary = [contig, m.start(), m.start()+len(m.group(1)), m.group(1), 0, strand]
-            rows.append(row_summary)
-            forward_count += 1
+                    if row.strand == "+":
+                        forward_count += 1
+                    else:
+                        reverse_count += 1
+        else:
+            forward_matches = list(re.finditer(forward_lookahead_regex, fasta[contig]['sequence']))
+            reverse_matches = list(re.finditer(reverse_lookahead_regex, fasta[contig]['sequence']))
+            
+            strand = "+"
+            for m in forward_matches:
+                row_summary = [contig, m.start(), m.start()+len(m.group(1)), m.group(1), 0, strand]
+                rows.append(row_summary)
+                forward_count += 1
 
-        strand = "-"
-        reverse_count = 0
-        for m in reverse_matches:
-            row_summary = [contig, m.start(), m.start()+len(m.group(1)), reverse_complement(m.group(1)), 0, strand]
-            rows.append(row_summary)
-            reverse_count += 1
+            strand = "-"
+            for m in reverse_matches:
+                row_summary = [contig, m.start(), m.start()+len(m.group(1)), reverse_complement(m.group(1)), 0, strand]
+                rows.append(row_summary)
+                reverse_count += 1
 
         print("LOG - {} matches: {} forward, {} reverse".format(contig, forward_count, reverse_count))
 
