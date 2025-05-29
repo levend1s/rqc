@@ -1166,10 +1166,6 @@ if COMMAND == "motif_finder":
         gff_df['ID'] = gff_df['ID'].astype('category')
         gff_df['type'] = gff_df['type'].astype('category')
 
-
-
-    # pprint(GFF_PARENT_TREE)
-
     fasta = process_genome_file()
 
     MOTIF_RC = reverse_complement(MOTIF)
@@ -1209,7 +1205,7 @@ if COMMAND == "motif_finder":
                 else:
                     this_regex = reverse_lookahead_regex
                     
-                matches_in_gene = re.finditer(this_regex, fasta[contig]['sequence'][row.start:row.end])
+                matches_in_gene = re.finditer(this_regex, fasta[contig]['sequence'][row.start-1:row.end])
 
                 for m in matches_in_gene:
                     row_summary = [row.ID, m.start(), m.start()+len(m.group(1)), m.group(1), 0, row.strand]
@@ -1220,8 +1216,8 @@ if COMMAND == "motif_finder":
                     else:
                         reverse_count += 1
         else:
-            forward_matches = list(re.finditer(forward_lookahead_regex, fasta[contig]['sequence']))
-            reverse_matches = list(re.finditer(reverse_lookahead_regex, fasta[contig]['sequence']))
+            forward_matches = re.finditer(forward_lookahead_regex, fasta[contig]['sequence'])
+            reverse_matches = re.finditer(reverse_lookahead_regex, fasta[contig]['sequence'])
             
             strand = "+"
             for m in forward_matches:
