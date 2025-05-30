@@ -64,6 +64,8 @@ parser.add_argument('--filter_by_neighbour_type', type=str, default="all")
 parser.add_argument('--split_by_canonical_mods', type=bool, default=False)
 parser.add_argument('--num_canonical_mods_filter', type=int, default=0)
 parser.add_argument('--feature_filter', type=str, default=None)
+parser.add_argument('--show_neighbours', type=str, default=None)
+
 
 
 # find neighbors
@@ -108,6 +110,7 @@ FILTER_FOR_FEATURE_COUNTS = args.filter_for_feature_counts
 FILTER_BY_NEIGHBOUR_TYPE = args.filter_by_neighbour_type
 NUM_CANONICAL_MODS_FILTER = args.num_canonical_mods_filter
 FEATURE_FILTER = args.feature_filter
+SHOW_NEIGHBOURS = args.show_neighbours
 
 
 
@@ -3472,8 +3475,6 @@ if COMMAND == "plot_de":
     # 3 - paired line for convergent neighbours, coloured by delta TES score
     # - do convergent gene polymerases run into each other?
     # - do codirectional genes that have readthroughs cause readthroughs into the next gene, causing lower expression?
-
-
     tes_file_df = {}
 
     if TES_ANALYSIS_FILE:
@@ -3505,37 +3506,83 @@ if COMMAND == "plot_de":
 
         print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(de_filtered_raw_size - len(de_filtered), FILTER_BY_NEIGHBOUR_TYPE))
 
+    # remove mitochondrial and api genes
+    de_filtered = de_filtered[
+        (de_filtered['gene_id'].str.contains("MIT|API") == False)
+    ]
 
-    fig, axes = plt.subplots()
+    if READ_DEPTH_THRESHOLD:
+        log2rdf = numpy.log2(READ_DEPTH_THRESHOLD)
+        de_filtered_prior_size = len(de_filtered)
+        de_filtered = de_filtered[de_filtered.AveExpr >= log2rdf]
+        print("REMOVED {} DUE TO FILTER (READ DEPTH THRESHOLD >= {})".format(de_filtered_prior_size - len(de_filtered), READ_DEPTH_THRESHOLD))
 
-    connecting_lines = []
+    # de_filtered = de_filtered[
+    #     (de_filtered['gene_id'].isin(["PF3D7_1462800", "PF3D7_1462900", "PF3D7_1463000"]))
+    # ]
+
+    tes_file_df['tes_change'] = tes_file_df['wart_after'] = tes_file_df['wart_before']
+    tes_file_df['wam_change'] = tes_file_df['wam_after'] = tes_file_df['wam_before']
+
+    de_filtered = de_filtered.merge(tes_file_df, left_on='gene_id', right_on='parent_id')
+    de_filtered['gene_id'] = de_filtered['gene_id_x']
+    de_filtered['gene_id'] = de_filtered['gene_id'].astype('category')
+
+    de_filtered['neighbour_tes_change'] = None
+    # print(de_filtered['gene_id'].to_list())
+
     de_filtered = de_filtered.set_index('gene_id')
-    de_dict = de_filtered.to_dict('index')
+    print(de_filtered)
+    # de_dict = de_filtered.to_dict('index')
+
+    print(de_filtered)
+    print(tes_file_df)
+    if FILTER_BY_NEIGHBOUR_TYPE != "all":
+        for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
+            if ("MIT" not in a) and ("API" not in a):
+                if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
+                    print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
+                else:
+                    print("setting {} to {}'s TES change...".format(a, b))
+                    neighbor_tes_change = tes_file_df[tes_file_df.parent_id == b].iloc[0].tes_change
+                    print("setting {} to {}'s TES change ({})...".format(a, b, neighbor_tes_change))
+                    
+                    de_filtered.at[a, 'neighbour_tes_change'] = neighbor_tes_change
+
+    # fig, axes = plt.subplots()
+
+    # connecting_lines = []
+    # de_filtered = de_filtered.set_index('gene_id')
+    # de_dict = de_filtered.to_dict('index')
     # x coords are logFC, y coords are -log10_adj_pval
     # for each pair, get the xy coords of each element and plot a connecting line
-    for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
-        x = [de_dict[a]['logFC'], de_dict[b]['logFC']]
-        y = [de_dict[a]['-log10_adj_pval'], de_dict[b]['-log10_adj_pval']]
+    # if FILTER_BY_NEIGHBOUR_TYPE != "all" and SHOW_NEIGHBOURS:
+    #     for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
+    #         if a in de_dict.keys() and b in de_dict.keys():
+    #             x = [de_dict[a]['logFC'], de_dict[b]['logFC']]
+    #             y = [de_dict[a]['-log10_adj_pval'], de_dict[b]['-log10_adj_pval']]
 
-        xy1 = [de_dict[a]['logFC'], de_dict[a]['-log10_adj_pval']]
-        xy2 = [de_dict[b]['logFC'], de_dict[b]['-log10_adj_pval']]
+    #             xy1 = [de_dict[a]['logFC'], de_dict[a]['-log10_adj_pval']]
+    #             xy2 = [de_dict[b]['logFC'], de_dict[b]['-log10_adj_pval']]
 
+    #             if y[0] >= log10_pval_cutoff or y[1] >= log10_pval_cutoff:
+    #                 axes.plot(x, y, color='red', ls='-', linewidth=1.0)
 
-        if y[0] >= log10_pval_cutoff or y[1] >= log10_pval_cutoff:
-            # axes.plot(a, b, color='red', ls='-', data={a: xy1, b: xy2})
-            axes.plot(x, y, color='red', ls='-', linewidth=1.0)
+    # axes.scatter(
+    #     de_filtered['logFC'].to_list(), 
+    #     de_filtered['-log10_adj_pval'].to_list(),
+    #     c=de_filtered['neighbour_tes_change'].to_list(),
+    #     s=10
+    # )
 
-    axes.scatter(
-        de_filtered['logFC'].to_list(), 
-        de_filtered['-log10_adj_pval'].to_list(), 
+    print(de_filtered.to_string())
+
+    axes = de_filtered.plot.scatter(
+        x='logFC',
+        y='-log10_adj_pval',
+        c='wam_change',
         s=10
     )
-
-    # axes = de_filtered.plot.scatter(
-    #     x='logFC',
-    #     y='-log10_adj_pval',
-    #     s=5
-    # )
 
     axes.axhline(y=log10_pval_cutoff, color='grey', ls="--", linewidth=1.0)
     axes.set_ylabel('-log10 adjusted p val')
@@ -3545,8 +3592,8 @@ if COMMAND == "plot_de":
     def show_label(sel):
         index = sel.index
         if index < len(de_filtered):
-            sel.annotation.set_text(de_filtered.iloc[index].parent_id)
-            print(de_filtered.iloc[index].parent_id)
+            sel.annotation.set_text(de_filtered.iloc[index].gene_id_x)
+            print(de_filtered.iloc[index].gene_id_x)
             
     mplcursors.cursor(axes, hover=True).connect("add", show_label)
 
