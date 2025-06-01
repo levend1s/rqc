@@ -749,6 +749,7 @@ def process_genome_file():
 
             while line:
                 # is line a header
+                # PLASMODIUM SPECIFIC
                 if line.startswith('>'):
                     header_attrs = line.split('|')
                     for h in header_attrs:
@@ -1257,6 +1258,7 @@ if COMMAND == "motif_finder":
                 
                     # add 1 since an index of 0 in the fasta substring is actually a 1
                     row_summary = [contig, row.start + m.start() + 1, row.start + m.start()+len(m.group(1)) + 1, match, 0, row.strand, row.ID]
+
                     rows.append(row_summary)
 
                     if row.strand == "+":
@@ -1269,13 +1271,13 @@ if COMMAND == "motif_finder":
             
             strand = "+"
             for m in forward_matches:
-                row_summary = [contig, m.start(), m.start()+len(m.group(1)), m.group(1), 0, strand]
+                row_summary = [contig, m.start()+1, m.start()+len(m.group(1))+1, m.group(1), 0, strand, ""]
                 rows.append(row_summary)
                 forward_count += 1
 
             strand = "-"
             for m in reverse_matches:
-                row_summary = [contig, m.start(), m.start()+len(m.group(1)), reverse_complement(m.group(1)), 0, strand]
+                row_summary = [contig, m.start()+1, m.start()+len(m.group(1))+1, reverse_complement(m.group(1)), 0, strand, ""]
                 rows.append(row_summary)
                 reverse_count += 1
 
@@ -1777,14 +1779,25 @@ if COMMAND == "plot_relative_distance":
         d_coverages[row_index] = {}
 
         for k, v in d_offset_files.items():
-            in_range = v[(v.start >= (offset_point - DISTANCE))
-                         & (v.start <= (offset_point + DISTANCE))
-                         & (v.contig == row.contig)
-                         & (v.strand == row.strand)]
-            
-            offsets = [x - offset_point for x in in_range.start.to_list()]
-            if row.strand == "-":
+            if row.strand == "+":
+                in_range = v[(v.start >= (offset_point - DISTANCE))
+                            & (v.start <= (offset_point + DISTANCE))
+                            & (v.contig == row.contig)
+                            & (v.strand == row.strand)]
+                
+                offsets = [x - offset_point for x in in_range.start.to_list()]
+            else:
+                in_range = v[(v.end >= (offset_point - DISTANCE))
+                            & (v.end <= (offset_point + DISTANCE))
+                            & (v.contig == row.contig)
+                            & (v.strand == row.strand)]
+                
+                offsets = [x - offset_point for x in in_range.end.to_list()]
                 offsets = [-x for x in offsets]
+            
+            # print("offset_point: {}".format(offset_point))
+            # print(in_range)
+            # print(offsets)
             d_coverages[row_index][k] = offsets
 
         # if row_index > 100:
@@ -1817,7 +1830,7 @@ if COMMAND == "plot_relative_distance":
 
     # print(d_coverages)
     # print(d_total_offsets)
-    # print(d_offset_hists)
+    print(d_offset_hists)
 
     d_colors = {
         'NGG': 'green',
