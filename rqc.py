@@ -65,6 +65,11 @@ parser.add_argument('--split_by_canonical_mods', type=bool, default=False)
 parser.add_argument('--num_canonical_mods_filter', type=int, default=0)
 parser.add_argument('--feature_filter', type=str, default=None)
 parser.add_argument('--show_neighbours', type=str, default=None)
+parser.add_argument('--distance', type=int, default=0)
+parser.add_argument('--reference_bed', type=str, default=None)
+parser.add_argument('--reference_label', type=str, default=None)
+
+
 
 
 
@@ -111,6 +116,12 @@ FILTER_BY_NEIGHBOUR_TYPE = args.filter_by_neighbour_type
 NUM_CANONICAL_MODS_FILTER = args.num_canonical_mods_filter
 FEATURE_FILTER = args.feature_filter
 SHOW_NEIGHBOURS = args.show_neighbours
+DISTANCE = args.distance
+REFERENCE_BED = args.reference_bed
+REFERENCE_LABEL = args.reference_label
+
+
+
 
 
 
@@ -1134,7 +1145,11 @@ BASE_COMPLEMENTS = {
     'C': 'G',
     'G': 'C',
     '[': ']',
-    ']': '['
+    ']': '[',
+    '^': '$',
+    '$': '^',
+    '(': ')',
+    ')': '('
 }
 
 def reverse_complement(s):
@@ -1154,6 +1169,7 @@ def reverse_complement(s):
 # ------------------- COMMANDS -------------------  #
 # ------------------- COMMANDS -------------------  #
 
+
 if COMMAND == "motif_finder":
     MOTIF = INPUT[0]
 
@@ -1169,6 +1185,18 @@ if COMMAND == "motif_finder":
         gff_df['ID'] = gff_df['ID'].astype('category')
         gff_df['type'] = gff_df['type'].astype('category')
 
+        print("GFF types:")
+        types = set(gff_df['type'].to_list())
+        type_counts = {}
+        for t in types:
+            of_this_type = gff_df[gff_df.type == t]
+            type_counts[t] = len(of_this_type)
+
+        pprint(type_counts)
+
+
+
+
     fasta = process_genome_file()
 
     MOTIF_RC = reverse_complement(MOTIF)
@@ -1183,7 +1211,8 @@ if COMMAND == "motif_finder":
         "end",
         "name",
         "score",
-        "strand"
+        "strand",
+        "ID"
     ]
 
     rows = []
@@ -1208,10 +1237,26 @@ if COMMAND == "motif_finder":
                 else:
                     this_regex = reverse_lookahead_regex
                     
+                if row.phase == ".":
+                    phase = 0
+                else:
+                    phase = int(row.phase)
+
+                # gff files are 1-indexed, so subtract 1 from the start co-ord for accurate python list slicing
                 matches_in_gene = re.finditer(this_regex, fasta[contig]['sequence'][row.start-1:row.end])
 
                 for m in matches_in_gene:
-                    row_summary = [row.ID, m.start(), m.start()+len(m.group(1)), m.group(1), 0, row.strand]
+                    # if row.ID == "PF3D7_0102500.1-p1-CDS4":
+                    #     print(fasta[contig]['sequence'][row.start-1:row.end])
+                    #     print(this_regex)
+                    #     print(m.group(1))
+
+                    match = m.group(1)
+                    if row.strand == "-":
+                        match = reverse_complement(m.group(1))
+                
+                    # add 1 since an index of 0 in the fasta substring is actually a 1
+                    row_summary = [contig, row.start + m.start() + 1, row.start + m.start()+len(m.group(1)) + 1, match, 0, row.strand, row.ID]
                     rows.append(row_summary)
 
                     if row.strand == "+":
@@ -1694,6 +1739,121 @@ if COMMAND == "plot_tes_vs_wam":
         mplcursors.cursor(axes, hover=True).connect("add", show_label)
 
     plt.show()
+
+
+if COMMAND == "plot_relative_distance":
+    d_offset_files = {}
+    print(INPUT)
+    
+    i = 0
+    while i < len(INPUT):
+        key = INPUT[i]
+        file_path = INPUT[i+1]
+        print("LOADING: {}".format(file_path))
+        file_df = pandas.read_csv(file_path, sep='\t')
+        file_df['contig'] = file_df['contig'].astype('category')
+        file_df['strand'] = file_df['strand'].astype('category')
+
+        # file_df['contig'] = file_df['contig'].astype('category')
+
+        d_offset_files[key] = file_df
+        i += 2
+
+    reference_df = pandas.read_csv(REFERENCE_BED, sep='\t')
+    reference_df['contig'] = reference_df['contig'].astype('category')
+    reference_df['strand'] = reference_df['strand'].astype('category')
+
+
+    d_coverages = {}
+
+    for row_index, row in reference_df.iterrows():
+        if row.strand == "+":
+            offset_point = int(row.start)
+        else:
+            offset_point = int(row.end)
+
+        print("processing row {} (of {})...".format(row_index, len(reference_df)))
+
+        d_coverages[row_index] = {}
+
+        for k, v in d_offset_files.items():
+            in_range = v[(v.start >= (offset_point - DISTANCE))
+                         & (v.start <= (offset_point + DISTANCE))
+                         & (v.contig == row.contig)
+                         & (v.strand == row.strand)]
+            
+            offsets = [x - offset_point for x in in_range.start.to_list()]
+            if row.strand == "-":
+                offsets = [-x for x in offsets]
+            d_coverages[row_index][k] = offsets
+
+        # if row_index > 100:
+            # break
+
+    d_total_offsets = {}
+    d_offset_hists = {}
+    d_offset_kdes = {}
+    x_ticks = list(range(-DISTANCE, DISTANCE))
+
+    for k, v in d_offset_files.items():
+        d_total_offsets[k] = []
+        d_offset_hists[k] = []
+
+
+    for idx, coverages in d_coverages.items():
+        for k, v in d_offset_files.items():
+            if len(d_total_offsets[k]) == 0:
+                d_total_offsets[k] = coverages[k]
+            else:
+                d_total_offsets[k] += coverages[k]
+
+    for k, v in d_total_offsets.items():
+        d_offset_hists[k] = [v.count(i) for i in range(-DISTANCE, DISTANCE)]
+
+        kernel = scipy.stats.gaussian_kde(v)
+        kde = kernel(x_ticks)
+
+        d_offset_kdes[k] = kde
+
+    # print(d_coverages)
+    # print(d_total_offsets)
+    # print(d_offset_hists)
+
+    d_colors = {
+        'NGG': 'green',
+        'TTTN': 'blue'
+    }
+
+    fig, axes = plt.subplots()
+
+    for k, v in d_offset_hists.items():
+        axes.plot(x_ticks, v, label=k, color=d_colors[k])
+        axes.fill_between(x_ticks, v, alpha=0.2, color=d_colors[k])
+
+    axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
+    axes.set_ylabel('count')
+    axes.legend()
+    plt.legend(loc="upper right")
+
+    fig, axes = plt.subplots()
+
+    for k, v in d_offset_kdes.items():
+        axes.plot(x_ticks, v, label=k, color=d_colors[k])
+        axes.fill_between(x_ticks, v, alpha=0.2, color=d_colors[k])
+
+    axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
+    axes.set_ylabel('count')
+    axes.legend()
+    plt.legend(loc="upper right")
+
+    print("reference count: {}".format(len(reference_df)))
+    for k, v in d_total_offsets.items():
+        print("{} within range ({}) count: {}".format(k, DISTANCE, len(v)))
+
+
+
+    plt.show()
+
 
 
 if COMMAND == "plot_tes_wam_distance":
