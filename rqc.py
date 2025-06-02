@@ -761,7 +761,7 @@ def process_genome_file(contig_lengths):
             while line:
                 # is line a header
                 # PLASMODIUM SPECIFIC
-                if line.startswith('>') and "chromosome" in line:
+                if line.startswith('>'):
                     if not contig_lengths:
                         header_attrs = line.split('|')
                         for h in header_attrs:
@@ -1227,8 +1227,8 @@ if COMMAND == "motif_finder":
 
     MOTIF_RC = reverse_complement(MOTIF)
     print("LOG - looking for motif: {} (rc={})".format(MOTIF, MOTIF_RC))
-    forward_lookahead_regex = re.compile("(?=({}))".format(MOTIF))
-    reverse_lookahead_regex = re.compile("(?=({}))".format(MOTIF_RC))
+    forward_lookahead_regex = re.compile("(?=({}))".format(MOTIF), re.IGNORECASE)
+    reverse_lookahead_regex = re.compile("(?=({}))".format(MOTIF_RC), re.IGNORECASE)
 
     # create output file
     GENERIC_BED_HEADER = [
@@ -1303,7 +1303,7 @@ if COMMAND == "motif_finder":
                 matches_in_gene = re.finditer(this_regex, fasta[contig]['sequence'][row.start-1:row.end])
 
                 for m in matches_in_gene:
-                    # if row.ID == "PF3D7_0102500.1-p1-CDS4":
+                    # if row.locus_tag == "TGME49_222160":
                     #     print(fasta[contig]['sequence'][row.start-1:row.end])
                     #     print(this_regex)
                     #     print(m.group(1))
