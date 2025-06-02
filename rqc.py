@@ -1257,7 +1257,7 @@ if COMMAND == "motif_finder":
                         match = reverse_complement(m.group(1))
                 
                     # add 1 since an index of 0 in the fasta substring is actually a 1
-                    row_summary = [contig, row.start + m.start() + 1, row.start + m.start()+len(m.group(1)) + 1, match, 0, row.strand, row.ID]
+                    row_summary = [contig, row.start + m.start(), row.start + m.start()+len(m.group(1)), match, 0, row.strand, row.ID]
 
                     rows.append(row_summary)
 
