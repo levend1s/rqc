@@ -1206,6 +1206,8 @@ if COMMAND == "motif_finder":
     gff_df['seq_id'] = gff_df['seq_id'].astype('category')
     gff_df['ID'] = gff_df['ID'].astype('category')
     gff_df['type'] = gff_df['type'].astype('category')
+    gff_df['locus_tag'] = gff_df['locus_tag'].astype('category')
+
 
     print("GFF types:")
     types = set(gff_df['type'].to_list())
@@ -1213,9 +1215,6 @@ if COMMAND == "motif_finder":
     for t in types:
         of_this_type = gff_df[gff_df.type == t]
         type_counts[t] = len(of_this_type)
-
-    pprint(type_counts)
-
 
     contig_lengths = {}
     if 'region' in types:
@@ -1244,6 +1243,23 @@ if COMMAND == "motif_finder":
 
     rows = []
 
+    HAS_LOCUS_TAG = 'locus_tag' in gff_df.columns.to_list()
+
+    # build a dict containing the number of CDS for each gene, needed so we can number our CDS
+    lt_cds_counts = {}
+    if HAS_LOCUS_TAG:
+        uniq_locus_tags = set(gff_df.locus_tag.to_list())
+        print("LOG - locus tag in GFF file, finding number of CDS for each gene ({})...".format(len(uniq_locus_tags)))
+        for lt in uniq_locus_tags:
+            cds_this_gene = gff_df[
+                (gff_df.locus_tag == lt) & 
+                (gff_df.type == "CDS")]
+
+            if len(cds_this_gene) > 0 and cds_this_gene.iloc[0].strand == "+":
+                lt_cds_counts[lt] = 1
+            else:
+                lt_cds_counts[lt] = len(cds_this_gene)
+
     for contig in fasta.keys():
         print("LOG - searching: {}".format(contig))
 
@@ -1261,13 +1277,27 @@ if COMMAND == "motif_finder":
             for _, row in this_contig_genes.iterrows():
                 if row.strand == "+":
                     this_regex = forward_lookahead_regex
+                    if HAS_LOCUS_TAG:
+                        this_cds_idx = lt_cds_counts[row.locus_tag]
+                        lt_cds_counts[row.locus_tag] += 1
                 else:
                     this_regex = reverse_lookahead_regex
+                    if HAS_LOCUS_TAG:
+                        this_cds_idx = lt_cds_counts[row.locus_tag]
+                        lt_cds_counts[row.locus_tag] -= 1
                     
                 if row.phase == ".":
                     phase = 0
                 else:
                     phase = int(row.phase)
+
+                # HACK for CryptoBGF, Toxo ME49
+                # ID is a different naming scheme and CDS aren't numbered
+                if HAS_LOCUS_TAG:
+                    row_id = "{}-CDS{}".format(row.locus_tag, this_cds_idx)
+                else:
+                    row_id = row.ID
+
 
                 # gff files are 1-indexed, so subtract 1 from the start co-ord for accurate python list slicing
                 matches_in_gene = re.finditer(this_regex, fasta[contig]['sequence'][row.start-1:row.end])
@@ -1283,7 +1313,7 @@ if COMMAND == "motif_finder":
                         match = reverse_complement(m.group(1))
                 
                     # add 1 since an index of 0 in the fasta substring is actually a 1
-                    row_summary = [contig, row.start + m.start(), row.start + m.start()+len(m.group(1)), match, 0, row.strand, row.ID]
+                    row_summary = [contig, row.start + m.start(), row.start + m.start()+len(m.group(1)), match, 0, row.strand, row_id]
 
                     rows.append(row_summary)
 
