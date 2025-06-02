@@ -736,11 +736,22 @@ def process_annotation_file():
 
     return ANNOTATION_FILE
 
-def process_genome_file():
+def process_genome_file(contig_lengths):
     print("LOG - loading fasta file...")
 
     FASTA_DICT = {}
     FASTA_LINE_LENGTH = 60
+
+    # read two lines and set the line length as the second line
+    if os.path.isfile(GENOME_FILE_PATH):
+        with open(GENOME_FILE_PATH) as f:
+            line = f.readline()
+            line = f.readline()
+            FASTA_LINE_LENGTH = len(line.strip())
+            print("LOG - fasta line len = {}...".format(FASTA_LINE_LENGTH))
+            print(contig_lengths)
+
+
 
     if os.path.isfile(GENOME_FILE_PATH):
         with open(GENOME_FILE_PATH) as f:
@@ -751,17 +762,24 @@ def process_genome_file():
                 # is line a header
                 # PLASMODIUM SPECIFIC
                 if line.startswith('>'):
-                    header_attrs = line.split('|')
-                    for h in header_attrs:
-                        h = h.strip()
-                        if h.startswith('>'):
-                            contig = h[1:]
-                            FASTA_DICT[contig] = {}
-                            current_contig = contig
-                        else:
-                            k, v = h.split('=')
-                            FASTA_DICT[current_contig][k] = v
-                    FASTA_DICT[current_contig]['length'] = int(FASTA_DICT[current_contig]['length'])
+                    if not contig_lengths:
+                        header_attrs = line.split('|')
+                        for h in header_attrs:
+                            h = h.strip()
+                            if h.startswith('>'):
+                                contig = h[1:]
+                                FASTA_DICT[contig] = {}
+                                current_contig = contig
+                            else:
+                                k, v = h.split('=')
+                                FASTA_DICT[current_contig][k] = v
+                        FASTA_DICT[current_contig]['length'] = int(FASTA_DICT[current_contig]['length'])
+                    else:
+                        header_attrs = line.split(' ')
+                        current_contig = header_attrs[0][1:]
+                        FASTA_DICT[current_contig] = {}
+                        FASTA_DICT[current_contig]['length'] = contig_lengths[current_contig]
+                    
                     num_lines_seq_fasta = math.ceil(FASTA_DICT[current_contig]['length'] / FASTA_LINE_LENGTH) 
                     FASTA_DICT[current_contig]['sequence'] = [None] * num_lines_seq_fasta
                     i = 0
@@ -1178,27 +1196,31 @@ if COMMAND == "motif_finder":
     # filter=exons
     # filter=first_exon
     # filter=last_exon
-    if FEATURE_FILTER:
-        gff = process_annotation_file()
-        gff_df = gff.attributes_to_columns()
-        gff_df['strand'] = gff_df['strand'].astype('category')
-        gff_df['seq_id'] = gff_df['seq_id'].astype('category')
-        gff_df['ID'] = gff_df['ID'].astype('category')
-        gff_df['type'] = gff_df['type'].astype('category')
+    gff = process_annotation_file()
+    gff_df = gff.attributes_to_columns()
+    gff_df['strand'] = gff_df['strand'].astype('category')
+    gff_df['seq_id'] = gff_df['seq_id'].astype('category')
+    gff_df['ID'] = gff_df['ID'].astype('category')
+    gff_df['type'] = gff_df['type'].astype('category')
 
-        print("GFF types:")
-        types = set(gff_df['type'].to_list())
-        type_counts = {}
-        for t in types:
-            of_this_type = gff_df[gff_df.type == t]
-            type_counts[t] = len(of_this_type)
+    print("GFF types:")
+    types = set(gff_df['type'].to_list())
+    type_counts = {}
+    for t in types:
+        of_this_type = gff_df[gff_df.type == t]
+        type_counts[t] = len(of_this_type)
 
-        pprint(type_counts)
-
+    pprint(type_counts)
 
 
+    contig_lengths = {}
+    if 'region' in types:
+        type_rows = gff_df[gff_df.type == 'region']
 
-    fasta = process_genome_file()
+        for _, row in type_rows.iterrows():
+            contig_lengths[row.seq_id] = row.end
+
+    fasta = process_genome_file(contig_lengths)
 
     MOTIF_RC = reverse_complement(MOTIF)
     print("LOG - looking for motif: {} (rc={})".format(MOTIF, MOTIF_RC))
