@@ -761,7 +761,7 @@ def process_genome_file(contig_lengths):
             while line:
                 # is line a header
                 # PLASMODIUM SPECIFIC
-                if line.startswith('>'):
+                if line.startswith('>') and "chromosome" in line:
                     if not contig_lengths:
                         header_attrs = line.split('|')
                         for h in header_attrs:
@@ -784,9 +784,13 @@ def process_genome_file(contig_lengths):
                     FASTA_DICT[current_contig]['sequence'] = [None] * num_lines_seq_fasta
                     i = 0
                 else:
-                    # FASTA_DICT[current_contig]['sequence'] += line.strip()
-                    FASTA_DICT[current_contig]['sequence'][i] = line.strip()
-                    i += 1
+                    if line.startswith('>'):
+                        current_contig = None
+
+                    elif current_contig:
+                        # FASTA_DICT[current_contig]['sequence'] += line.strip()
+                        FASTA_DICT[current_contig]['sequence'][i] = line.strip()
+                        i += 1
 
                 line = f.readline()
     
