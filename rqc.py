@@ -1206,7 +1206,10 @@ if COMMAND == "motif_finder":
     gff_df['seq_id'] = gff_df['seq_id'].astype('category')
     gff_df['ID'] = gff_df['ID'].astype('category')
     gff_df['type'] = gff_df['type'].astype('category')
-    gff_df['locus_tag'] = gff_df['locus_tag'].astype('category')
+
+    HAS_LOCUS_TAG = 'locus_tag' in gff_df.columns.to_list()
+    if HAS_LOCUS_TAG:
+        gff_df['locus_tag'] = gff_df['locus_tag'].astype('category')
 
 
     print("GFF types:")
@@ -1243,7 +1246,6 @@ if COMMAND == "motif_finder":
 
     rows = []
 
-    HAS_LOCUS_TAG = 'locus_tag' in gff_df.columns.to_list()
 
     # build a dict containing the number of CDS for each gene, needed so we can number our CDS
     lt_cds_counts = {}
@@ -1342,6 +1344,23 @@ if COMMAND == "motif_finder":
     motif_matches_df = pandas.DataFrame(columns=GENERIC_BED_HEADER, data=rows)
 
     motif_matches_df.to_csv(OUTFILE, sep='\t', index=False)
+
+    bases_counts = {
+        'A': 0,
+        'T': 0,
+        'C': 0,
+        'G': 0
+    }
+
+    genome_size = 0
+
+    for contig in fasta.keys():
+        genome_size += len(fasta[contig]['sequence'])
+        for b in bases_counts.keys():
+            bases_counts[b] += fasta[contig]['sequence'].upper().count(b)
+
+    print("genome size: {}".format(genome_size))
+    pprint(bases_counts)
     
 
 if COMMAND == "gene_neighbour_analysis":
@@ -1823,6 +1842,9 @@ if COMMAND == "plot_relative_distance":
 
 
     d_coverages = {}
+    d_num_pam_sites = {}
+    for k, v in d_offset_files.items():
+        d_num_pam_sites[k] = []
 
     for row_index, row in reference_df.iterrows():
         if row.strand == "+":
@@ -1855,6 +1877,9 @@ if COMMAND == "plot_relative_distance":
             # print(in_range)
             # print(offsets)
             d_coverages[row_index][k] = offsets
+            d_num_pam_sites[k].append(len(offsets))
+            # if (len(offsets)) > 70:
+                # print(row)
 
         # if row_index > 100:
             # break
@@ -1884,9 +1909,12 @@ if COMMAND == "plot_relative_distance":
 
         d_offset_kdes[k] = kde
 
+    d_num_pam_sites_hist = {}
+    for k, v in d_num_pam_sites.items():
+        d_num_pam_sites_hist[k] = [v.count(i) for i in range(DISTANCE * 2)]
+
     # print(d_coverages)
     # print(d_total_offsets)
-    print(d_offset_hists)
 
     d_colors = {
         'NGG': 'green',
@@ -1899,8 +1927,15 @@ if COMMAND == "plot_relative_distance":
         axes.plot(x_ticks, v, label=k, color=d_colors[k])
         axes.fill_between(x_ticks, v, alpha=0.2, color=d_colors[k])
 
+    # TODO HACK
+    # CUSTOM_Y_MAX = 800
+
     axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
     axes.set_ylabel('count')
+    axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
+    axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
+    # if CUSTOM_Y_MAX:
+        # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
     axes.legend()
     plt.legend(loc="upper right")
 
@@ -1912,6 +1947,10 @@ if COMMAND == "plot_relative_distance":
 
     axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
     axes.set_ylabel('count')
+    axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
+    axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
+    # if CUSTOM_Y_MAX:
+        # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
     axes.legend()
     plt.legend(loc="upper right")
 
@@ -1919,7 +1958,39 @@ if COMMAND == "plot_relative_distance":
     for k, v in d_total_offsets.items():
         print("{} within range ({}) count: {}".format(k, DISTANCE, len(v)))
 
+    # plot distribution of pam site count around each reference point
+    for k, v in d_num_pam_sites.items():
+        d_num_pam_sites[k] = sorted(v)
 
+
+
+    # HIST OF PAM COUNT PER GENE
+    fig, axes = plt.subplots()
+
+    max_pam_count = 0
+    for k, v in d_num_pam_sites.items():
+        if max(v) > max_pam_count:
+            max_pam_count = max(v)
+
+    for k, v in d_num_pam_sites_hist.items():
+        print(max_pam_count)
+        max_pam_sites_range = int(max_pam_count * 1.1)
+        max_pam_sites_range = 100
+        num_gene_x_ticks = list(range(max_pam_sites_range))
+        axes.plot(num_gene_x_ticks, v[:max_pam_sites_range], label=k, color=d_colors[k])
+        print(v[:max_pam_sites_range])
+        axes.fill_between(num_gene_x_ticks, v[:max_pam_sites_range], alpha=0.2, color=d_colors[k])
+
+    axes.set_ylabel('count (genes)')
+    axes.set_xlabel('number of PAM sites')
+    # axes.set_xscale('log')
+    axes.set_xlim(xmin=0, xmax=max_pam_sites_range)
+
+    # TODO HACK
+    # if CUSTOM_Y_MAX:
+        # axes.set_ylim(ymin=0, ymax=1500)
+    axes.legend()
+    plt.legend(loc="upper right")
 
     plt.show()
 
