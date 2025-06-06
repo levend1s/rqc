@@ -3849,7 +3849,7 @@ if COMMAND == "plot_de":
                     
                     de_filtered.at[a, 'neighbour_tes_change'] = neighbor_tes_change
 
-    # fig, axes = plt.subplots()
+    fig, axes = plt.subplots()
 
     # connecting_lines = []
     # de_filtered = de_filtered.set_index('gene_id')
@@ -3868,21 +3868,21 @@ if COMMAND == "plot_de":
     #             if y[0] >= log10_pval_cutoff or y[1] >= log10_pval_cutoff:
     #                 axes.plot(x, y, color='red', ls='-', linewidth=1.0)
 
-    # axes.scatter(
-    #     de_filtered['logFC'].to_list(), 
-    #     de_filtered['-log10_adj_pval'].to_list(),
-    #     c=de_filtered['neighbour_tes_change'].to_list(),
-    #     s=10
-    # )
+    axes.scatter(
+        de_filtered['logFC'].to_list(), 
+        de_filtered['-log10_adj_pval'].to_list(),
+        c=de_filtered['wam_before'].to_list(),
+        s=10
+    )
 
     print(de_filtered.to_string())
 
-    axes = de_filtered.plot.scatter(
-        x='logFC',
-        y='-log10_adj_pval',
-        c='wam_change',
-        s=10
-    )
+    # axes = de_filtered.plot.scatter(
+    #     x='logFC',
+    #     y='-log10_adj_pval',
+    #     c='neighbour_tes_change',
+    #     s=10
+    # )
 
     axes.axhline(y=log10_pval_cutoff, color='grey', ls="--", linewidth=1.0)
     axes.set_ylabel('-log10 adjusted p val')

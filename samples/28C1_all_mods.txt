@@ -1,0 +1,5 @@
+28C1_read_depth control bam /Users/joshlevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam
+28C1_m5C control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.m.bed
+28C1_m6A control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.a.bed
+28C1_pseudouridine control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.17802.bed
+28C1_inosine control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.17596.bed
