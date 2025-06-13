@@ -167,6 +167,16 @@ MODKIT_BEDMETHYL_HEADER = [
     "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
 ]
 
+GENERIC_BED_HEADER = [
+    "contig",
+    "start",
+    "end",
+    "name",
+    "score",
+    "strand",
+    "ID"
+]
+
 FEATURECOUNTS_HEADER = [
     "read_id", "status", "number of targets", "targets"
 ]
@@ -1234,16 +1244,6 @@ if COMMAND == "motif_finder":
     reverse_lookahead_regex = re.compile("(?=({}))".format(MOTIF_RC), re.IGNORECASE)
 
     # create output file
-    GENERIC_BED_HEADER = [
-        "contig",
-        "start",
-        "end",
-        "name",
-        "score",
-        "strand",
-        "ID"
-    ]
-
     rows = []
 
 
@@ -1440,7 +1440,12 @@ if COMMAND == "gene_neighbour_analysis":
             d_neighbour_types['embedded_co_directional'].append(pair)
         elif b.strand == a.strand:
             print("{} and {}: CO DIRECTIONAL".format(a.ID, b.ID))
-            d_neighbour_types['co_directional'].append(pair)
+
+            if a.strand == "+":
+                d_neighbour_types['co_directional'].append((pair[0], pair[1]))
+            else:
+                d_neighbour_types['co_directional'].append((pair[1], pair[0]))
+
         elif is_between(a.start, b.start, b.end) and is_between(a.end, b.start, b.end):
             # embedded anti parallel (complete)
             print("{} and {}: EMBEDDED ANTIPARALLEL".format(a.ID, b.ID))
@@ -3388,19 +3393,16 @@ if COMMAND == "plot_coverage":
             if type == "bam":
                 samfile = pysam.AlignmentFile(path, 'rb')
             elif type == "bedmethyl":
-                modkit_bedmethyl_header = [
-                    "contig", "start", "end", "code", "score", "strand", 
-                    "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
-                    "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
-                ]
-                mods_file_df = pandas.read_csv(path, sep='\t', names=modkit_bedmethyl_header)
+                mods_file_df = pandas.read_csv(path, sep='\t', names=MODKIT_BEDMETHYL_HEADER)
             elif type == "bed":
-                modkit_bedmethyl_header = [
-                    "contig", "start", "end", "code", "score", "strand", 
-                    "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
-                    "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
-                ]
-                site_file_df = pandas.read_csv(path, sep='\t', names=modkit_bedmethyl_header)
+                site_file_df = pandas.read_csv(path, sep='\t', skiprows=1, names=GENERIC_BED_HEADER)
+                site_file_df['strand'] = site_file_df['strand'].astype('category')
+                # site_file_df['start'] = site_file_df['start'].astype('int32')
+                # site_file_df['end'] = site_file_df['end'].astype('int32')
+
+
+
+
             # else:
             #     print("ERROR UNKNOWN FILE TYPE {}".format(type))
 
@@ -3763,10 +3765,21 @@ if COMMAND == "plot_de":
     de_filtered = de
     # print(de_filtered)
 
-    de_filtered['-log10_adj_pval'] = (numpy.log10(de_filtered['adj.P.Val']) * -1)
+    de_analysis_type = None
+
+    if 'adj.P.Val' in de_filtered.columns:
+        de_analysis_type = "limma"
+        pval_col_name = 'adj.P.Val'
+    else:
+        de_analysis_type = "edgeR"
+        pval_col_name = 'PValue'
+        de_filtered['gene_id'] = de_filtered.index
+        print(de)
+
+    de_filtered['-log10_adj_pval'] = (numpy.log10(de_filtered[pval_col_name]) * -1)
     de_filtered['gene_id'] = de_filtered['gene_id'].astype('category')
     de_filtered['parent_id'] = de_filtered['gene_id'].astype('category')
-
+    # de_filtered = de_filtered.set_index('gene_id')
     
     de_filtered_raw_size = len(de_filtered)
 
@@ -3789,32 +3802,71 @@ if COMMAND == "plot_de":
         with open(NEIGHBOUR_FILE) as json_data:
             neighbour_file_df = json.load(json_data)
 
-    if FILTER_BY_NEIGHBOUR_TYPE != "all":
-        gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
-        # de_filtered["parent_id"] = de_filtered.gene_id.apply(lambda s: s.split('.')[0])
+    # if FILTER_BY_NEIGHBOUR_TYPE != "all":
+    #     gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
+    #     # de_filtered["parent_id"] = de_filtered.gene_id.apply(lambda s: s.split('.')[0])
 
-        # flatten list if required
-        if len(gene_list_filter) > 0 and isinstance(gene_list_filter[0], list):
-            gene_list_filter = [x for xs in gene_list_filter for x in xs]
+    #     # flatten list if required
+    #     if len(gene_list_filter) > 0 and isinstance(gene_list_filter[0], list):
+    #         gene_list_filter = [x for xs in gene_list_filter for x in xs]
 
-        gene_list_filter = set(gene_list_filter)
+    #     gene_list_filter = set(gene_list_filter)
 
-        # remove all entries from tes_file if the gene isn't in the gene list
-        de_filtered = de_filtered[
-                (de_filtered['gene_id'].isin(gene_list_filter))
-        ]
+    #     # remove all entries from tes_file if the gene isn't in the gene list
+    #     de_filtered = de_filtered[
+    #             (de_filtered['gene_id'].isin(gene_list_filter))
+    #     ]
 
-        print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(de_filtered_raw_size - len(de_filtered), FILTER_BY_NEIGHBOUR_TYPE))
+    #     print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(de_filtered_raw_size - len(de_filtered), FILTER_BY_NEIGHBOUR_TYPE))
 
     # remove mitochondrial and api genes
     de_filtered = de_filtered[
         (de_filtered['gene_id'].str.contains("MIT|API") == False)
     ]
 
+    MIN_GAP_BETWEEN_M6A = 1
+    num_smeared = 0
+
+    num_canonical_mods = []
+    for _, row in tes_file_df.iterrows():
+        canonical_mods = sorted([int(s) for s in ast.literal_eval(row['cannonical_mods'])])
+        this_num_canonical_mods = len(canonical_mods)
+
+        if this_num_canonical_mods <= 1:
+            num_canonical_mods.append(this_num_canonical_mods)
+        else:
+            mod_distances = []
+            prev = 0
+            for x in canonical_mods:
+                if prev == 0:
+                    prev = x
+                else:
+                    mod_distances.append(x - prev)
+                    prev = x
+
+            mod_distances = [x for x in mod_distances if x > MIN_GAP_BETWEEN_M6A]
+
+            num_canonical_mods.append(len(mod_distances) + 1)
+
+            if this_num_canonical_mods > 1 and len(mod_distances) != this_num_canonical_mods - 1:
+                #print(canonical_mods)
+                #print(mod_distances)
+                num_smeared += 1
+                #print("NOTE: {} had {} m6As that were too close (<={}nt), ...".format(row['gene_id'], this_num_canonical_mods - len(mod_distances), MIN_GAP_BETWEEN_M6A))
+
+    print("NOTE: {} GENES HAD m6A SMEARING".format(num_smeared))
+
+    tes_file_df["num_cannonical_mods"] = num_canonical_mods
+
     if READ_DEPTH_THRESHOLD:
         log2rdf = numpy.log2(READ_DEPTH_THRESHOLD)
         de_filtered_prior_size = len(de_filtered)
-        de_filtered = de_filtered[de_filtered.AveExpr >= log2rdf]
+
+        if de_analysis_type == "edgeR":
+            de_filtered = de_filtered[de_filtered.logCPM >= log2rdf]
+        else:
+            de_filtered = de_filtered[de_filtered.AveExpr >= log2rdf]
+
         print("REMOVED {} DUE TO FILTER (READ DEPTH THRESHOLD >= {})".format(de_filtered_prior_size - len(de_filtered), READ_DEPTH_THRESHOLD))
 
     # de_filtered = de_filtered[
@@ -3829,25 +3881,28 @@ if COMMAND == "plot_de":
     de_filtered['gene_id'] = de_filtered['gene_id'].astype('category')
 
     de_filtered['neighbour_tes_change'] = None
+    de_filtered['is_downstream'] = 'lightgray'
+
     # print(de_filtered['gene_id'].to_list())
 
     de_filtered = de_filtered.set_index('gene_id')
-    print(de_filtered)
     # de_dict = de_filtered.to_dict('index')
 
-    print(de_filtered)
-    print(tes_file_df)
     if FILTER_BY_NEIGHBOUR_TYPE != "all":
         for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
             if ("MIT" not in a) and ("API" not in a):
-                if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
-                    print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
-                else:
-                    print("setting {} to {}'s TES change...".format(a, b))
-                    neighbor_tes_change = tes_file_df[tes_file_df.parent_id == b].iloc[0].tes_change
-                    print("setting {} to {}'s TES change ({})...".format(a, b, neighbor_tes_change))
-                    
-                    de_filtered.at[a, 'neighbour_tes_change'] = neighbor_tes_change
+                # if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
+                #     print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
+                # else:
+                # print("setting {} to {}'s TES change...".format(a, b))
+                # neighbor_tes_change = tes_file_df[tes_file_df.parent_id == b].iloc[0].tes_change
+                # print("setting {} to {}'s TES change ({})...".format(a, b, neighbor_tes_change))
+                
+                # a is always upstream
+                # b is always downstream
+                de_filtered.at[b, 'is_downstream'] = 'salmon'
+                # de_filtered.at[a, 'is_downstream'] = 'salmon'
+
 
     fig, axes = plt.subplots()
 
@@ -3868,14 +3923,56 @@ if COMMAND == "plot_de":
     #             if y[0] >= log10_pval_cutoff or y[1] >= log10_pval_cutoff:
     #                 axes.plot(x, y, color='red', ls='-', linewidth=1.0)
 
+    # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] == 0] == "lightgray"
+    # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] == 1] == "blue"
+    # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] > 1] == "red" 
+
+    de_filtered["colorby"] = "lightgray"
+    COLOR_BY = "updown"
+
+    if COLOR_BY == "methylation_discrete":
+        de_filtered.loc[de_filtered['num_cannonical_mods'] == 0, "colorby"] = "lightgray"
+        de_filtered.loc[de_filtered['num_cannonical_mods'] == 1, "colorby"] = "blue"
+        de_filtered.loc[de_filtered['num_cannonical_mods'] > 1, "colorby"] = "red"
+    if COLOR_BY == "methylation_continuous":
+        de_filtered["colorby"] = de_filtered['wam_after']
+    if COLOR_BY == "updown":
+        pval_cutoff = 0.05
+        fc_cutoff = 1
+        de_filtered.loc[
+            (de_filtered['FDR'] < pval_cutoff) & 
+            (de_filtered['logFC'] > fc_cutoff)
+            , "colorby"] = "red"
+        de_filtered.loc[
+            (de_filtered['FDR'] < pval_cutoff) & 
+            (de_filtered['logFC'] < -fc_cutoff)
+            , "colorby"] = "blue"
+    if COLOR_BY == "neighbor_type":
+        print("hehe")
+    if COLOR_BY == "neighbor_methylation_change":
+        print("hehe")
+    if COLOR_BY == "neighbor_abundance_change":
+        print("hehe")
+
+
+    print(de_filtered[de_filtered['num_cannonical_mods'] == 1])
+
+    background_points = de_filtered[de_filtered["colorby"] == "lightgray"]
+    others = de_filtered[de_filtered["colorby"] != "lightgray"]
+
     axes.scatter(
-        de_filtered['logFC'].to_list(), 
-        de_filtered['-log10_adj_pval'].to_list(),
-        c=de_filtered['wam_before'].to_list(),
+        background_points['logCPM'].to_list(), 
+        background_points['logFC'].to_list(),
+        c=background_points['colorby'].to_list(),
         s=10
     )
 
-    print(de_filtered.to_string())
+    axes.scatter(
+        others['logCPM'].to_list(), 
+        others['logFC'].to_list(),
+        c=others['colorby'].to_list(),
+        s=10
+    )
 
     # axes = de_filtered.plot.scatter(
     #     x='logFC',
@@ -3884,11 +3981,14 @@ if COMMAND == "plot_de":
     #     s=10
     # )
 
-    axes.axhline(y=log10_pval_cutoff, color='grey', ls="--", linewidth=1.0)
-    axes.set_ylabel('-log10 adjusted p val')
-    axes.set_xlabel('log2FC')
+    # FC_cutoff = 4
+    # logFC_cutoff = numpy.log2(FC_cutoff)
+    # axes.axhline(y=logFC_cutoff, color='grey', ls="--", linewidth=1.0)
+    # axes.axhline(y=-logFC_cutoff, color='grey', ls="--", linewidth=1.0)
 
-    print(de_filtered)
+    axes.set_ylabel('fold change (log2(KS/WT))')
+    axes.set_xlabel('transcript abundance (logCPM)')
+
     def show_label(sel):
         index = sel.index
         if index < len(de_filtered):
