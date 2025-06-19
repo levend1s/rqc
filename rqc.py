@@ -68,6 +68,8 @@ parser.add_argument('--show_neighbours', type=str, default=None)
 parser.add_argument('--distance', type=int, default=0)
 parser.add_argument('--reference_bed', type=str, default=None)
 parser.add_argument('--reference_label', type=str, default=None)
+parser.add_argument('--tes_summary_path', type=str, default=None)
+
 
 
 
@@ -119,6 +121,7 @@ SHOW_NEIGHBOURS = args.show_neighbours
 DISTANCE = args.distance
 REFERENCE_BED = args.reference_bed
 REFERENCE_LABEL = args.reference_label
+TES_SUMMARY_PATH = args.tes_summary_path
 
 
 
@@ -643,31 +646,37 @@ def plot_subfeature_coverage(coverages):
 
 def getSubfeatures(id, coverage_type, coverage_padding):
 
-    if coverage_type == "subfeature":
+    if coverage_type in ["subfeature", "subfeature_cds"]:
         # plasmodium specific thing? drop exons, keep only CDS and UTR
         # exons seem to overlap with UTR regions in plasmodium gff
 
         row_subfeatures = ANNOTATION_FILE.df.iloc[GFF_PARENT_TREE[id]]
         row_subfeatures = row_subfeatures.sort_values(by=['start'])
-        row_subfeatures = row_subfeatures[row_subfeatures.type != "exon"]
+        row_subfeatures = row_subfeatures[row_subfeatures.type != "exon"]        
+        row_subfeatures['strand'] = row_subfeatures['strand'].astype('category')
+        row_subfeatures['type'] = row_subfeatures['type'].astype('category')
+        row_subfeatures['seq_id'] = row_subfeatures['seq_id'].astype('category')
 
         # EDGE CASE: collapse multiple UTR's into a single UTR # eg utr_PF3D7_1105800.1_1
-        if len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1:
-            first_utr_index = row_subfeatures[row_subfeatures.type == "five_prime_UTR"].index[0]
-            last_utr_index = row_subfeatures[row_subfeatures.type == "five_prime_UTR"].index[-1]
-            row_subfeatures.at[first_utr_index, 'end'] = (row_subfeatures.loc[last_utr_index])['end']
-            row_subfeatures.drop(index=last_utr_index, inplace=True)
-        if len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1:
-            first_utr_index = row_subfeatures[row_subfeatures.type == "three_prime_UTR"].index[0]
-            last_utr_index = row_subfeatures[row_subfeatures.type == "three_prime_UTR"].index[-1]
-            row_subfeatures.at[first_utr_index, 'end'] = (row_subfeatures.loc[last_utr_index])['end']
-            row_subfeatures.drop(index=last_utr_index, inplace=True)
+        # if len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1:
+        #     first_utr_index = row_subfeatures[row_subfeatures.type == "five_prime_UTR"].index[0]
+        #     last_utr_index = row_subfeatures[row_subfeatures.type == "five_prime_UTR"].index[-1]
+        #     row_subfeatures.at[first_utr_index, 'end'] = (row_subfeatures.loc[last_utr_index])['end']
+        #     row_subfeatures.drop(index=last_utr_index, inplace=True)
+        # if len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1:
+        #     first_utr_index = row_subfeatures[row_subfeatures.type == "three_prime_UTR"].index[0]
+        #     last_utr_index = row_subfeatures[row_subfeatures.type == "three_prime_UTR"].index[-1]
+        #     row_subfeatures.at[first_utr_index, 'end'] = (row_subfeatures.loc[last_utr_index])['end']
+        #     row_subfeatures.drop(index=last_utr_index, inplace=True)
 
     elif coverage_type == "gene":
         # row_subfeatures = matches.iloc[index:index+1]
         row_subfeatures = GFF_DF[GFF_DF.ID == id]
         # drop everything after attributes
         row_subfeatures = row_subfeatures.drop(columns=row_subfeatures.columns[9:])
+        row_subfeatures['strand'] = row_subfeatures['strand'].astype('category')
+        row_subfeatures['type'] = row_subfeatures['type'].astype('category')
+        row_subfeatures['seq_id'] = row_subfeatures['seq_id'].astype('category')
     else:
         print("WARNING: unknown coverage type: {}".format(coverage_type))
 
@@ -2349,7 +2358,8 @@ if COMMAND == "m6A_specific_tes_analysis":
         # fig.subplots_adjust(hspace=0, wspace=0.1)
         plt.show()
 
-
+if COMMAND == "dmr_analysis":
+    print("HI")
 
 if COMMAND == "tes_analysis":
     # load annotation file
@@ -3191,7 +3201,7 @@ if COMMAND == "tes_analysis":
             summary_df_index += 1
 
 
-    TES_SUMMARY_PATH = "./tes_summary.tsv"
+    # TES_SUMMARY_PATH = "./tes_summary.tsv"
     print(summary_df)
     summary_df.to_csv(TES_SUMMARY_PATH, sep='\t', index=False)
 
@@ -3360,6 +3370,11 @@ if COMMAND == "plot_coverage":
     subfeature_names = []
     subfeature_info = {}
     matches = matches.attributes_to_columns()
+    matches['strand'] = matches['strand'].astype('category')
+    matches['type'] = matches['type'].astype('category')
+    matches['seq_id'] = matches['seq_id'].astype('category')
+
+
     index = 0
     sites_of_interest = None
 
@@ -3397,38 +3412,42 @@ if COMMAND == "plot_coverage":
             elif type == "bed":
                 site_file_df = pandas.read_csv(path, sep='\t', skiprows=1, names=GENERIC_BED_HEADER)
                 site_file_df['strand'] = site_file_df['strand'].astype('category')
+                site_file_df['contig'] = site_file_df['contig'].astype('category')
+
                 # site_file_df['start'] = site_file_df['start'].astype('int32')
                 # site_file_df['end'] = site_file_df['end'].astype('int32')
-
-
-
 
             # else:
             #     print("ERROR UNKNOWN FILE TYPE {}".format(type))
 
             # generate coverage for all matches in this bam file
+            num_skipped = 0
             for row_index, row in matches.iterrows():
                 # find subfeatures
                 START_CLOCK("row_start")
 
                 row_subfeatures = getSubfeatures(row['ID'], COVERAGE_TYPE, COVERAGE_PADDING)
 
-                if not subfeature_names:
-                    subfeature_names = row_subfeatures['type'].to_list()
+                subfeature_names = row_subfeatures['type'].to_list()
+
+                if ("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
+                (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
+                (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
+                    print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
+                    num_skipped += 1
+                    continue
 
                 # gen coverage for each subfeature in a gene
                 subfeature_index = 0
                 num_subfeatures = len(row_subfeatures.index)
                 subfeature_base_coverages = [None] * num_subfeatures
 
-                if max_num_subfeatures == 0:
-                    max_num_subfeatures = num_subfeatures
-                else:
-                    if num_subfeatures != max_num_subfeatures:
-                        print("ERROR: trying to calculate subfeature coverage for genes with different number of subfeatures")
-                        print("{} has {} subfeatures, but previous genes had {} subfeatures. Exiting...".format(row['ID'], num_subfeatures, max_num_subfeatures))
-
-                mod_peaks[label][row['ID']] = []
+                # if max_num_subfeatures == 0:
+                #     max_num_subfeatures = num_subfeatures
+                # else:
+                #     if num_subfeatures != max_num_subfeatures:
+                #         print("ERROR: trying to calculate subfeature coverage for genes with different number of subfeatures")
+                #         print("{} has {} subfeatures, but previous genes had {} subfeatures. Exiting...".format(row['ID'], num_subfeatures, max_num_subfeatures))
 
                 if num_subfeatures > 1:
                     if 'UTR' in subfeature_names[0]:
@@ -3439,6 +3458,8 @@ if COMMAND == "plot_coverage":
                         subfeature_names[-1] = "3'UTR"
                     if 'UTR' in subfeature_names[-2]:
                         subfeature_names[-2] = "3'UTR"
+
+                mod_peaks[label][row['ID']] = []
 
                 exon_idx = 1
                 for i in range(num_subfeatures):
@@ -3538,6 +3559,39 @@ if COMMAND == "plot_coverage":
 
                     subfeature_index += 1
 
+                # squish the cds subfeatures into a single one
+                if COVERAGE_TYPE == "subfeature_cds":
+                    num_exons = 0
+                    first_exon_idx = -1
+                    last_exon_idx = -1
+
+                    temp_subfeature_names = []
+                    for i in range(len(subfeature_names)):
+                        if subfeature_names[i].startswith("E"):
+                            if first_exon_idx == -1:
+                                temp_subfeature_names.append("CDS")
+                                first_exon_idx = i
+                            
+                            last_exon_idx = i
+                            num_exons += 1
+                        else:
+                            temp_subfeature_names.append(subfeature_names[i])
+                    
+                    num_subfeatures = num_subfeatures - num_exons + 1
+                    temp_subfeature_base_coverages = [None] * num_subfeatures
+
+                    offset = 0
+                    for i in range(num_subfeatures):
+                        if i == first_exon_idx:
+                            temp_subfeature_base_coverages[i] = numpy.concatenate(subfeature_base_coverages[first_exon_idx:last_exon_idx+1]).ravel()
+                            offset = num_exons-1
+                        else:
+                            temp_subfeature_base_coverages[i] = subfeature_base_coverages[i+offset]
+
+                    subfeature_base_coverages = temp_subfeature_base_coverages
+                    subfeature_names = temp_subfeature_names
+
+
                 sf_base_coverage_list = [None] * num_subfeatures
                 STOP_CLOCK("row_start", "coverage_stop")
 
@@ -3551,6 +3605,7 @@ if COMMAND == "plot_coverage":
                 running_sf_bin_count = 0
 
                 # implicitly reset subfeature_index
+                print(subfeature_names)
                 for subfeature_index in range(num_subfeatures):
                     # resample coverage
                     if subfeature_index == 0 and COVERAGE_PADDING:
@@ -3562,13 +3617,15 @@ if COMMAND == "plot_coverage":
                         sf_bin_size = math.floor(num_bins_cds / (num_subfeatures - 2))
                     else:
                         sf_bin_size = math.floor(num_bins_cds / num_subfeatures)
-
+                    
+                    if subfeature_names[subfeature_index] == "five_prime_UTR":
+                        print("\n\n\n\n\n\n")
                     subfeature_info[subfeature_names[subfeature_index]] = sf_bin_size
 
-                    if type == "bed":
-                        sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, "sum")
-                    else:
-                        sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, COVERAGE_METHOD)
+                    # if type == "bed":
+                    #     sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, "sum")
+                    # else:
+                    sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, COVERAGE_METHOD)
 
                     sf_base_coverage_list[subfeature_index] = sf_resampled_coverage
 
@@ -3679,6 +3736,7 @@ if COMMAND == "plot_coverage":
         print("REMOVED {} DUE TO LOW COVERAGE (<{})".format(num_low_coverage, READ_DEPTH_THRESHOLD))
         print("REMAINING ID's: {}".format(feature_coverages[label].keys()))
 
+    print("REMOVED {} DUE TO MISSING UTR annotation".format(num_skipped))
 
     for label in input_files.keys():
         type = input_files[label]['type']
@@ -3694,11 +3752,11 @@ if COMMAND == "plot_coverage":
             else:
                 normalised_total_coverage = normalise_coverage(all_normalised_total_coverage)
 
-            if type == "bed":
-                sites_of_interest = total_coverage # normalised_total_coverage
-            else:
-                coverages[label] = total_coverage
-                normalised_coverages[label] = normalised_total_coverage
+            # if type == "bed":
+            #     sites_of_interest = total_coverage # normalised_total_coverage
+            # else:
+            coverages[label] = total_coverage
+            normalised_coverages[label] = normalised_total_coverage
 
     # print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
     additional_text = "num transcripts: {}\naverage transcript length: {}".format(len(tx_lengths.keys()), int(sum(tx_lengths.values()) / len(tx_lengths.values())))
@@ -3724,6 +3782,8 @@ if COMMAND == "plot_coverage":
         "y_label": "count (nt)",
         "additional_text": additional_text
     }
+
+    plot_subfeature_coverage(coverage_dict)
 
     plot_subfeature_coverage(coverage_dict)
 
@@ -3928,7 +3988,7 @@ if COMMAND == "plot_de":
     # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] > 1] == "red" 
 
     de_filtered["colorby"] = "lightgray"
-    COLOR_BY = "updown"
+    COLOR_BY = "methylation_discrete"
 
     if COLOR_BY == "methylation_discrete":
         de_filtered.loc[de_filtered['num_cannonical_mods'] == 0, "colorby"] = "lightgray"
@@ -3937,7 +3997,7 @@ if COMMAND == "plot_de":
     if COLOR_BY == "methylation_continuous":
         de_filtered["colorby"] = de_filtered['wam_after']
     if COLOR_BY == "updown":
-        pval_cutoff = 0.05
+        # pval_cutoff = 0.05
         fc_cutoff = 1
         de_filtered.loc[
             (de_filtered['FDR'] < pval_cutoff) & 
@@ -3960,26 +4020,27 @@ if COMMAND == "plot_de":
     background_points = de_filtered[de_filtered["colorby"] == "lightgray"]
     others = de_filtered[de_filtered["colorby"] != "lightgray"]
 
-    axes.scatter(
-        background_points['logCPM'].to_list(), 
-        background_points['logFC'].to_list(),
-        c=background_points['colorby'].to_list(),
-        s=10
-    )
-
-    axes.scatter(
-        others['logCPM'].to_list(), 
-        others['logFC'].to_list(),
-        c=others['colorby'].to_list(),
-        s=10
-    )
-
-    # axes = de_filtered.plot.scatter(
-    #     x='logFC',
-    #     y='-log10_adj_pval',
-    #     c='neighbour_tes_change',
+    # axes.scatter(
+    #     background_points['logCPM'].to_list(), 
+    #     background_points['logFC'].to_list(),
+    #     c=background_points['colorby'].to_list(),
     #     s=10
     # )
+
+    # axes.scatter(
+    #     others['logCPM'].to_list(), 
+    #     others['logFC'].to_list(),
+    #     c=others['colorby'].to_list(),
+    #     s=10
+    # )
+
+    # MD plot
+    axes = de_filtered.plot.scatter(
+        x='logCPM',
+        y='logFC',
+        c='colorby',
+        s=10
+    )
 
     # FC_cutoff = 4
     # logFC_cutoff = numpy.log2(FC_cutoff)
@@ -3988,6 +4049,16 @@ if COMMAND == "plot_de":
 
     axes.set_ylabel('fold change (log2(KS/WT))')
     axes.set_xlabel('transcript abundance (logCPM)')
+
+    # traditional volcano
+    axes = de_filtered.plot.scatter(
+        x='logFC',
+        y='-log10_adj_pval',
+        c='colorby',
+        s=10
+    )
+    # axes.axhline(y=-log10_pval_cutoff, color='grey', ls="--", linewidth=1.0)
+
 
     def show_label(sel):
         index = sel.index
