@@ -598,9 +598,10 @@ def plot_subfeature_coverage(coverages):
 
             this_axes.legend(loc="upper left", title=k)
             this_axes.set_ylabel(coverages['y_label'], color="black")
-            this_axes.set_ylim(ymin=0, ymax=ymax)
+            this_axes.set_ylim(ymin=0, ymax=ymax*1.1)
             this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
             this_axes.set_yticks([0, ymax])
+            this_axes.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
 
         this_axes.tick_params(
             axis='x',          
@@ -613,36 +614,32 @@ def plot_subfeature_coverage(coverages):
         num_subfeatures = len(coverages['subfeature_names'])
 
         label_rotation = 45
-        if COVERAGE_TYPE == "gene":
+        if COVERAGE_TYPE in ("gene"):
             label_rotation = 0
 
         curr_pos = 0
 
-        for l in range(num_subfeatures + 1):
-            if l != num_subfeatures:
+        for l in range(num_subfeatures):
+            subfeature_width = subfeature_info[coverages['subfeature_names'][l]]
+            line_x_coord = curr_pos + subfeature_width
 
-                subfeature_width = subfeature_info[coverages['subfeature_names'][l]]
-                line_x_coord = curr_pos + subfeature_width
+            this_axes.axvline(x= line_x_coord, color='darkgray', ls="--", linewidth=1.0)
+            label_x_coord = curr_pos + int(subfeature_width / 2)
 
-                this_axes.axvline(x= line_x_coord, color='darkgray', ls="--", linewidth=1.0)
-                label_x_coord = curr_pos + int(subfeature_width / 2)
+            if plt_index == (num_samples - 1):
+                this_axes.text(
+                    label_x_coord,
+                    ymax*-0.02,
+                    coverages['subfeature_names'][l], 
+                    fontsize=10,
+                    verticalalignment='top',
+                    horizontalalignment='center',
+                    rotation=label_rotation
+                )
 
-                if plt_index == (num_samples - 1):
-                    this_axes.text(
-                        label_x_coord,
-                        -0.02, 
-                        subfeature_names[l], 
-                        fontsize=10,
-                        verticalalignment='top',
-                        horizontalalignment='center',
-                        rotation=label_rotation
-                    )
-
-                curr_pos += subfeature_width
+            curr_pos += subfeature_width
 
         plt_index += 1
-
-    fig.tight_layout()
 
 def getSubfeatures(id, coverage_type, coverage_padding):
 
@@ -718,7 +715,8 @@ def START_CLOCK(name):
 def STOP_CLOCK(name, stop_name):
     clock_stop = time.time()
     diff = clock_stop - CLOCKS[name]
-    print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
+    if DEBUG:
+        print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
 
 def process_input_files():
     print("LOG - processing input files...")
@@ -3382,6 +3380,7 @@ if COMMAND == "plot_coverage":
     normalised_coverages = {}
     feature_coverages = {}
     normalised_feature_coverages = {}
+    density_coverages = {}
     tx_lengths = {}
     mod_peaks = {}
 
@@ -3421,7 +3420,7 @@ if COMMAND == "plot_coverage":
             #     print("ERROR UNKNOWN FILE TYPE {}".format(type))
 
             # generate coverage for all matches in this bam file
-            num_skipped = 0
+            mal_annotation = []
             for row_index, row in matches.iterrows():
                 # find subfeatures
                 START_CLOCK("row_start")
@@ -3434,7 +3433,7 @@ if COMMAND == "plot_coverage":
                 (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
                 (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
                     print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
-                    num_skipped += 1
+                    mal_annotation.append(row.ID)
                     continue
 
                 # gen coverage for each subfeature in a gene
@@ -3589,7 +3588,9 @@ if COMMAND == "plot_coverage":
                             temp_subfeature_base_coverages[i] = subfeature_base_coverages[i+offset]
 
                     subfeature_base_coverages = temp_subfeature_base_coverages
-                    subfeature_names = temp_subfeature_names
+                    corrected_subfeature_names = temp_subfeature_names
+                else:
+                    corrected_subfeature_names = subfeature_names
 
 
                 sf_base_coverage_list = [None] * num_subfeatures
@@ -3605,7 +3606,6 @@ if COMMAND == "plot_coverage":
                 running_sf_bin_count = 0
 
                 # implicitly reset subfeature_index
-                print(subfeature_names)
                 for subfeature_index in range(num_subfeatures):
                     # resample coverage
                     if subfeature_index == 0 and COVERAGE_PADDING:
@@ -3618,9 +3618,7 @@ if COMMAND == "plot_coverage":
                     else:
                         sf_bin_size = math.floor(num_bins_cds / num_subfeatures)
                     
-                    if subfeature_names[subfeature_index] == "five_prime_UTR":
-                        print("\n\n\n\n\n\n")
-                    subfeature_info[subfeature_names[subfeature_index]] = sf_bin_size
+                    subfeature_info[corrected_subfeature_names[subfeature_index]] = sf_bin_size
 
                     # if type == "bed":
                     #     sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, "sum")
@@ -3736,14 +3734,15 @@ if COMMAND == "plot_coverage":
         print("REMOVED {} DUE TO LOW COVERAGE (<{})".format(num_low_coverage, READ_DEPTH_THRESHOLD))
         print("REMAINING ID's: {}".format(feature_coverages[label].keys()))
 
-    print("REMOVED {} DUE TO MISSING UTR annotation".format(num_skipped))
+    print("REMOVED {} DUE TO MISSING UTR annotation".format(len(mal_annotation)))
+    x_ticks = list(range(COVERAGE_BINS))
 
     for label in input_files.keys():
         type = input_files[label]['type']
         if type in ['bam', 'bedmethyl', 'bed']:
 
             # flatten down all resampled coverages for this label and store dict under label
-            total_coverage = numpy.array([sum(i) for i in zip(*list(feature_coverages[label].values()))])
+            total_coverage = numpy.array([sum(i) for i in zip(*list(feature_coverages[label].values()))], dtype=numpy.uint32)
             all_normalised_total_coverage = numpy.array([sum(i) for i in zip(*list(normalised_feature_coverages[label].values()))])
 
             # normalised mod coverage is the average weighted proportion of a modification against read depth across all genes
@@ -3752,11 +3751,23 @@ if COMMAND == "plot_coverage":
             else:
                 normalised_total_coverage = normalise_coverage(all_normalised_total_coverage)
 
+            base_idx_counts = []
+            for i in range(COVERAGE_BINS):
+                if total_coverage[i] > 0:
+                    for j in range(total_coverage[i]):
+                        base_idx_counts.append(i)
+
+            kernel = scipy.stats.gaussian_kde(base_idx_counts, bw_method=0.1)
+            smoothed_tts_hist = kernel(x_ticks)
+            # cdf = numpy.cumsum(smoothed_tts_hist)
+
             # if type == "bed":
             #     sites_of_interest = total_coverage # normalised_total_coverage
             # else:
             coverages[label] = total_coverage
             normalised_coverages[label] = normalised_total_coverage
+            density_coverages[label] = smoothed_tts_hist
+
 
     # print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
     additional_text = "num transcripts: {}\naverage transcript length: {}".format(len(tx_lengths.keys()), int(sum(tx_lengths.values()) / len(tx_lengths.values())))
@@ -3777,13 +3788,11 @@ if COMMAND == "plot_coverage":
         "num_matches": num_matches,
         "sites_of_interest": sites_of_interest,
         "num_bins": COVERAGE_BINS,
-        "subfeature_names": subfeature_names,
+        "subfeature_names": corrected_subfeature_names,
         "subfeature_info": subfeature_info,
         "y_label": "count (nt)",
         "additional_text": additional_text
     }
-
-    plot_subfeature_coverage(coverage_dict)
 
     plot_subfeature_coverage(coverage_dict)
 
@@ -3792,6 +3801,12 @@ if COMMAND == "plot_coverage":
 
     plot_subfeature_coverage(coverage_dict)
 
+    coverage_dict['coverages'] = density_coverages
+    coverage_dict['y_label'] = "density (au)"
+
+    plot_subfeature_coverage(coverage_dict)
+
+    plt.tight_layout()
     plt.show()
 
     if (OUTFILE):
