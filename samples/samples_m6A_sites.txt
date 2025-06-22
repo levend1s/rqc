@@ -1,12 +1,15 @@
-#DRACH control bed /Users/joshlevendis/rqc/rqc_mit_drach_matches.bed
-ONT_m6A control bed /Users/joshlevendis/Downloads/bedmethyls/20depth25prop/28u32u36.bed
-#ONT_intersect control bed /Users/joshlevendis/Downloads/bedmethyls/20depth25prop/28i32i36.bed
-#ONT_28hpi control bed /Users/joshlevendis/Downloads/bedmethyls/20depth25prop/28hpi_0.95conf_a.20cov.25prop.uniq.bed
-#ONT_32hpi control bed /Users/joshlevendis/Downloads/bedmethyls/20depth25prop/28hpi_0.95conf_a.20cov.25prop.uniq.bed
-#ONT_36hpi control bed /Users/joshlevendis/Downloads/bedmethyls/20depth25prop/28hpi_0.95conf_a.20cov.25prop.uniq.bed
+#DRACH control bed ./rqc_mit_drach_matches.bed
+ONT_total_m6A control bed ./20depth25prop/28u32u36.bed
+#ONT_intersect_m6A control bed ./20depth25prop/28i32i36.bed
+#ONT_28hpi control bed ./20depth25prop/28hpi_0.95conf_a.20cov.25prop.uniq.bed
+#ONT_32hpi control bed ./20depth25prop/28hpi_0.95conf_a.20cov.25prop.uniq.bed
+#ONT_36hpi control bed ./20depth25prop/28hpi_0.95conf_a.20cov.25prop.uniq.bed
 
-GLORI-seq_m6A control bed /Users/joshlevendis/rqc/GLORI-seq/glori-seq_union.uniq.bed
-#GLORI-seq_intersect control bed /Users/joshlevendis/rqc/GLORI-seq/12i24i48.bed
-#GLORI-seq_12hpi control bed /Users/joshlevendis/rqc/GLORI-seq/GLORI_12.bed
-#GLORI-seq_24hpi control bed /Users/joshlevendis/rqc/GLORI-seq/GLORI_24.bed
-#GLORI-seq_48hpi control bed /Users/joshlevendis/rqc/GLORI-seq/GLORI_48.bed
+GLORI-seq_total_m6A control bed ./GLORI-seq/glori-seq_union.uniq.bed
+#GLORI-seq_intersect_m6A control bed ./GLORI-seq/12i24i48.bed
+#GLORI-seq_12hpi control bed ./GLORI-seq/GLORI_12.bed
+#GLORI-seq_24hpi control bed ./GLORI-seq/GLORI_24.bed
+#GLORI-seq_48hpi control bed ./GLORI-seq/GLORI_48.bed
+
+#28C1_read_depth control bam /Users/joshualevendis/Downloads/28C1_to_pfal.50MAPQ.sorted.bam
+#28C1_m6A_0.95 control bedmethyl /Users/joshualevendis/Downloads/28C1_to_pfal_0.95.0p.a.bed

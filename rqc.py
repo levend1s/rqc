@@ -601,7 +601,7 @@ def plot_subfeature_coverage(coverages):
             this_axes.set_ylim(ymin=0, ymax=ymax*1.1)
             this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
             this_axes.set_yticks([0, ymax])
-            this_axes.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
+            # this_axes.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
 
         this_axes.tick_params(
             axis='x',          
@@ -3732,9 +3732,10 @@ if COMMAND == "plot_coverage":
                 num_low_coverage += 1 
 
         print("REMOVED {} DUE TO LOW COVERAGE (<{})".format(num_low_coverage, READ_DEPTH_THRESHOLD))
-        print("REMAINING ID's: {}".format(feature_coverages[label].keys()))
 
     print("REMOVED {} DUE TO MISSING UTR annotation".format(len(mal_annotation)))
+    print("NUM ID's USED IN ANALYSIS: {}".format(len(feature_coverages[label].keys())))
+
     x_ticks = list(range(COVERAGE_BINS))
 
     for label in input_files.keys():
@@ -3767,6 +3768,8 @@ if COMMAND == "plot_coverage":
             coverages[label] = total_coverage
             normalised_coverages[label] = normalised_total_coverage
             density_coverages[label] = smoothed_tts_hist
+            print("TOTAL DATA POINTS USED FOR {}: {}".format(label, sum(total_coverage)))
+
 
 
     # print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
