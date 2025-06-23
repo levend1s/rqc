@@ -601,7 +601,7 @@ def plot_subfeature_coverage(coverages):
             this_axes.set_ylim(ymin=0, ymax=ymax*1.1)
             this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
             this_axes.set_yticks([0, ymax])
-            # this_axes.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
+            this_axes.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
 
         this_axes.tick_params(
             axis='x',          
@@ -3386,7 +3386,7 @@ if COMMAND == "plot_coverage":
 
 
     LOGFILE_PATH = "rqc_plot_coverage_stats.log"
-    log_header = ["label", "type", "id", "depth", "length", "AUC", "num peaks", "peak locations"]
+    log_header = ["label", "type", "id", "max_depth", "total_coverage", "length", "AUC", "num peaks", "peak locations"]
     print("\t".join(log_header))
     logfile_df = pandas.DataFrame(columns=log_header)
     logfile_df_index = 0
@@ -3558,6 +3558,7 @@ if COMMAND == "plot_coverage":
 
                     subfeature_index += 1
 
+                total_count_depth_gene = 0
                 # squish the cds subfeatures into a single one
                 if COVERAGE_TYPE == "subfeature_cds":
                     num_exons = 0
@@ -3566,6 +3567,7 @@ if COMMAND == "plot_coverage":
 
                     temp_subfeature_names = []
                     for i in range(len(subfeature_names)):
+                        total_count_depth_gene += sum(subfeature_base_coverages[i])
                         if subfeature_names[i].startswith("E"):
                             if first_exon_idx == -1:
                                 temp_subfeature_names.append("CDS")
@@ -3688,7 +3690,7 @@ if COMMAND == "plot_coverage":
                 STOP_CLOCK("row_start", "row_end")
 
                 # label, gene id, max coverage, gene length, auc, num mod peaks, mod peaks
-                row_coverage_summary = [label, type, row['ID'], int(max(resampled_base_coverage)), row['end'] - row['start'], AUC]
+                row_coverage_summary = [label, type, row['ID'], int(max(resampled_base_coverage)), total_count_depth_gene, row['end'] - row['start'], AUC]
 
                 if additional_info:
                     row_coverage_summary += additional_info
@@ -3717,7 +3719,7 @@ if COMMAND == "plot_coverage":
         for row_index, row in matches.iterrows():
             gene_matches_below_read_threshold = logfile_df[
                 (logfile_df.id == row['ID']) & 
-                (logfile_df.depth < READ_DEPTH_THRESHOLD) &
+                (logfile_df.max_depth < READ_DEPTH_THRESHOLD) &
                 (logfile_df.type == "bam")]
             
             if len(gene_matches_below_read_threshold) > 0:
@@ -3732,9 +3734,13 @@ if COMMAND == "plot_coverage":
                 num_low_coverage += 1 
 
         print("REMOVED {} DUE TO LOW COVERAGE (<{})".format(num_low_coverage, READ_DEPTH_THRESHOLD))
+        print("REMAINING ID's: {}".format(feature_coverages[label].keys()))
 
     print("REMOVED {} DUE TO MISSING UTR annotation".format(len(mal_annotation)))
-    print("NUM ID's USED IN ANALYSIS: {}".format(len(feature_coverages[label].keys())))
+
+    for label in input_files.keys():
+        label_total_depth = logfile_df[logfile_df['label'] == label].total_coverage.sum()
+        print("{} TOTAL DEPTH: {}".format(label, label_total_depth))
 
     x_ticks = list(range(COVERAGE_BINS))
 
@@ -3768,8 +3774,6 @@ if COMMAND == "plot_coverage":
             coverages[label] = total_coverage
             normalised_coverages[label] = normalised_total_coverage
             density_coverages[label] = smoothed_tts_hist
-            print("TOTAL DATA POINTS USED FOR {}: {}".format(label, sum(total_coverage)))
-
 
 
     # print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
