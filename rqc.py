@@ -3906,87 +3906,79 @@ if COMMAND == "plot_de":
         (de_filtered['gene_id'].str.contains("MIT|API") == False)
     ]
 
+    # if READ_DEPTH_THRESHOLD:
+    #     log2rdf = numpy.log2(READ_DEPTH_THRESHOLD)
+    #     de_filtered_prior_size = len(de_filtered)
+
+    #     if de_analysis_type == "edgeR":
+    #         de_filtered = de_filtered[de_filtered.logCPM >= log2rdf]
+    #     else:
+    #         de_filtered = de_filtered[de_filtered.AveExpr >= log2rdf]
+
+    #     print("REMOVED {} DUE TO FILTER (READ DEPTH THRESHOLD >= {})".format(de_filtered_prior_size - len(de_filtered), READ_DEPTH_THRESHOLD))
+
     MIN_GAP_BETWEEN_M6A = 1
     num_smeared = 0
 
     num_canonical_mods = []
-    for _, row in tes_file_df.iterrows():
-        canonical_mods = sorted([int(s) for s in ast.literal_eval(row['cannonical_mods'])])
-        this_num_canonical_mods = len(canonical_mods)
+    if TES_ANALYSIS_FILE:
+        for _, row in tes_file_df.iterrows():
+            canonical_mods = sorted([int(s) for s in ast.literal_eval(row['cannonical_mods'])])
+            this_num_canonical_mods = len(canonical_mods)
 
-        if this_num_canonical_mods <= 1:
-            num_canonical_mods.append(this_num_canonical_mods)
-        else:
-            mod_distances = []
-            prev = 0
-            for x in canonical_mods:
-                if prev == 0:
-                    prev = x
-                else:
-                    mod_distances.append(x - prev)
-                    prev = x
+            if this_num_canonical_mods <= 1:
+                num_canonical_mods.append(this_num_canonical_mods)
+            else:
+                mod_distances = []
+                prev = 0
+                for x in canonical_mods:
+                    if prev == 0:
+                        prev = x
+                    else:
+                        mod_distances.append(x - prev)
+                        prev = x
 
-            mod_distances = [x for x in mod_distances if x > MIN_GAP_BETWEEN_M6A]
+                mod_distances = [x for x in mod_distances if x > MIN_GAP_BETWEEN_M6A]
 
-            num_canonical_mods.append(len(mod_distances) + 1)
+                num_canonical_mods.append(len(mod_distances) + 1)
 
-            if this_num_canonical_mods > 1 and len(mod_distances) != this_num_canonical_mods - 1:
-                #print(canonical_mods)
-                #print(mod_distances)
-                num_smeared += 1
-                #print("NOTE: {} had {} m6As that were too close (<={}nt), ...".format(row['gene_id'], this_num_canonical_mods - len(mod_distances), MIN_GAP_BETWEEN_M6A))
+                if this_num_canonical_mods > 1 and len(mod_distances) != this_num_canonical_mods - 1:
+                    num_smeared += 1
+                    #print("NOTE: {} had {} m6As that were too close (<={}nt), ...".format(row['gene_id'], this_num_canonical_mods - len(mod_distances), MIN_GAP_BETWEEN_M6A))
 
-    print("NOTE: {} GENES HAD m6A SMEARING".format(num_smeared))
+        print("NOTE: {} GENES HAD m6A SMEARING".format(num_smeared))
 
-    tes_file_df["num_cannonical_mods"] = num_canonical_mods
+        tes_file_df["num_cannonical_mods"] = num_canonical_mods
+        tes_file_df['tes_change'] = tes_file_df['wart_after'] = tes_file_df['wart_before']
+        tes_file_df['wam_change'] = tes_file_df['wam_after'] = tes_file_df['wam_before']
 
-    if READ_DEPTH_THRESHOLD:
-        log2rdf = numpy.log2(READ_DEPTH_THRESHOLD)
-        de_filtered_prior_size = len(de_filtered)
+        de_filtered = de_filtered.merge(tes_file_df, left_on='gene_id', right_on='parent_id', how="outer")
+        de_filtered['gene_id'] = de_filtered['gene_id_x']
+        de_filtered['gene_id'] = de_filtered['gene_id'].astype('category')
 
-        if de_analysis_type == "edgeR":
-            de_filtered = de_filtered[de_filtered.logCPM >= log2rdf]
-        else:
-            de_filtered = de_filtered[de_filtered.AveExpr >= log2rdf]
-
-        print("REMOVED {} DUE TO FILTER (READ DEPTH THRESHOLD >= {})".format(de_filtered_prior_size - len(de_filtered), READ_DEPTH_THRESHOLD))
-
-    # de_filtered = de_filtered[
-    #     (de_filtered['gene_id'].isin(["PF3D7_1462800", "PF3D7_1462900", "PF3D7_1463000"]))
-    # ]
-
-    tes_file_df['tes_change'] = tes_file_df['wart_after'] = tes_file_df['wart_before']
-    tes_file_df['wam_change'] = tes_file_df['wam_after'] = tes_file_df['wam_before']
-
-    de_filtered = de_filtered.merge(tes_file_df, left_on='gene_id', right_on='parent_id')
-    de_filtered['gene_id'] = de_filtered['gene_id_x']
-    de_filtered['gene_id'] = de_filtered['gene_id'].astype('category')
-
-    de_filtered['neighbour_tes_change'] = None
     de_filtered['is_downstream'] = 'lightgray'
-
-    # print(de_filtered['gene_id'].to_list())
 
     de_filtered = de_filtered.set_index('gene_id')
     # de_dict = de_filtered.to_dict('index')
 
-    if FILTER_BY_NEIGHBOUR_TYPE != "all":
-        for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
-            if ("MIT" not in a) and ("API" not in a):
-                # if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
-                #     print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
-                # else:
-                # print("setting {} to {}'s TES change...".format(a, b))
-                # neighbor_tes_change = tes_file_df[tes_file_df.parent_id == b].iloc[0].tes_change
-                # print("setting {} to {}'s TES change ({})...".format(a, b, neighbor_tes_change))
+    # if FILTER_BY_NEIGHBOUR_TYPE != "all":
+    #     for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
+    #         if ("MIT" not in a) and ("API" not in a):
+    #             # if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
+    #             #     print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
+    #             # else:
+    #             # print("setting {} to {}'s TES change...".format(a, b))
+    #             # neighbor_tes_change = tes_file_df[tes_file_df.parent_id == b].iloc[0].tes_change
+    #             # print("setting {} to {}'s TES change ({})...".format(a, b, neighbor_tes_change))
                 
-                # a is always upstream
-                # b is always downstream
-                de_filtered.at[b, 'is_downstream'] = 'salmon'
-                # de_filtered.at[a, 'is_downstream'] = 'salmon'
+    #             # a is always upstream
+    #             # b is always downstream
+    #             de_filtered.at[b, 'is_downstream'] = 'salmon'
+    #             # de_filtered.at[a, 'is_downstream'] = 'salmon'
 
 
     fig, axes = plt.subplots()
+    print(de_filtered)
 
     # connecting_lines = []
     # de_filtered = de_filtered.set_index('gene_id')
@@ -4010,7 +4002,7 @@ if COMMAND == "plot_de":
     # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] > 1] == "red" 
 
     de_filtered["colorby"] = "lightgray"
-    COLOR_BY = "methylation_discrete"
+    COLOR_BY = "neighbor_methylation_change"
 
     if COLOR_BY == "methylation_discrete":
         de_filtered.loc[de_filtered['num_cannonical_mods'] == 0, "colorby"] = "lightgray"
@@ -4032,15 +4024,30 @@ if COMMAND == "plot_de":
     if COLOR_BY == "neighbor_type":
         print("hehe")
     if COLOR_BY == "neighbor_methylation_change":
-        print("hehe")
+        for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
+            if ("MIT" not in a) and ("API" not in a):
+                # if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
+                #     print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
+                # else:
+                # print("setting {} to {}'s TES change...".format(a, b))
+                # neighbor_tes_change = tes_file_df[tes_file_df.parent_id == b].iloc[0].tes_change
+                # print("setting {} to {}'s TES change ({})...".format(a, b, neighbor_tes_change))
+                
+                # a is always upstream
+                # b is always downstream
+                if a not in de_filtered:
+                    de_filtered.at[b, 'colorby'] = 'black'
+                else:    
+                    de_filtered.at[b, 'colorby'] = de_filtered.at[a, 'tes_change']
+                # de_filtered.at[a, 'is_downstream'] = 'salmon'
     if COLOR_BY == "neighbor_abundance_change":
         print("hehe")
 
 
-    print(de_filtered[de_filtered['num_cannonical_mods'] == 1])
-
     background_points = de_filtered[de_filtered["colorby"] == "lightgray"]
     others = de_filtered[de_filtered["colorby"] != "lightgray"]
+
+    print(de_filtered)
 
     # axes.scatter(
     #     background_points['logCPM'].to_list(), 
