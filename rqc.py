@@ -3865,11 +3865,6 @@ if COMMAND == "plot_de":
     
     de_filtered_raw_size = len(de_filtered)
 
-    # 1 - colour by number of canonical mods
-    # 2 - colour by change in delta TES score
-    # 3 - paired line for convergent neighbours, coloured by delta TES score
-    # - do convergent gene polymerases run into each other?
-    # - do codirectional genes that have readthroughs cause readthroughs into the next gene, causing lower expression?
     tes_file_df = {}
 
     if TES_ANALYSIS_FILE:
@@ -3877,29 +3872,16 @@ if COMMAND == "plot_de":
         tes_file_df = pandas.read_csv(TES_ANALYSIS_FILE, sep='\t')
         tes_file_df['gene_id'] = tes_file_df['gene_id'].astype('category')
         tes_file_df["parent_id"] = tes_file_df.gene_id.apply(lambda s: s.split('.')[0])
+        tes_file_df_raw_size = len(tes_file_df)
+
+    tes_file_df = tes_file_df.sort_values(by="gene_id").drop_duplicates(subset=['parent_id'])
+    print("REMOVED ISOFORMS FROM TES FILE: {}".format(tes_file_df_raw_size - len(tes_file_df)))
 
     neighbour_file_df = {}
 
     if NEIGHBOUR_FILE:
         with open(NEIGHBOUR_FILE) as json_data:
             neighbour_file_df = json.load(json_data)
-
-    # if FILTER_BY_NEIGHBOUR_TYPE != "all":
-    #     gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
-    #     # de_filtered["parent_id"] = de_filtered.gene_id.apply(lambda s: s.split('.')[0])
-
-    #     # flatten list if required
-    #     if len(gene_list_filter) > 0 and isinstance(gene_list_filter[0], list):
-    #         gene_list_filter = [x for xs in gene_list_filter for x in xs]
-
-    #     gene_list_filter = set(gene_list_filter)
-
-    #     # remove all entries from tes_file if the gene isn't in the gene list
-    #     de_filtered = de_filtered[
-    #             (de_filtered['gene_id'].isin(gene_list_filter))
-    #     ]
-
-    #     print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(de_filtered_raw_size - len(de_filtered), FILTER_BY_NEIGHBOUR_TYPE))
 
     # remove mitochondrial and api genes
     de_filtered = de_filtered[
@@ -3952,33 +3934,15 @@ if COMMAND == "plot_de":
         tes_file_df['tes_change'] = tes_file_df['wart_after'] = tes_file_df['wart_before']
         tes_file_df['wam_change'] = tes_file_df['wam_after'] = tes_file_df['wam_before']
 
-        de_filtered = de_filtered.merge(tes_file_df, left_on='gene_id', right_on='parent_id', how="outer")
-        de_filtered['gene_id'] = de_filtered['gene_id_x']
-        de_filtered['gene_id'] = de_filtered['gene_id'].astype('category')
+        de_filtered = de_filtered.merge(
+            tes_file_df[['parent_id', 'tes_change', 'wam_change', 'num_cannonical_mods']], 
+            left_on='gene_id',
+            right_on='parent_id', 
+            how="outer"
+        )
 
     de_filtered['is_downstream'] = 'lightgray'
-
     de_filtered = de_filtered.set_index('gene_id')
-    # de_dict = de_filtered.to_dict('index')
-
-    # if FILTER_BY_NEIGHBOUR_TYPE != "all":
-    #     for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
-    #         if ("MIT" not in a) and ("API" not in a):
-    #             # if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
-    #             #     print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
-    #             # else:
-    #             # print("setting {} to {}'s TES change...".format(a, b))
-    #             # neighbor_tes_change = tes_file_df[tes_file_df.parent_id == b].iloc[0].tes_change
-    #             # print("setting {} to {}'s TES change ({})...".format(a, b, neighbor_tes_change))
-                
-    #             # a is always upstream
-    #             # b is always downstream
-    #             de_filtered.at[b, 'is_downstream'] = 'salmon'
-    #             # de_filtered.at[a, 'is_downstream'] = 'salmon'
-
-
-    fig, axes = plt.subplots()
-    print(de_filtered)
 
     # connecting_lines = []
     # de_filtered = de_filtered.set_index('gene_id')
@@ -3997,12 +3961,20 @@ if COMMAND == "plot_de":
     #             if y[0] >= log10_pval_cutoff or y[1] >= log10_pval_cutoff:
     #                 axes.plot(x, y, color='red', ls='-', linewidth=1.0)
 
-    # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] == 0] == "lightgray"
-    # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] == 1] == "blue"
-    # de_filtered['num_cannonical_mods'] = de_filtered[de_filtered['num_cannonical_mods'] > 1] == "red" 
-
     de_filtered["colorby"] = "lightgray"
-    COLOR_BY = "neighbor_methylation_change"
+    COLOR_BY = "updown"
+
+    # neighbor_type_counts = {}
+    # for t in neighbour_file_df.keys():
+    #     neighbor_type_counts[t] = {}
+    #     # flatten list if required
+    #     if len(neighbour_file_df[t]) > 0 and isinstance(neighbour_file_df[t][0], list):
+    #         neighbours_of_type = [x for xs in neighbour_file_df[t] for x in xs]
+    #     else:
+    #         neighbours_of_type = neighbour_file_df[t]
+
+    #     for g in neighbours_of_type:
+    #         neighbor_type_counts[t][g] = neighbours_of_type.count(g)
 
     if COLOR_BY == "methylation_discrete":
         de_filtered.loc[de_filtered['num_cannonical_mods'] == 0, "colorby"] = "lightgray"
@@ -4024,7 +3996,7 @@ if COMMAND == "plot_de":
     if COLOR_BY == "neighbor_type":
         print("hehe")
     if COLOR_BY == "neighbor_methylation_change":
-        for a, b in neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]:
+        for a, b in neighbour_file_df['co_directional']:
             if ("MIT" not in a) and ("API" not in a):
                 # if a not in de_filtered.index.to_list() or b not in tes_file_df.parent_id.to_list():
                 #     print("WARNING: neighbour {} or {} not found in analysis!".format(a, b))
@@ -4035,20 +4007,40 @@ if COMMAND == "plot_de":
                 
                 # a is always upstream
                 # b is always downstream
-                if a not in de_filtered:
-                    de_filtered.at[b, 'colorby'] = 'black'
-                else:    
-                    de_filtered.at[b, 'colorby'] = de_filtered.at[a, 'tes_change']
-                # de_filtered.at[a, 'is_downstream'] = 'salmon'
-    if COLOR_BY == "neighbor_abundance_change":
-        print("hehe")
 
+                # neighbor_counts = 0
+                # for key in ['co_directional', 'convergent', 'divergent', 'embedded_co_directional', 'embedded_antiparallel']:
+                #     if b in neighbor_type_counts[key]:
+                #         neighbor_counts += neighbor_type_counts[key][b]
+                
+                if a in de_filtered.index and b in de_filtered.index:
+                    # de_filtered.at[b, 'colorby'] = de_filtered.at[a, 'tes_change']
+                    # if de_filtered.at[a, 'tes_change'] > 0:
+                    if de_filtered.at[b, 'tes_change'] == 0:
+                        de_filtered.at[b, 'colorby'] = 'salmon'
+                # de_filtered.at[a, 'is_downstream'] = 'salmon'
+    if COLOR_BY == "neighbor_major_minor":
+        # color the 
+        for a, b in neighbour_file_df['convergent']:
+            if ("MIT" not in a) and ("API" not in a):
+                if a in de_filtered.index and b in de_filtered.index and (de_filtered.at[a, 'FDR'] < pval_cutoff or de_filtered.at[b, 'FDR'] < pval_cutoff):
+                    if de_filtered.at[a, 'logCPM'] > de_filtered.at[b, 'logCPM']:
+                        de_filtered.at[a, 'colorby'] = 'green'
+                        de_filtered.at[b, 'colorby'] = 'salmon'
+                    else:
+                        de_filtered.at[a, 'colorby'] = 'salmon'
+                        de_filtered.at[b, 'colorby'] = 'green'
+                # if a in de_filtered.index and b not in de_filtered.index:
+                #     de_filtered.at[b, 'colorby'] = 'green'
+                # if a not in de_filtered.index and b in de_filtered.index:
+                #     de_filtered.at[b, 'colorby'] = 'green'
 
     background_points = de_filtered[de_filtered["colorby"] == "lightgray"]
     others = de_filtered[de_filtered["colorby"] != "lightgray"]
 
     print(de_filtered)
 
+    fig, axes = plt.subplots()
     # axes.scatter(
     #     background_points['logCPM'].to_list(), 
     #     background_points['logFC'].to_list(),
@@ -4056,18 +4048,19 @@ if COMMAND == "plot_de":
     #     s=10
     # )
 
-    # axes.scatter(
-    #     others['logCPM'].to_list(), 
-    #     others['logFC'].to_list(),
-    #     c=others['colorby'].to_list(),
-    #     s=10
-    # )
+    axes.scatter(
+        others['logCPM'].to_list(), 
+        others['logFC'].to_list(),
+        c=others['colorby'].to_list(),
+        s=10
+    )
 
     # MD plot
     axes = de_filtered.plot.scatter(
         x='logCPM',
         y='logFC',
         c='colorby',
+        alpha=0.5,
         s=10
     )
 
@@ -4091,9 +4084,10 @@ if COMMAND == "plot_de":
 
     def show_label(sel):
         index = sel.index
+        print(index)
         if index < len(de_filtered):
-            sel.annotation.set_text(de_filtered.iloc[index].gene_id_x)
-            print(de_filtered.iloc[index].gene_id_x)
+            sel.annotation.set_text(de_filtered.index[index])
+            print(de_filtered.index[index])
             
     mplcursors.cursor(axes, hover=True).connect("add", show_label)
 
