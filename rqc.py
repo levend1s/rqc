@@ -3962,7 +3962,7 @@ if COMMAND == "plot_de":
     #                 axes.plot(x, y, color='red', ls='-', linewidth=1.0)
 
     de_filtered["colorby"] = "lightgray"
-    COLOR_BY = "updown"
+    COLOR_BY = "gene_list"
 
     # neighbor_type_counts = {}
     # for t in neighbour_file_df.keys():
@@ -3980,8 +3980,14 @@ if COMMAND == "plot_de":
         de_filtered.loc[de_filtered['num_cannonical_mods'] == 0, "colorby"] = "lightgray"
         de_filtered.loc[de_filtered['num_cannonical_mods'] == 1, "colorby"] = "blue"
         de_filtered.loc[de_filtered['num_cannonical_mods'] > 1, "colorby"] = "red"
-    if COLOR_BY == "methylation_continuous":
-        de_filtered["colorby"] = de_filtered['wam_after']
+    if COLOR_BY == "wam_change":
+        de_filtered.loc[
+            (de_filtered['wam_change'] > 0)
+            , "colorby"] = "red"
+    if COLOR_BY == "tes_change":
+        de_filtered.loc[
+            (de_filtered['tes_change'] > 0)
+            , "colorby"] = "red"
     if COLOR_BY == "updown":
         # pval_cutoff = 0.05
         fc_cutoff = 1
@@ -4034,6 +4040,28 @@ if COMMAND == "plot_de":
                 #     de_filtered.at[b, 'colorby'] = 'green'
                 # if a not in de_filtered.index and b in de_filtered.index:
                 #     de_filtered.at[b, 'colorby'] = 'green'
+    if COLOR_BY == "gene_list":
+        genes_to_color_file_path = "edgeR_28hpi_overlaps_high_conf"
+
+        goi = []
+        with open(genes_to_color_file_path) as file:
+            goi = [line.rstrip() for line in file]
+
+        de_filtered.loc[de_filtered.index.isin(goi), 'colorby'] = 'salmon'
+
+        print(goi)
+
+    if COLOR_BY == "gene_list_downstream_codirectional":
+        # genes_to_color_file_path = "28hpi_no_overlaps_ctrl_overlaps_ks.txt"
+        genes_to_color_file_path = "edgeR_28hpi_overlaps_high_conf"
+        goi = []
+        with open(genes_to_color_file_path) as file:
+            goi = [line.rstrip() for line in file]
+
+        for a, b in neighbour_file_df['co_directional']:
+            if ("MIT" not in a) and ("API" not in a):
+                if a in de_filtered.index and b in de_filtered.index and b in goi:
+                    de_filtered.at[b, 'colorby'] = 'salmon'
 
     background_points = de_filtered[de_filtered["colorby"] == "lightgray"]
     others = de_filtered[de_filtered["colorby"] != "lightgray"]
@@ -4041,16 +4069,16 @@ if COMMAND == "plot_de":
     print(de_filtered)
 
     fig, axes = plt.subplots()
-    # axes.scatter(
-    #     background_points['logCPM'].to_list(), 
-    #     background_points['logFC'].to_list(),
-    #     c=background_points['colorby'].to_list(),
-    #     s=10
-    # )
+    axes.scatter(
+        background_points['logFC'].to_list(), 
+        background_points['-log10_adj_pval'].to_list(),
+        c=background_points['colorby'].to_list(),
+        s=10
+    )
 
     axes.scatter(
-        others['logCPM'].to_list(), 
-        others['logFC'].to_list(),
+        others['logFC'].to_list(), 
+        others['-log10_adj_pval'].to_list(),
         c=others['colorby'].to_list(),
         s=10
     )
