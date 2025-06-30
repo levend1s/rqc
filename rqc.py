@@ -69,6 +69,8 @@ parser.add_argument('--distance', type=int, default=0)
 parser.add_argument('--reference_bed', type=str, default=None)
 parser.add_argument('--reference_label', type=str, default=None)
 parser.add_argument('--tes_summary_path', type=str, default=None)
+parser.add_argument('--line_width', type=int, default=1)
+
 
 
 
@@ -122,6 +124,7 @@ DISTANCE = args.distance
 REFERENCE_BED = args.reference_bed
 REFERENCE_LABEL = args.reference_label
 TES_SUMMARY_PATH = args.tes_summary_path
+LINE_WIDTH = args.line_width
 
 
 
@@ -486,7 +489,7 @@ def resample_coverage(cov, bins, method):
     return resampled_coverage
 
 def normalise_coverage(cov, min=0):
-    if cov.max() > 0:
+    if len(cov) > 0 and cov.max() > 0:
         diff = cov.max() - min
         if diff == 0:
             normalised_resampled_coverage = cov * (1.0 / cov.max())
@@ -558,6 +561,7 @@ def plot_subfeature_coverage(coverages):
 
         plt_index += 1
 
+    linewidth = LINE_WIDTH
 
     for k, v in sample_labels.items():
         if num_samples > 1:
@@ -574,7 +578,7 @@ def plot_subfeature_coverage(coverages):
             cov_2 = coverages['coverages'][cov_2_label]
             cov_2_color = get_plot_color(cov_2_label)
 
-            this_axes.plot(cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color)
+            this_axes.plot(cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color, linewidth=linewidth)
             this_axes.fill_between(x_ticks, cov_1, alpha=0.2, color=cov_1_color)
             this_axes.tick_params(axis='y', labelcolor=cov_1_color)
             this_axes.set_ylim(ymin=0)
@@ -582,7 +586,7 @@ def plot_subfeature_coverage(coverages):
             this_axes.set_ylabel(' '.join(cov_1_label.split("_")[1:]), color=cov_1_color)
 
             this_axes_2 = this_axes.twinx()
-            this_axes_2.plot(cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color)
+            this_axes_2.plot(cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color, linewidth=linewidth)
             this_axes_2.fill_between(x_ticks, cov_2, alpha=0.2, color=cov_2_color)
             this_axes_2.tick_params(axis='y', labelcolor=cov_2_color)
             this_axes_2.set_ylim(ymin=0)
@@ -593,7 +597,7 @@ def plot_subfeature_coverage(coverages):
                 cov = coverages['coverages'][label]
                 this_color = get_plot_color(label)
 
-                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color)
+                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color, linewidth=linewidth)
                 this_axes.fill_between(x_ticks, cov, alpha=0.2, color=this_color)
 
             this_axes.legend(loc="upper left", title=k)
@@ -623,7 +627,7 @@ def plot_subfeature_coverage(coverages):
             subfeature_width = subfeature_info[coverages['subfeature_names'][l]]
             line_x_coord = curr_pos + subfeature_width
 
-            this_axes.axvline(x= line_x_coord, color='darkgray', ls="--", linewidth=1.0)
+            this_axes.axvline(x= line_x_coord, color='darkgray', ls="--", linewidth=linewidth)
             label_x_coord = curr_pos + int(subfeature_width / 2)
 
             if plt_index == (num_samples - 1):
@@ -3429,12 +3433,13 @@ if COMMAND == "plot_coverage":
 
                 subfeature_names = row_subfeatures['type'].to_list()
 
-                if ("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
-                (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
-                (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
-                    print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
-                    mal_annotation.append(row.ID)
-                    continue
+                SKIP_MALANNOTATIONS = False
+                # if SKIP_MALANNOTATIONS and ("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
+                # (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
+                # (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
+                #     print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
+                #     mal_annotation.append(row.ID)
+                #     continue
 
                 # gen coverage for each subfeature in a gene
                 subfeature_index = 0
@@ -3758,14 +3763,18 @@ if COMMAND == "plot_coverage":
             else:
                 normalised_total_coverage = normalise_coverage(all_normalised_total_coverage)
 
-            base_idx_counts = []
-            for i in range(COVERAGE_BINS):
-                if total_coverage[i] > 0:
-                    for j in range(total_coverage[i]):
-                        base_idx_counts.append(i)
+            PLOT_DENSITY = False
+            if PLOT_DENSITY:
+                base_idx_counts = []
+                for i in range(COVERAGE_BINS):
+                    if total_coverage[i] > 0:
+                        for j in range(total_coverage[i]):
+                            base_idx_counts.append(i)
 
-            kernel = scipy.stats.gaussian_kde(base_idx_counts, bw_method=0.1)
-            smoothed_tts_hist = kernel(x_ticks)
+                kernel = scipy.stats.gaussian_kde(base_idx_counts, bw_method=0.1)
+                smoothed_tts_hist = kernel(x_ticks)
+                density_coverages[label] = smoothed_tts_hist
+
             # cdf = numpy.cumsum(smoothed_tts_hist)
 
             # if type == "bed":
@@ -3773,7 +3782,6 @@ if COMMAND == "plot_coverage":
             # else:
             coverages[label] = total_coverage
             normalised_coverages[label] = normalised_total_coverage
-            density_coverages[label] = smoothed_tts_hist
 
 
     # print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
@@ -3808,10 +3816,11 @@ if COMMAND == "plot_coverage":
 
     plot_subfeature_coverage(coverage_dict)
 
-    coverage_dict['coverages'] = density_coverages
-    coverage_dict['y_label'] = "density (au)"
+    if PLOT_DENSITY:
+        coverage_dict['coverages'] = density_coverages
+        coverage_dict['y_label'] = "density (au)"
 
-    plot_subfeature_coverage(coverage_dict)
+        plot_subfeature_coverage(coverage_dict)
 
     plt.tight_layout()
     plt.show()
