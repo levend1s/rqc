@@ -1708,12 +1708,12 @@ if COMMAND == "plot_tes_vs_wam":
 
         print("REMOVED {} DUE TO FILTER (GENE NEIGHOUR={})".format(tes_file_df_len_raw - len(tes_file_df), FILTER_BY_NEIGHBOUR_TYPE))
 
-    # tes_file_df_len_raw = len(tes_file_df)
-    # tes_file_df = tes_file_df[
-    #     (tes_file_df.wart_after < 1.0) & 
-    #     (tes_file_df.wart_before < 1.0)
-    # ]
-    # print("REMOVED {} DUE TO 'IMPOSSIBLE' WEIRD TES CHANGE".format(tes_file_df_len_raw - len(tes_file_df)))
+    tes_file_df_len_raw = len(tes_file_df)
+    tes_file_df = tes_file_df[
+        (tes_file_df.wart_after < 1.0) & 
+        (tes_file_df.wart_before < 1.0)
+    ]
+    print("REMOVED {} DUE TO 'IMPOSSIBLE' WEIRD TES CHANGE".format(tes_file_df_len_raw - len(tes_file_df)))
 
 
 
@@ -1722,8 +1722,8 @@ if COMMAND == "plot_tes_vs_wam":
     tes_file_df['-log2_wam_change'] = (numpy.log2(tes_file_df['wam_change']) * -1)
     tes_file_df['log2_wart_change'] = numpy.log2(tes_file_df['wart_change'])
 
-    tes_file_df['wam_diff'] = tes_file_df['wam_before'] - tes_file_df['wam_after']
-    tes_file_df['tes_diff'] = tes_file_df['wart_after'] - tes_file_df['wart_before']
+    tes_file_df['wam_diff'] = (tes_file_df['wam_before'] - tes_file_df['wam_after']) * 100
+    tes_file_df['tes_diff'] = (tes_file_df['wart_after'] - tes_file_df['wart_before']) * 100
 
 
     # drop all genes where p_same_treatment < 0.05 (ie the same conditions don't have same TES)
@@ -1795,8 +1795,8 @@ if COMMAND == "plot_tes_vs_wam":
             )
 
             m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam_mods[x_col], filtered_genes_tes_wam_mods[y_col])
-            axes.plot(filtered_genes_tes_wam_mods[x_col], m * filtered_genes_tes_wam_mods[x_col] + c)
-            axes.text(1, 1, "R^2: {}".format(round(r_value ** 2, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+            # axes.plot(filtered_genes_tes_wam_mods[x_col], m * filtered_genes_tes_wam_mods[x_col] + c)
+            # axes.text(1, 1, "R^2: {}".format(round(r_value ** 2, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
 
             axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, i, len(filtered_genes_tes_wam_mods)))
     else:
@@ -1811,8 +1811,8 @@ if COMMAND == "plot_tes_vs_wam":
         axes = filtered_genes_tes_wam.plot.scatter(
             x='wam_diff',
             y='tes_diff',
-            c='log2_average_expression',
-            s=5
+            # c='log2_average_expression',
+            s=10
         )
         m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
         axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
@@ -3863,7 +3863,7 @@ if COMMAND == "plot_de":
         pval_col_name = 'adj.P.Val'
     else:
         de_analysis_type = "edgeR"
-        pval_col_name = 'PValue'
+        pval_col_name = 'FDR'
         de_filtered['gene_id'] = de_filtered.index
         print(de)
 
@@ -3971,7 +3971,7 @@ if COMMAND == "plot_de":
     #                 axes.plot(x, y, color='red', ls='-', linewidth=1.0)
 
     de_filtered["colorby"] = "lightgray"
-    COLOR_BY = "gene_list"
+    COLOR_BY = "updown"
 
     # neighbor_type_counts = {}
     # for t in neighbour_file_df.keys():
@@ -3984,6 +3984,7 @@ if COMMAND == "plot_de":
 
     #     for g in neighbours_of_type:
     #         neighbor_type_counts[t][g] = neighbours_of_type.count(g)
+    genes_to_color_file_path = "edgeR_28hpi_overlaps_high_conf"
 
     if COLOR_BY == "methylation_discrete":
         de_filtered.loc[de_filtered['num_cannonical_mods'] == 0, "colorby"] = "lightgray"
@@ -4050,7 +4051,6 @@ if COMMAND == "plot_de":
                 # if a not in de_filtered.index and b in de_filtered.index:
                 #     de_filtered.at[b, 'colorby'] = 'green'
     if COLOR_BY == "gene_list":
-        genes_to_color_file_path = "edgeR_28hpi_overlaps_high_conf"
 
         goi = []
         with open(genes_to_color_file_path) as file:
@@ -4062,7 +4062,6 @@ if COMMAND == "plot_de":
 
     if COLOR_BY == "gene_list_downstream_codirectional":
         # genes_to_color_file_path = "28hpi_no_overlaps_ctrl_overlaps_ks.txt"
-        genes_to_color_file_path = "edgeR_28hpi_overlaps_high_conf"
         goi = []
         with open(genes_to_color_file_path) as file:
             goi = [line.rstrip() for line in file]
@@ -4078,45 +4077,52 @@ if COMMAND == "plot_de":
     print(de_filtered)
 
     fig, axes = plt.subplots()
+    # y_ax_label = '-log10_adj_pval'
+    # x_ax_label = 'logFC'
+    # axes.set_ylabel('adjusted p values (-log10)')
+    # axes.set_xlabel('fold change (log2 KS/C)')
+    # log10_pval_cutoff = numpy.log10(0.05)
+    # axes.axhline(y=-log10_pval_cutoff, color='grey', ls="--", linewidth=1.0)
+
+    y_ax_label = 'logFC'
+    x_ax_label = 'logCPM'
+    axes.set_ylabel('fold change (log2 KS/C)')
+    axes.set_xlabel('transcript abundance (logCPM)')
+    axes.axhline(y=0, color='grey', ls="--", linewidth=1.0)
+
+
+
     axes.scatter(
-        background_points['logFC'].to_list(), 
-        background_points['-log10_adj_pval'].to_list(),
+        background_points[x_ax_label].to_list(), 
+        background_points[y_ax_label].to_list(),
         c=background_points['colorby'].to_list(),
         s=10
     )
 
     axes.scatter(
-        others['logFC'].to_list(), 
-        others['-log10_adj_pval'].to_list(),
+        others[x_ax_label].to_list(), 
+        others[y_ax_label].to_list(),
         c=others['colorby'].to_list(),
         s=10
     )
 
-    # MD plot
+    axes.set_ylim(ymin=-6, ymax=8)
+    axes.set_xlim(xmin=2, xmax=16)
+
+    # # traditional volcano
     axes = de_filtered.plot.scatter(
-        x='logCPM',
-        y='logFC',
-        c='colorby',
-        alpha=0.5,
-        s=10
-    )
-
-    # FC_cutoff = 4
-    # logFC_cutoff = numpy.log2(FC_cutoff)
-    # axes.axhline(y=logFC_cutoff, color='grey', ls="--", linewidth=1.0)
-    # axes.axhline(y=-logFC_cutoff, color='grey', ls="--", linewidth=1.0)
-
-    axes.set_ylabel('fold change (log2(KS/WT))')
-    axes.set_xlabel('transcript abundance (logCPM)')
-
-    # traditional volcano
-    axes = de_filtered.plot.scatter(
-        x='logFC',
-        y='-log10_adj_pval',
+        x=x_ax_label,
+        y=y_ax_label,
         c='colorby',
         s=10
     )
-    # axes.axhline(y=-log10_pval_cutoff, color='grey', ls="--", linewidth=1.0)
+
+    # mettl3 ks 28,32,36 hpi limits
+    axes.set_ylim(ymin=-6, ymax=8)
+    axes.set_xlim(xmin=4, xmax=16)
+
+    # axes.set_ylim(ymin=-4, ymax=8)
+    # axes.set_xlim(xmin=2, xmax=16)
 
 
     def show_label(sel):
