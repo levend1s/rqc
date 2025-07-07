@@ -1912,67 +1912,86 @@ if COMMAND == "calculate_offsets":
     # gene_id genomic_position file_1_count file_1_list_of_positions file_2_count file_2_list_of_positions
 
 
-
 if COMMAND == "plot_relative_distance":
-    print("hellooooo")
+    offsets_file_path = INPUT[0]
+    df = pandas.read_csv(offsets_file_path, sep='\t')
+    df = df.set_index('gene_id')
+    keys = [x for x in df.columns if x not in ['gene_id', 'position'] and "count" not in x]
+    for k in keys:
+        df[k] = df[k].apply(lambda s: list(ast.literal_eval(s)))
+
+    d_coverages = df.to_dict(orient='index')
+
     # TODO: write coverages as tsv file for plotting without recalculating offsets
     # load file into this variable d_coverages
 
-    # d_total_offsets = {}
-    # d_offset_hists = {}
-    # d_offset_kdes = {}
-    # x_ticks = list(range(-DISTANCE, DISTANCE))
+    d_total_offsets = {}
+    d_offset_hists = {}
+    d_offset_kdes = {}
+    x_ticks = list(range(-DISTANCE, DISTANCE))
 
-    # for k, v in d_offset_files.items():
-    #     d_total_offsets[k] = []
-    #     d_offset_hists[k] = []
+    for k in keys:
+        d_total_offsets[k] = []
+        d_offset_hists[k] = []
 
+    for idx, coverages in d_coverages.items():
+        for k in keys:
+            if len(d_total_offsets[k]) == 0:
+                d_total_offsets[k] = coverages[k]
+            else:
+                d_total_offsets[k] += coverages[k]
 
-    # for idx, coverages in d_coverages.items():
-    #     for k, v in d_offset_files.items():
-    #         if len(d_total_offsets[k]) == 0:
-    #             d_total_offsets[k] = coverages[k]
-    #         else:
-    #             d_total_offsets[k] += coverages[k]
+    for k, v in d_total_offsets.items():
+        d_offset_hists[k] = [v.count(i) for i in range(-DISTANCE, DISTANCE)]
 
-    # for k, v in d_total_offsets.items():
-    #     d_offset_hists[k] = [v.count(i) for i in range(-DISTANCE, DISTANCE)]
+        kernel = scipy.stats.gaussian_kde(v)
+        kde = kernel(x_ticks)
 
-    #     kernel = scipy.stats.gaussian_kde(v)
-    #     kde = kernel(x_ticks)
+        d_offset_kdes[k] = kde
 
-    #     d_offset_kdes[k] = kde
+    d_num_pam_sites_hist = {}
+    d_num_pam_sites = {}
+    pam_count_keys = ["{}_count".format(x) for x in keys]
+    for k in pam_count_keys:
+        v = df[k].to_list()
+        d_num_pam_sites_hist[k] = [v.count(i) for i in range(DISTANCE * 2)]
+        d_num_pam_sites[k] = sorted(v)
 
-    # d_num_pam_sites_hist = {}
-    # for k, v in d_num_pam_sites.items():
-    #     d_num_pam_sites_hist[k] = [v.count(i) for i in range(DISTANCE * 2)]
+    # print(d_coverages)
+    # print(d_total_offsets)
 
-    # # print(d_coverages)
-    # # print(d_total_offsets)
+    d_colors = {
+        'NGG': 'green',
+        'NGG_count': 'green',
+        'TTTN': 'blue',
+        'TTTN_count': 'blue'
+    }
 
-    # d_colors = {
-    #     'NGG': 'green',
-    #     'TTTN': 'blue'
-    # }
+    fig, axes = plt.subplots()
 
-    # fig, axes = plt.subplots()
+    for k, v in d_offset_hists.items():
+        normalised_v_by_reference_count = [x / len(df) for x in v]
+        # axes.plot(x_ticks, v, label=k, color=d_colors[k])
+        axes.plot(x_ticks, normalised_v_by_reference_count, label=k, color=d_colors[k])
+        axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=d_colors[k])
 
-    # for k, v in d_offset_hists.items():
-    #     axes.plot(x_ticks, v, label=k, color=d_colors[k])
-    #     axes.fill_between(x_ticks, v, alpha=0.2, color=d_colors[k])
+    # TODO HACK
+    # CUSTOM_Y_MAX = 800
 
-    # # TODO HACK
-    # # CUSTOM_Y_MAX = 800
-
-    # axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
+    axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
     # axes.set_ylabel('count')
-    # axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
-    # axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
-    # # if CUSTOM_Y_MAX:
-    #     # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
-    # axes.legend()
-    # plt.legend(loc="upper right")
+    axes.set_ylabel('count')
 
+    axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
+    axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
+    axes.set_ylim(ymin=0)
+
+    # if CUSTOM_Y_MAX:
+        # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
+    axes.legend()
+    plt.legend(loc="upper right")
+
+    # KDE plot
     # fig, axes = plt.subplots()
 
     # for k, v in d_offset_kdes.items():
@@ -1983,50 +2002,49 @@ if COMMAND == "plot_relative_distance":
     # axes.set_ylabel('count')
     # axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
     # axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
+    # axes.set_ylim(ymin=0)
+
     # # if CUSTOM_Y_MAX:
     #     # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
     # axes.legend()
     # plt.legend(loc="upper right")
 
-    # print("reference count: {}".format(len(reference_df)))
-    # for k, v in d_total_offsets.items():
-    #     print("{} within range ({}) count: {}".format(k, DISTANCE, len(v)))
+    print("reference count: {}".format(len(df)))
+    for k, v in d_total_offsets.items():
+        print("{} within range ({}) count: {}".format(k, DISTANCE, len(v)))
 
-    # # plot distribution of pam site count around each reference point
-    # for k, v in d_num_pam_sites.items():
-    #     d_num_pam_sites[k] = sorted(v)
+    # plot distribution of pam site count around each reference point
+    # HIST OF PAM COUNT PER GENE
+    fig, axes = plt.subplots()
+
+    max_pam_count = 0
+    for k, v in d_num_pam_sites.items():
+        if max(v) > max_pam_count:
+            max_pam_count = max(v)
+
+    for k, v in d_num_pam_sites_hist.items():
+        print(max_pam_count)
+        max_pam_sites_range = int(max_pam_count * 1.1)
+        max_pam_sites_range = 100
+        num_gene_x_ticks = list(range(max_pam_sites_range))
+        axes.plot(num_gene_x_ticks, v[:max_pam_sites_range], label=k, color=d_colors[k])
+        print(v[:max_pam_sites_range])
+        axes.fill_between(num_gene_x_ticks, v[:max_pam_sites_range], alpha=0.2, color=d_colors[k])
+
+    axes.set_ylabel('count (genes)')
+    axes.set_xlabel('number of PAM sites')
+    # axes.set_xscale('log')
+    axes.set_xlim(xmin=0, xmax=max_pam_sites_range)
+    axes.set_ylim(ymin=0)
 
 
+    # TODO HACK
+    # if CUSTOM_Y_MAX:
+        # axes.set_ylim(ymin=0, ymax=1500)
+    axes.legend()
+    plt.legend(loc="upper right")
 
-    # # HIST OF PAM COUNT PER GENE
-    # fig, axes = plt.subplots()
-
-    # max_pam_count = 0
-    # for k, v in d_num_pam_sites.items():
-    #     if max(v) > max_pam_count:
-    #         max_pam_count = max(v)
-
-    # for k, v in d_num_pam_sites_hist.items():
-    #     print(max_pam_count)
-    #     max_pam_sites_range = int(max_pam_count * 1.1)
-    #     max_pam_sites_range = 100
-    #     num_gene_x_ticks = list(range(max_pam_sites_range))
-    #     axes.plot(num_gene_x_ticks, v[:max_pam_sites_range], label=k, color=d_colors[k])
-    #     print(v[:max_pam_sites_range])
-    #     axes.fill_between(num_gene_x_ticks, v[:max_pam_sites_range], alpha=0.2, color=d_colors[k])
-
-    # axes.set_ylabel('count (genes)')
-    # axes.set_xlabel('number of PAM sites')
-    # # axes.set_xscale('log')
-    # axes.set_xlim(xmin=0, xmax=max_pam_sites_range)
-
-    # # TODO HACK
-    # # if CUSTOM_Y_MAX:
-    #     # axes.set_ylim(ymin=0, ymax=1500)
-    # axes.legend()
-    # plt.legend(loc="upper right")
-
-    # plt.show()
+    plt.show()
 
 
 if COMMAND == "plot_tes_wam_distance":
