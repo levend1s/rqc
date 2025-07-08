@@ -70,6 +70,8 @@ parser.add_argument('--reference_bed', type=str, default=None)
 parser.add_argument('--reference_label', type=str, default=None)
 parser.add_argument('--tes_summary_path', type=str, default=None)
 parser.add_argument('--line_width', type=int, default=1)
+parser.add_argument('--plot_density', type=bool, default=False)
+
 
 
 
@@ -125,6 +127,8 @@ REFERENCE_BED = args.reference_bed
 REFERENCE_LABEL = args.reference_label
 TES_SUMMARY_PATH = args.tes_summary_path
 LINE_WIDTH = args.line_width
+PLOT_DENSITY = args.plot_density
+
 
 
 
@@ -518,6 +522,10 @@ def get_plot_color(l):
         this_color = 'gold'
     elif 'inosine' in l:
         this_color = 'green'
+    elif 'NGG' in l:
+        this_color = 'green'
+    elif 'TTTN' in l:
+        this_color = 'blue'
 
     return this_color
 
@@ -1970,24 +1978,24 @@ if COMMAND == "plot_relative_distance":
     fig, axes = plt.subplots()
 
     for k, v in d_offset_hists.items():
-        normalised_v_by_reference_count = [x / len(df) for x in v]
+        normalised_v_by_reference_count = [x / len(df) * 100 for x in v]
         # axes.plot(x_ticks, v, label=k, color=d_colors[k])
         axes.plot(x_ticks, normalised_v_by_reference_count, label=k, color=d_colors[k])
         axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=d_colors[k])
 
     # TODO HACK
-    # CUSTOM_Y_MAX = 800
+    CUSTOM_Y_MAX = 50
 
     axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
     # axes.set_ylabel('count')
-    axes.set_ylabel('count')
+    axes.set_ylabel('site frequency (%)')
 
     axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
     axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
     axes.set_ylim(ymin=0)
 
-    # if CUSTOM_Y_MAX:
-        # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
+    if CUSTOM_Y_MAX:
+        axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
     axes.legend()
     plt.legend(loc="upper right")
 
@@ -2039,8 +2047,8 @@ if COMMAND == "plot_relative_distance":
 
 
     # TODO HACK
-    # if CUSTOM_Y_MAX:
-        # axes.set_ylim(ymin=0, ymax=1500)
+    if CUSTOM_Y_MAX:
+        axes.set_ylim(ymin=0, ymax=1500)
     axes.legend()
     plt.legend(loc="upper right")
 
@@ -3798,7 +3806,6 @@ if COMMAND == "plot_coverage":
             else:
                 normalised_total_coverage = normalise_coverage(all_normalised_total_coverage)
 
-            PLOT_DENSITY = False
             if PLOT_DENSITY:
                 base_idx_counts = []
                 for i in range(COVERAGE_BINS):
