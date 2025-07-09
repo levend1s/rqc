@@ -75,10 +75,6 @@ parser.add_argument('--plot_density', type=bool, default=False)
 
 
 
-
-
-
-
 # find neighbors
 parser.add_argument('--type', type=str, default="TES")
 parser.add_argument('--neighbour_distance', type=int, default=0)
@@ -765,7 +761,7 @@ def process_annotation_file():
 
     return ANNOTATION_FILE
 
-def process_genome_file(contig_lengths):
+def process_genome_file(contig_lengths = None):
     print("LOG - loading fasta file...")
 
     FASTA_DICT = {}
@@ -4247,13 +4243,29 @@ if COMMAND == "find_dmr":
 if COMMAND == "logo":
     import logomaker
 
-    filename = INPUT[0]
+    MINUS_OFFSET = int(INPUT[0])
+    PLUS_OFFSET = int(INPUT[1])
+    filename = INPUT[2]
 
-    crp_df = -logomaker.get_example_matrix('crp_energy_matrix',
-                                        print_description=False)
-    
-    f = open(filename, 'r')
-    seqs = f.read().splitlines()
+    fasta = process_genome_file()
+
+    site_file_df = pandas.read_csv(filename, sep='\t', names=GENERIC_BED_HEADER)
+    site_file_df['strand'] = site_file_df['strand'].astype('category')
+    site_file_df['contig'] = site_file_df['contig'].astype('category')
+    site_file_df['start'] = site_file_df['start'].astype('int32')
+    site_file_df['end'] = site_file_df['end'].astype('int32')
+
+    seqs = []
+
+    for row_idx, row in site_file_df.iterrows():
+        found_seq = fasta[row.contig]['sequence'][row.start-MINUS_OFFSET:row.end+PLUS_OFFSET]
+        
+        if row.strand == "-":
+            found_seq = reverse_complement(found_seq)
+        
+        seqs.append(found_seq)
+        print("{}: {}:{}-{} ({})".format(found_seq, row.contig, row.start, row.end, row.strand))
+
     counts_matrix = logomaker.alignment_to_matrix(seqs)
     print(counts_matrix)
     l = logomaker.Logo(counts_matrix)
