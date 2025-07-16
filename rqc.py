@@ -71,6 +71,10 @@ parser.add_argument('--reference_label', type=str, default=None)
 parser.add_argument('--tes_summary_path', type=str, default=None)
 parser.add_argument('--line_width', type=int, default=1)
 parser.add_argument('--plot_density', type=bool, default=False)
+parser.add_argument('--ignore_strand', type=bool, default=False)
+parser.add_argument('--plot_counts', type=bool, default=False)
+
+
 
 
 
@@ -124,7 +128,8 @@ REFERENCE_LABEL = args.reference_label
 TES_SUMMARY_PATH = args.tes_summary_path
 LINE_WIDTH = args.line_width
 PLOT_DENSITY = args.plot_density
-
+IGNORE_STRAND = args.ignore_strand
+PLOT_COUNTS = args.plot_counts
 
 
 
@@ -1860,7 +1865,6 @@ if COMMAND == "calculate_offsets":
     reference_df['contig'] = reference_df['contig'].astype('category')
     reference_df['strand'] = reference_df['strand'].astype('category')
 
-
     d_coverages = {}
     d_num_pam_sites = {}
 
@@ -1880,21 +1884,38 @@ if COMMAND == "calculate_offsets":
         d_coverages[row.ID]["position"] = offset_point
 
         for k, v in d_offset_files.items():
-            if row.strand == "+":
+            if IGNORE_STRAND:
+
                 in_range = v[(v.start >= (offset_point - DISTANCE))
-                            & (v.start <= (offset_point + DISTANCE))
-                            & (v.contig == row.contig)
-                            & (v.strand == row.strand)]
-                
-                offsets = [x - offset_point for x in in_range.start.to_list()]
+                                & (v.start <= (offset_point + DISTANCE))
+                                & (v.contig == row.contig)]
+
+                for_in_range = in_range[in_range.strand == "+"]
+                rev_in_range = in_range[in_range.strand == "-"]
+
+                for_offsets = [x - offset_point for x in for_in_range.start.to_list()]
+                rev_offsets = [x - offset_point for x in rev_in_range.end.to_list()]
+
+                offsets = for_offsets + rev_offsets
+
+                if row.strand == "-":
+                    offsets = [-x for x in offsets]
             else:
-                in_range = v[(v.end >= (offset_point - DISTANCE))
-                            & (v.end <= (offset_point + DISTANCE))
-                            & (v.contig == row.contig)
-                            & (v.strand == row.strand)]
-                
-                offsets = [x - offset_point for x in in_range.end.to_list()]
-                offsets = [-x for x in offsets]
+                if row.strand == "+":
+                    in_range = v[(v.start >= (offset_point - DISTANCE))
+                                & (v.start <= (offset_point + DISTANCE))
+                                & (v.contig == row.contig)
+                                & (v.strand == row.strand)]
+                    
+                    offsets = [x - offset_point for x in in_range.start.to_list()]
+                else:
+                    in_range = v[(v.end >= (offset_point - DISTANCE))
+                                & (v.end <= (offset_point + DISTANCE))
+                                & (v.contig == row.contig)
+                                & (v.strand == row.strand)]
+                    
+                    offsets = [x - offset_point for x in in_range.end.to_list()]
+                    offsets = [-x for x in offsets]
             
             # print("offset_point: {}".format(offset_point))
             # print(in_range)
@@ -1974,13 +1995,16 @@ if COMMAND == "plot_relative_distance":
     fig, axes = plt.subplots()
 
     for k, v in d_offset_hists.items():
-        normalised_v_by_reference_count = [x / len(df) * 100 for x in v]
+        if PLOT_COUNTS:
+            normalised_v_by_reference_count = v
+        else:
+            normalised_v_by_reference_count = [x / len(df) * 100 for x in v]
         # axes.plot(x_ticks, v, label=k, color=d_colors[k])
         axes.plot(x_ticks, normalised_v_by_reference_count, label=k, color=d_colors[k])
         axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=d_colors[k])
 
     # TODO HACK
-    CUSTOM_Y_MAX = 50
+    CUSTOM_Y_MAX = None
 
     axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
     # axes.set_ylabel('count')
@@ -3520,11 +3544,17 @@ if COMMAND == "plot_coverage":
                         (mods_file_df.strand == row['strand'])
                     ]
                 elif type == "bed":
+                    if IGNORE_STRAND:
+                        row_match_condition = (site_file_df.contig == row['seq_id']) & \
+                            (site_file_df.start > (row['start']) - COVERAGE_PADDING) & \
+                            (site_file_df.start < (row['end']) + COVERAGE_PADDING)
+                    else:
+                        row_match_condition = (site_file_df.contig == row['seq_id']) & \
+                            (site_file_df.start > (row['start']) - COVERAGE_PADDING) & \
+                            (site_file_df.start < (row['end']) + COVERAGE_PADDING) & \
+                            (site_file_df.strand == row['strand'])
                     row_site_matches_df = site_file_df[
-                        (site_file_df.contig == row['seq_id']) & 
-                        (site_file_df.start > (row['start']) - COVERAGE_PADDING) & 
-                        (site_file_df.start < (row['end']) + COVERAGE_PADDING) & 
-                        (site_file_df.strand == row['strand'])
+                        row_match_condition
                     ]
 
                 row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS
@@ -3810,7 +3840,10 @@ if COMMAND == "plot_coverage":
                             base_idx_counts.append(i)
 
                 kernel = scipy.stats.gaussian_kde(base_idx_counts, bw_method=0.1)
-                smoothed_tts_hist = kernel(x_ticks)
+                # HACK PAM
+                # this is not a true KDE anymore now that we're multiplying it by total coverage
+                # it does however allow us to plot and compare multiple KDEs on the same plot
+                smoothed_tts_hist = kernel(x_ticks) * sum(total_coverage)
                 density_coverages[label] = smoothed_tts_hist
 
             # cdf = numpy.cumsum(smoothed_tts_hist)
@@ -4243,29 +4276,62 @@ if COMMAND == "find_dmr":
 if COMMAND == "logo":
     import logomaker
 
-    MINUS_OFFSET = int(INPUT[0])
-    PLUS_OFFSET = int(INPUT[1])
+    MINUS_OFFSET = int(INPUT[0]) + 1
+    PLUS_OFFSET = int(INPUT[1]) - 1
     filename = INPUT[2]
 
-    fasta = process_genome_file()
+    gff = process_annotation_file()
+    gff_df = gff.attributes_to_columns()
+    gff_df['strand'] = gff_df['strand'].astype('category')
+    gff_df['seq_id'] = gff_df['seq_id'].astype('category')
+    gff_df['ID'] = gff_df['ID'].astype('category')
+    gff_df['type'] = gff_df['type'].astype('category')
 
-    site_file_df = pandas.read_csv(filename, sep='\t', names=GENERIC_BED_HEADER)
+    HAS_LOCUS_TAG = 'locus_tag' in gff_df.columns.to_list()
+    if HAS_LOCUS_TAG:
+        gff_df['locus_tag'] = gff_df['locus_tag'].astype('category')
+
+
+    print("GFF types:")
+    types = set(gff_df['type'].to_list())
+    type_counts = {}
+    for t in types:
+        of_this_type = gff_df[gff_df.type == t]
+        type_counts[t] = len(of_this_type)
+
+    contig_lengths = {}
+    if 'region' in types:
+        type_rows = gff_df[gff_df.type == 'region']
+
+        for _, row in type_rows.iterrows():
+            contig_lengths[row.seq_id] = row.end
+
+    fasta = process_genome_file(contig_lengths)
+
+    site_file_df = pandas.read_csv(filename, index_col=False, sep='\t', header=0, names=GENERIC_BED_HEADER)
+    print(site_file_df)
     site_file_df['strand'] = site_file_df['strand'].astype('category')
     site_file_df['contig'] = site_file_df['contig'].astype('category')
     site_file_df['start'] = site_file_df['start'].astype('int32')
     site_file_df['end'] = site_file_df['end'].astype('int32')
 
     seqs = []
+    mal_seqs = []
 
     for row_idx, row in site_file_df.iterrows():
-        found_seq = fasta[row.contig]['sequence'][row.start-MINUS_OFFSET:row.end+PLUS_OFFSET]
-        
-        if row.strand == "-":
-            found_seq = reverse_complement(found_seq)
-        
-        seqs.append(found_seq)
-        print("{}: {}:{}-{} ({})".format(found_seq, row.contig, row.start, row.end, row.strand))
+        if (row.start-MINUS_OFFSET) < 0 or (row.end+PLUS_OFFSET) > fasta[row.contig]['length']:
+            mal_seqs.append(row)
+        else:
+            found_seq = fasta[row.contig]['sequence'][row.start-MINUS_OFFSET:row.end+PLUS_OFFSET]
 
+            if row.strand == "-":
+                found_seq = reverse_complement(found_seq)
+            
+            seqs.append(found_seq.upper())
+            print("{}: {}:{}-{} ({})".format(found_seq, row.contig, row.start, row.end, row.strand))
+
+    print("NUM MAL SEQS: {}".format(len(mal_seqs)))
+    print(mal_seqs)
     counts_matrix = logomaker.alignment_to_matrix(seqs)
     print(counts_matrix)
     l = logomaker.Logo(counts_matrix)
