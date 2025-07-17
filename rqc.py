@@ -758,11 +758,11 @@ def process_annotation_file():
     ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
     GFF_DF = ANNOTATION_FILE.attributes_to_columns()
 
-    for row_index, row in GFF_DF.iterrows():
-        if row['Parent'] in GFF_PARENT_TREE:
-            GFF_PARENT_TREE[row['Parent']].append(row_index)
-        else:
-            GFF_PARENT_TREE[row['Parent']] = [row_index]
+    # for row_index, row in GFF_DF.iterrows():
+    #     if row['Parent'] in GFF_PARENT_TREE:
+    #         GFF_PARENT_TREE[row['Parent']].append(row_index)
+    #     else:
+    #         GFF_PARENT_TREE[row['Parent']] = [row_index]
 
     return ANNOTATION_FILE
 
@@ -1845,6 +1845,9 @@ if COMMAND == "plot_tes_vs_wam":
 
 if COMMAND == "calculate_offsets":
     d_offset_files = {}
+    d_offset_files_by_contig = {}
+    d_coverages = {}
+    d_num_pam_sites = {}
     print(INPUT)
     
     i = 0
@@ -1856,22 +1859,31 @@ if COMMAND == "calculate_offsets":
         file_df['contig'] = file_df['contig'].astype('category')
         file_df['strand'] = file_df['strand'].astype('category')
 
-        # file_df['contig'] = file_df['contig'].astype('category')
+        # d_offset_files[key] = file_df
+        if key not in d_num_pam_sites:
+            d_num_pam_sites[key] = []
 
-        d_offset_files[key] = file_df
+        for contig in set(file_df.contig.to_list()):
+            # if "KE" in contig:
+                # continue
+
+            if contig not in d_offset_files_by_contig:
+                d_offset_files_by_contig[contig] = {}
+                d_offset_files_by_contig[contig][key] = file_df[file_df.contig == contig]
+            else:
+                d_offset_files_by_contig[contig][key] = file_df[file_df.contig == contig]
+
         i += 2
 
     reference_df = pandas.read_csv(REFERENCE_BED, sep='\t')
     reference_df['contig'] = reference_df['contig'].astype('category')
     reference_df['strand'] = reference_df['strand'].astype('category')
 
-    d_coverages = {}
-    d_num_pam_sites = {}
-
-    for k, v in d_offset_files.items():
-        d_num_pam_sites[k] = []
-
+    # TEST_LIMIT = 1000
     for row_index, row in reference_df.iterrows():
+        # if row_index > TEST_LIMIT:
+            # break
+
         if row.strand == "+":
             offset_point = int(row.start)
         else:
@@ -1883,12 +1895,11 @@ if COMMAND == "calculate_offsets":
 
         d_coverages[row.ID]["position"] = offset_point
 
-        for k, v in d_offset_files.items():
+        # for k, v in d_offset_files.items():
+        for k, v in d_offset_files_by_contig[row.contig].items():
             if IGNORE_STRAND:
-
-                in_range = v[(v.start >= (offset_point - DISTANCE))
-                                & (v.start <= (offset_point + DISTANCE))
-                                & (v.contig == row.contig)]
+                in_range = v[(v.end >= (offset_point - DISTANCE))
+                                & (v.start <= (offset_point + DISTANCE))]
 
                 for_in_range = in_range[in_range.strand == "+"]
                 rev_in_range = in_range[in_range.strand == "-"]
@@ -2004,7 +2015,7 @@ if COMMAND == "plot_relative_distance":
         axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=d_colors[k])
 
     # TODO HACK
-    CUSTOM_Y_MAX = None
+    CUSTOM_Y_MAX = 60
 
     axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
     # axes.set_ylabel('count')
@@ -2043,6 +2054,8 @@ if COMMAND == "plot_relative_distance":
 
     # plot distribution of pam site count around each reference point
     # HIST OF PAM COUNT PER GENE
+    plt.savefig("plot_relative_distance_offsets.png")
+
     fig, axes = plt.subplots()
 
     max_pam_count = 0
@@ -2068,10 +2081,10 @@ if COMMAND == "plot_relative_distance":
 
     # TODO HACK
     if CUSTOM_Y_MAX:
-        axes.set_ylim(ymin=0, ymax=1500)
+        axes.set_ylim(ymin=0, ymax=1200)
     axes.legend()
     plt.legend(loc="upper right")
-
+    plt.savefig("plot_relative_distance_by_gene.png")
     plt.show()
 
 
@@ -4314,6 +4327,11 @@ if COMMAND == "logo":
     site_file_df['contig'] = site_file_df['contig'].astype('category')
     site_file_df['start'] = site_file_df['start'].astype('int32')
     site_file_df['end'] = site_file_df['end'].astype('int32')
+
+    bf_count = len(site_file_df)
+    # drop any entries which have contig not in our fasta
+    site_file_df = site_file_df[site_file_df['contig'].isin(fasta.keys())]
+    print("REMOVED {} DUE TO MISSING CONTIG".format(bf_count - len(site_file_df)))
 
     seqs = []
     mal_seqs = []
