@@ -25,8 +25,17 @@ numpy.set_printoptions(threshold=sys.maxsize)
 numpy.seterr(divide='ignore', invalid='ignore')
 
 parser = argparse.ArgumentParser(description="filter bam file by qscores / mapqs")
+# common
 parser.add_argument('COMMAND')
 parser.add_argument('inputs', nargs='+')
+parser.add_argument('-v', '--verbose', type=bool, default=False)
+parser.add_argument('-o', '--outfile', type=str)
+parser.add_argument('-f', '--feature', type=str)
+parser.add_argument('-a', '--annotation_file', type=str)
+parser.add_argument('-g', '--genome', type=str)
+parser.add_argument('--debug', type=bool, default=False)
+
+# qc
 parser.add_argument('-q', '--min_phred', type=int, default=0)
 parser.add_argument('-m', '--min_mapq', type=int, default=0)
 parser.add_argument('-l', '--min_read_length', type=int, default=0)
@@ -34,11 +43,8 @@ parser.add_argument('-r', '--reverse_search', type=bool, default=False)
 parser.add_argument('-n', '--num_results', type=int, default=0)
 parser.add_argument('--sort_by', type=str, default="")
 parser.add_argument('--check_duplicate_reads', type=bool, default=False)
-parser.add_argument('-v', '--verbose', type=bool, default=False)
-parser.add_argument('-o', '--outfile', type=str)
-parser.add_argument('-f', '--feature', type=str)
-parser.add_argument('-a', '--annotation_file', type=str)
-parser.add_argument('-g', '--genome', type=str)
+
+# coverage
 parser.add_argument('--coverage_type', type=str, default = "gene")
 parser.add_argument('--coverage_padding', type=int, default = 0)
 parser.add_argument('--coverage_bins', type=int, default = 100)
@@ -48,7 +54,6 @@ parser.add_argument('--read_depth_threshold', type=int, default=20)
 parser.add_argument('--cannonical_mod_prop_threshold', type=float, default=0.5)
 parser.add_argument('--cannonical_mod_read_depth_threshold', type=float, default=20)
 parser.add_argument('--padding_ratio', type=float, default=0.1)
-parser.add_argument('--debug', type=bool, default=False)
 parser.add_argument('--mod_normalisation', type=str, default="default")
 parser.add_argument('--calculate_poly_a', type=bool, default=False)
 parser.add_argument('--show_cannonical_m6a', type=bool, default=False)
@@ -56,6 +61,8 @@ parser.add_argument('--filter_for_m6A', type=str, default="[]")
 parser.add_argument('--filter_out_m6A', type=str, default="[]")
 parser.add_argument('--generate_filtered_bam', type=bool, default=False)
 parser.add_argument('--separate_y_axes', type=bool, default=False)
+
+# offsets / TES analysis
 parser.add_argument('--reference_point', type=str, default="TES")
 parser.add_argument('--neighbour_file', type=str, default=None)
 parser.add_argument('--tes_analysis_file', type=str, default=None)
@@ -74,134 +81,68 @@ parser.add_argument('--plot_density', type=bool, default=False)
 parser.add_argument('--ignore_strand', type=bool, default=False)
 parser.add_argument('--plot_counts', type=bool, default=False)
 
-
-
-
-
-
 # find neighbors
 parser.add_argument('--type', type=str, default="TES")
 parser.add_argument('--neighbour_distance', type=int, default=0)
 
 args = parser.parse_args()
 
-INPUT = args.inputs
-MIN_PHRED = args.min_phred
-MIN_MAPQ = args.min_mapq
-MIN_READ_LENGTH = args.min_read_length
+class run_config():
+    pass
+
+config = run_config()
+
+config.INPUT = args.inputs
+config.MIN_PHRED = args.min_phred
+config.MIN_MAPQ = args.min_mapq
+config.MIN_READ_LENGTH = args.min_read_length
+config.OUTFILE = args.outfile
+config.CHECK_DUPLICATE_READS = args.check_duplicate_reads
+config.VERBOSE = args.verbose
+config.NUM_RESULTS = args.num_results
+config.REVERSE_SEARCH = args.reverse_search
+config.SORT_BY = args.sort_by
+config.FEATURE = args.feature
+config.ANNOTATION_FILE_PATH= args.annotation_file
+config.GENOME_FILE_PATH= args.genome
+config.COVERAGE_TYPE= args.coverage_type
+config.COVERAGE_PADDING=args.coverage_padding
+config.COVERAGE_BINS=args.coverage_bins
+config.COVERAGE_METHOD=args.coverage_method
+config.SEPARATE_PLOTS_BY_LABEL_PREFIX = args.separate_plots_by_label_prefix
+config.CANNONICAL_MOD_PROP_THRESHOLD = args.cannonical_mod_prop_threshold
+config.CANNONICAL_MOD_READ_DEPTH_THRESHOLD = args.cannonical_mod_read_depth_threshold
+config.READ_DEPTH_THRESHOLD = args.read_depth_threshold
+config.PADDING_RATIO = args.padding_ratio
+config.DEBUG = args.debug
+config.MOD_NORMALISATION = args.mod_normalisation
+config.CALCULATE_POLY_A = args.calculate_poly_a
+config.SHOW_CANNONICAL_M6A = args.show_cannonical_m6a
+config.GENERATE_FILTERED_BAM = args.generate_filtered_bam
+config.FILTER_FOR_M6A = args.filter_for_m6A
+config.FILTER_OUT_M6A = args.filter_out_m6A
+config.SEPARATE_Y_AXES = args.separate_y_axes
+config.REFERENCE_POINT = args.reference_point
+config.FILTER_FOR_FEATURE_COUNTS = args.filter_for_feature_counts
+config.FILTER_BY_NEIGHBOUR_TYPE = args.filter_by_neighbour_type
+config.NUM_CANONICAL_MODS_FILTER = args.num_canonical_mods_filter
+config.FEATURE_FILTER = args.feature_filter
+config.SHOW_NEIGHBOURS = args.show_neighbours
+config.DISTANCE = args.distance
+config.REFERENCE_BED = args.reference_bed
+config.REFERENCE_LABEL = args.reference_label
+config.TES_SUMMARY_PATH = args.tes_summary_path
+config.LINE_WIDTH = args.line_width
+config.PLOT_DENSITY = args.plot_density
+config.IGNORE_STRAND = args.ignore_strand
+config.PLOT_COUNTS = args.plot_counts
+config.TYPE = args.type
+config.NEIGHBOUR_DISTANCE = args.neighbour_distance
+config.NEIGHBOUR_FILE = args.neighbour_file
+config.TES_ANALYSIS_FILE = args.tes_analysis_file
+config.SPLIT_BY_CANONICAL_MODS = args.split_by_canonical_mods
+
 COMMAND = args.COMMAND
-OUTFILE = args.outfile
-CHECK_DUPLICATE_READS = args.check_duplicate_reads
-VERBOSE = args.verbose
-NUM_RESULTS = args.num_results
-REVERSE_SEARCH = args.reverse_search
-SORT_BY = args.sort_by
-FEATURE = args.feature
-ANNOTATION_FILE_PATH= args.annotation_file
-GENOME_FILE_PATH= args.genome
-COVERAGE_TYPE= args.coverage_type
-COVERAGE_PADDING=args.coverage_padding
-COVERAGE_BINS=args.coverage_bins
-COVERAGE_METHOD=args.coverage_method
-SEPARATE_PLOTS_BY_LABEL_PREFIX = args.separate_plots_by_label_prefix
-CANNONICAL_MOD_PROP_THRESHOLD = args.cannonical_mod_prop_threshold
-CANNONICAL_MOD_READ_DEPTH_THRESHOLD = args.cannonical_mod_read_depth_threshold
-READ_DEPTH_THRESHOLD = args.read_depth_threshold
-PADDING_RATIO = args.padding_ratio
-DEBUG = args.debug
-MOD_NORMALISATION = args.mod_normalisation
-CALCULATE_POLY_A = args.calculate_poly_a
-SHOW_CANNONICAL_M6A = args.show_cannonical_m6a
-GENERATE_FILTERED_BAM = args.generate_filtered_bam
-FILTER_FOR_M6A = args.filter_for_m6A
-FILTER_OUT_M6A = args.filter_out_m6A
-SEPARATE_Y_AXES = args.separate_y_axes
-REFERENCE_POINT = args.reference_point
-FILTER_FOR_FEATURE_COUNTS = args.filter_for_feature_counts
-FILTER_BY_NEIGHBOUR_TYPE = args.filter_by_neighbour_type
-NUM_CANONICAL_MODS_FILTER = args.num_canonical_mods_filter
-FEATURE_FILTER = args.feature_filter
-SHOW_NEIGHBOURS = args.show_neighbours
-DISTANCE = args.distance
-REFERENCE_BED = args.reference_bed
-REFERENCE_LABEL = args.reference_label
-TES_SUMMARY_PATH = args.tes_summary_path
-LINE_WIDTH = args.line_width
-PLOT_DENSITY = args.plot_density
-IGNORE_STRAND = args.ignore_strand
-PLOT_COUNTS = args.plot_counts
-
-
-
-
-
-
-TYPE = args.type
-NEIGHBOUR_DISTANCE = args.neighbour_distance
-NEIGHBOUR_FILE = args.neighbour_file
-TES_ANALYSIS_FILE = args.tes_analysis_file
-SPLIT_BY_CANONICAL_MODS = args.split_by_canonical_mods
-
-
-
-# read unmapped (0x4)
-# read reverse strand (0x10)
-# not primary alignment (0x100)
-# read fails platform/vendor quality checks (0x200)
-# read is PCR or optical duplicate (0x400)
-# https://broadinstitute.github.io/picard/explain-flags.html
-BAM_UNMAPPED = 0x4
-BAM_REVERSE_STRAND = 0x10
-BAM_SECONDARY_ALIGNMENT = 0x100
-BAM_FAIL_QC = 0x200
-BAM_DUPLICATE = 0x400
-
-BAM_PILEUP_DEFAULT_FLAGS = BAM_UNMAPPED | BAM_SECONDARY_ALIGNMENT | BAM_FAIL_QC | BAM_DUPLICATE
-
-d_phred = {}
-d_mapq = {}
-d_tlen = {}
-d_read_ids = {}
-dataframes = {}
-
-GFF_DF = None
-GFF_PARENT_TREE = {}
-ANNOTATION_FILE = None
-GFF_DF = None
-CLOCKS = {}
-
-TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "tes_curve_r2", "tes_curve_coeff", "average_expression", "cannonical_mods", "wam_before", "wam_after", "wam_change"]
-
-MODKIT_BEDMETHYL_HEADER = [
-    "contig", "start", "end", "code", "score", "strand", 
-    "start_2", "end_2", "color", "valid_cov", "percent_mod", "num_mod", 
-    "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
-]
-
-GENERIC_BED_HEADER = [
-    "contig",
-    "start",
-    "end",
-    "name",
-    "score",
-    "strand",
-    "ID"
-]
-
-FEATURECOUNTS_HEADER = [
-    "read_id", "status", "number of targets", "targets"
-]
-
-PYSAM_MOD_TUPLES = {
-    'm6A_rev': ('A', 1, 'a'),
-    'm6A_inosine_rev': ('A', 1, 17596),
-    'pseU_rev': ('T', 1, 17802),
-    'm5C_rev': ('C', 1, 'm'),
-    'm6A_for': ('A', 0, 'a'),
-    'm6A_inosine_for': ('A', 0, 17596),
-    'pseU_for': ('T', 0, 17802),
-    'm5C_for': ('C', 0, 'm')
-}
 
 # exp function 
 def exp_func(x, a, b, c):
@@ -831,7 +772,6 @@ def process_genome_file(contig_lengths = None):
 
     return FASTA_DICT
 
-
 def filter_gff_for_target_features(annotation_file):
     print("LOG - filtering gff file for target features...")
 
@@ -1217,11 +1157,9 @@ def reverse_complement(s):
 
     return MOTIF_REVERSE_COMPLEMENT
 
-
 # ------------------- COMMANDS -------------------  #
 # ------------------- COMMANDS -------------------  #
 # ------------------- COMMANDS -------------------  #
-
 
 if COMMAND == "motif_finder":
     MOTIF = INPUT[0]
@@ -1382,7 +1320,6 @@ if COMMAND == "motif_finder":
     print("genome size: {}".format(genome_size))
     pprint(bases_counts)
     
-
 if COMMAND == "gene_neighbour_analysis":
     gene_neighbour_tsv_file_path = INPUT[0]
     print("LOADING: {}".format(gene_neighbour_tsv_file_path))
@@ -1824,14 +1761,22 @@ if COMMAND == "plot_tes_vs_wam":
             s=10
         )
         m, c, r_value, p_value, std_err = scipy.stats.linregress(filtered_genes_tes_wam[x_col], filtered_genes_tes_wam[y_col])
-        axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
-        axes.text(1, 1, "R: {}".format(round(r_value, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
-        # axes.set_xticks([round(x*0.1, 1) for x in range(0, 11)])
+        # axes.plot(filtered_genes_tes_wam[x_col], m * filtered_genes_tes_wam[x_col] + c)
+        axes.set_ylim(ymin=0, ymax=100)
+        axes.set_xlim(xmin=0, xmax=100)
+        axes.set_xlabel("")
+        axes.set_ylabel("")
 
-        if NUM_CANONICAL_MODS_FILTER > 0:
-            axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, NUM_CANONICAL_MODS_FILTER, len(filtered_genes_tes_wam)))
-        else:
-            axes.set_title("{} genes with cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, len(filtered_genes_tes_wam)))
+
+        # axes.text(1, 1, "R: {}".format(round(r_value, 2)), transform=axes.transAxes, horizontalalignment='right', verticalalignment='top')
+        # axes.set_xticks([round(x*0.1, 1) for x in range(0, 11)])
+        print("R: {}".format(round(r_value, 2)))
+        print("{} genes with cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, len(filtered_genes_tes_wam)))
+
+        # if NUM_CANONICAL_MODS_FILTER > 0:
+        #     axes.set_title("{} genes with {} cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, NUM_CANONICAL_MODS_FILTER, len(filtered_genes_tes_wam)))
+        # else:
+        #     axes.set_title("{} genes with cannonical m6A (n={})".format(FILTER_BY_NEIGHBOUR_TYPE, len(filtered_genes_tes_wam)))
 
         def show_label(sel):
             index = sel.index
@@ -1840,8 +1785,8 @@ if COMMAND == "plot_tes_vs_wam":
             
         mplcursors.cursor(axes, hover=True).connect("add", show_label)
 
+    plt.savefig("plot_tes_vs_wam.png", dpi=300)
     plt.show()
-
 
 if COMMAND == "calculate_offsets":
     d_offset_files = {}
@@ -1946,7 +1891,6 @@ if COMMAND == "calculate_offsets":
     df.to_csv(OUTFILE, sep='\t')
     print(df)
     # gene_id genomic_position file_1_count file_1_list_of_positions file_2_count file_2_list_of_positions
-
 
 if COMMAND == "plot_relative_distance":
     offsets_file_path = INPUT[0]
@@ -2055,6 +1999,9 @@ if COMMAND == "plot_relative_distance":
     # plot distribution of pam site count around each reference point
     # HIST OF PAM COUNT PER GENE
     plt.savefig("plot_relative_distance_offsets.png")
+    plt.savefig("plot_relative_distance_offsets.eps", format="eps")
+
+    
 
     fig, axes = plt.subplots()
 
@@ -2085,8 +2032,9 @@ if COMMAND == "plot_relative_distance":
     axes.legend()
     plt.legend(loc="upper right")
     plt.savefig("plot_relative_distance_by_gene.png")
-    plt.show()
+    plt.savefig("plot_relative_distance_by_gene.eps", format="eps")
 
+    plt.show()
 
 if COMMAND == "plot_tes_wam_distance":
     tes_tsv_file_path = INPUT[0]
@@ -2435,9 +2383,6 @@ if COMMAND == "m6A_specific_tes_analysis":
         # # fig.suptitle("transcript end sites filtered for reads containing a cm6A")
         # fig.subplots_adjust(hspace=0, wspace=0.1)
         plt.show()
-
-if COMMAND == "dmr_analysis":
-    print("HI")
 
 if COMMAND == "tes_analysis":
     # load annotation file
@@ -3403,515 +3348,6 @@ if COMMAND == "tes_analysis":
     else:
         print("plotting gene batch methylation changes and transcript end site changes...")
 
-
-if COMMAND == "plot_coverage":
-    # load annotation file
-    feature_id = INPUT[0]
-
-    # process input file. Each line contains a label, the type of file, and the filepath
-    input_files = {}
-    # if len(INPUT[1:]) % 4 != 0:
-    #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
-    #     sys.exit()
-    # else:
-    in_index = 1
-    while in_index < len(INPUT):
-        if not INPUT[in_index].startswith("#"):
-            input_files[INPUT[in_index]] = {
-                'group': INPUT[in_index+1], 
-                'type': INPUT[in_index+2], 
-                'path': INPUT[in_index+3]
-            }
-        in_index += 4
-
-    # load annotation file and find indexes for all parent children
-    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
-    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
-
-    for row_index, row in GFF_DF.iterrows():
-        if row['Parent'] in GFF_PARENT_TREE:
-            GFF_PARENT_TREE[row['Parent']].append(row_index)
-        else:
-            GFF_PARENT_TREE[row['Parent']] = [row_index]
-
-    # Try to find matches of provided type, if not, assume that input is a list of IDs
-    matches = ANNOTATION_FILE.filter_feature_of_type([feature_id])
-    if len(matches.df) == 0:
-        evaluated_input = ast.literal_eval(feature_id)
-        matches = ANNOTATION_FILE.get_feature_by_attribute("ID", evaluated_input)
-        print("Looking for {} IDs, found {} matches. Plotting gene coverage for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
-    else:
-        print("Found {} matches for type {}. Plotting gene coverage...".format(len(matches.df), feature_id))
-
-    num_matches = len(matches.df)
-    PYSAM_PILEUP_MAX_DEPTH = 8000 # default
-    subfeature_names = []
-    subfeature_info = {}
-    matches = matches.attributes_to_columns()
-    matches['strand'] = matches['strand'].astype('category')
-    matches['type'] = matches['type'].astype('category')
-    matches['seq_id'] = matches['seq_id'].astype('category')
-
-
-    index = 0
-    sites_of_interest = None
-
-    coverages = {}
-    normalised_coverages = {}
-    feature_coverages = {}
-    normalised_feature_coverages = {}
-    density_coverages = {}
-    tx_lengths = {}
-    mod_peaks = {}
-
-
-    LOGFILE_PATH = "rqc_plot_coverage_stats.log"
-    log_header = ["label", "type", "id", "max_depth", "total_coverage", "length", "AUC", "num peaks", "peak locations"]
-    print("\t".join(log_header))
-    logfile_df = pandas.DataFrame(columns=log_header)
-    logfile_df_index = 0
-
-    max_num_subfeatures = 0
-
-    for label in input_files.keys():
-        type = input_files[label]['type']
-        path = input_files[label]['path']
-
-        if type in ['bam', 'bedmethyl', 'bed']:
-
-            feature_coverages[label] = {}
-            normalised_feature_coverages[label] = {}
-
-            mod_peaks[label] = {}
-
-            if type == "bam":
-                samfile = pysam.AlignmentFile(path, 'rb')
-            elif type == "bedmethyl":
-                mods_file_df = pandas.read_csv(path, sep='\t', names=MODKIT_BEDMETHYL_HEADER)
-            elif type == "bed":
-                site_file_df = pandas.read_csv(path, sep='\t', skiprows=1, names=GENERIC_BED_HEADER)
-                site_file_df['strand'] = site_file_df['strand'].astype('category')
-                site_file_df['contig'] = site_file_df['contig'].astype('category')
-
-                # site_file_df['start'] = site_file_df['start'].astype('int32')
-                # site_file_df['end'] = site_file_df['end'].astype('int32')
-
-            # else:
-            #     print("ERROR UNKNOWN FILE TYPE {}".format(type))
-
-            # generate coverage for all matches in this bam file
-            mal_annotation = []
-            for row_index, row in matches.iterrows():
-                # find subfeatures
-                START_CLOCK("row_start")
-
-                row_subfeatures = getSubfeatures(row['ID'], COVERAGE_TYPE, COVERAGE_PADDING)
-
-                subfeature_names = row_subfeatures['type'].to_list()
-
-                SKIP_MALANNOTATIONS = False
-                # if SKIP_MALANNOTATIONS and ("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
-                # (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
-                # (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
-                #     print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
-                #     mal_annotation.append(row.ID)
-                #     continue
-
-                # gen coverage for each subfeature in a gene
-                subfeature_index = 0
-                num_subfeatures = len(row_subfeatures.index)
-                subfeature_base_coverages = [None] * num_subfeatures
-
-                # if max_num_subfeatures == 0:
-                #     max_num_subfeatures = num_subfeatures
-                # else:
-                #     if num_subfeatures != max_num_subfeatures:
-                #         print("ERROR: trying to calculate subfeature coverage for genes with different number of subfeatures")
-                #         print("{} has {} subfeatures, but previous genes had {} subfeatures. Exiting...".format(row['ID'], num_subfeatures, max_num_subfeatures))
-
-                if num_subfeatures > 1:
-                    if 'UTR' in subfeature_names[0]:
-                        subfeature_names[0] = "5'UTR"
-                    if 'UTR' in subfeature_names[1]:
-                        subfeature_names[1] = "5'UTR"
-                    if 'UTR' in subfeature_names[-1]:
-                        subfeature_names[-1] = "3'UTR"
-                    if 'UTR' in subfeature_names[-2]:
-                        subfeature_names[-2] = "3'UTR"
-
-                mod_peaks[label][row['ID']] = []
-
-                exon_idx = 1
-                for i in range(num_subfeatures):
-                    if subfeature_names[i] == 'CDS':
-                        subfeature_names[i] = "E{}".format(exon_idx)
-                        exon_idx += 1
-
-                tx_lengths[row['ID']] = (row['end'] - row['start'])
-
-                if type == "bedmethyl":
-                    row_mods_file_df = mods_file_df[
-                        (mods_file_df.contig == row['seq_id']) & 
-                        (mods_file_df.start > (row['start']) - COVERAGE_PADDING) & 
-                        (mods_file_df.start < (row['end']) + COVERAGE_PADDING) & 
-                        (mods_file_df.strand == row['strand'])
-                    ]
-                elif type == "bed":
-                    if IGNORE_STRAND:
-                        row_match_condition = (site_file_df.contig == row['seq_id']) & \
-                            (site_file_df.start > (row['start']) - COVERAGE_PADDING) & \
-                            (site_file_df.start < (row['end']) + COVERAGE_PADDING)
-                    else:
-                        row_match_condition = (site_file_df.contig == row['seq_id']) & \
-                            (site_file_df.start > (row['start']) - COVERAGE_PADDING) & \
-                            (site_file_df.start < (row['end']) + COVERAGE_PADDING) & \
-                            (site_file_df.strand == row['strand'])
-                    row_site_matches_df = site_file_df[
-                        row_match_condition
-                    ]
-
-                row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS
-                row_flags_requires = 0
-
-                if row['strand'] == '+':
-                    row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS | BAM_REVERSE_STRAND
-                else:
-                    row_flags_requires = BAM_REVERSE_STRAND
-
-                for _, subfeature in row_subfeatures.iterrows():
-                    subfeature_length = subfeature['end'] - subfeature['start'] + 1
-                    subfeature_base_coverages[subfeature_index] = numpy.zeros(subfeature_length)
-
-                    if type == "bam":
-                        # pysam indexes are zero indexed but gff are 1-indexed, so pysam index = gffindex-1
-                        for column in samfile.pileup(
-                            contig=subfeature['seq_id'], 
-                            start=subfeature['start'] - 1, 
-                            stop=subfeature['end'],
-                            # min_mapping_quality=MIN_MAPQ,
-                            max_depth=PYSAM_PILEUP_MAX_DEPTH,
-                            flag_require=row_flags_requires,
-                            flag_filter=row_flag_filters,
-                            truncate = True
-                        ):
-                            # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
-                            read_depth = len(list(filter(None, column.get_query_sequences())))
-                            # print(column.get_query_sequences(mark_matches=True, mark_ends=True, add_indels=True))
-                            # reference pos is 0 indexed, gff (subfeature) is 1 indexed, add one to bring it back to zero
-                            # TODO: this method of read depth shows only aligned bases. For reads which have mismatches/indels those bases do not contribute to read depth.
-                            subfeature_base_coverages[subfeature_index][column.reference_pos - subfeature['start'] + 1] = read_depth
-
-                    elif type == "bedmethyl":
-                        mod_matches = row_mods_file_df[
-                            (row_mods_file_df.end >= subfeature['start']) & 
-                            (row_mods_file_df.end <= subfeature['end'])
-                        ]
-                        # convert from genome to transcript space
-                        # in a bedmethyl file, the end position is the gff exact position
-                        subfeature_mod_positions = mod_matches['end'].to_numpy() - subfeature['start']
-                        num_mods_at_pos = mod_matches['num_mod'].to_list()
-
-                        for mod_pos_index in range(len(num_mods_at_pos)):
-                            subfeature_base_coverages[subfeature_index][subfeature_mod_positions[mod_pos_index]] = num_mods_at_pos[mod_pos_index]
-
-                        # valid_cov and percent_mod determine 'cannonical mods'
-                        if CANNONICAL_MOD_PROP_THRESHOLD > 0 and CANNONICAL_MOD_READ_DEPTH_THRESHOLD > 0:
-                            mod_peak_matches = mod_matches[
-                                (mod_matches.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
-                                (mod_matches.valid_cov >= CANNONICAL_MOD_READ_DEPTH_THRESHOLD)
-                            ]
-
-                            peak_positions = mod_peak_matches['end'].to_numpy() - row['start']
-
-                            if (row["strand"] == "-"):
-                                peak_positions = tx_lengths[row['ID']] - peak_positions
-
-                            mod_peaks[label][row['ID']] += peak_positions.tolist()
-
-                    elif type == "bed":
-                        site_matches = row_site_matches_df[
-                            ((row_site_matches_df.start - 3) >= subfeature['start']) & 
-                            ((row_site_matches_df.start + 3) <= subfeature['end'])
-                        ]
-                        # convert from genome to transcript space
-                        # start position is the 0-indexed start position of the 5mer, so add 3 to get the gff exact position of the central A to DRACH motif. 
-                        subfeature_site_positions = site_matches['start'].to_numpy() - subfeature['start'] + 3
-
-                        for site_pos_index in subfeature_site_positions:
-                            subfeature_base_coverages[subfeature_index][site_pos_index] = 1
-                    # else:
-                    #     print("WARNING: unknown type: {}".format(type))
-
-
-                    subfeature_index += 1
-
-                total_count_depth_gene = 0
-                # squish the cds subfeatures into a single one
-                if COVERAGE_TYPE == "subfeature_cds":
-                    num_exons = 0
-                    first_exon_idx = -1
-                    last_exon_idx = -1
-
-                    temp_subfeature_names = []
-                    for i in range(len(subfeature_names)):
-                        total_count_depth_gene += sum(subfeature_base_coverages[i])
-                        if subfeature_names[i].startswith("E"):
-                            if first_exon_idx == -1:
-                                temp_subfeature_names.append("CDS")
-                                first_exon_idx = i
-                            
-                            last_exon_idx = i
-                            num_exons += 1
-                        else:
-                            temp_subfeature_names.append(subfeature_names[i])
-                    
-                    num_subfeatures = num_subfeatures - num_exons + 1
-                    temp_subfeature_base_coverages = [None] * num_subfeatures
-
-                    offset = 0
-                    for i in range(num_subfeatures):
-                        if i == first_exon_idx:
-                            temp_subfeature_base_coverages[i] = numpy.concatenate(subfeature_base_coverages[first_exon_idx:last_exon_idx+1]).ravel()
-                            offset = num_exons-1
-                        else:
-                            temp_subfeature_base_coverages[i] = subfeature_base_coverages[i+offset]
-
-                    subfeature_base_coverages = temp_subfeature_base_coverages
-                    corrected_subfeature_names = temp_subfeature_names
-                else:
-                    corrected_subfeature_names = subfeature_names
-
-
-                sf_base_coverage_list = [None] * num_subfeatures
-                STOP_CLOCK("row_start", "coverage_stop")
-
-                if COVERAGE_PADDING:
-                    num_bins_cds = int(COVERAGE_BINS * (1 - (2 * PADDING_RATIO)))
-                    num_bins_padding = int(COVERAGE_BINS * PADDING_RATIO)
-                else:
-                    num_bins_cds = COVERAGE_BINS
-                    num_bins_padding = 0
-
-                running_sf_bin_count = 0
-
-                # implicitly reset subfeature_index
-                for subfeature_index in range(num_subfeatures):
-                    # resample coverage
-                    if subfeature_index == 0 and COVERAGE_PADDING:
-                        sf_bin_size = num_bins_padding
-                    elif subfeature_index == (num_subfeatures - 1):
-                        # sf_bin_size = num_bins_cds - (math.floor(num_bins_cds / num_subfeatures) * (num_subfeatures-1))
-                        sf_bin_size = COVERAGE_BINS - running_sf_bin_count
-                    elif COVERAGE_PADDING:
-                        sf_bin_size = math.floor(num_bins_cds / (num_subfeatures - 2))
-                    else:
-                        sf_bin_size = math.floor(num_bins_cds / num_subfeatures)
-                    
-                    subfeature_info[corrected_subfeature_names[subfeature_index]] = sf_bin_size
-
-                    # if type == "bed":
-                    #     sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, "sum")
-                    # else:
-                    sf_resampled_coverage = resample_coverage(subfeature_base_coverages[subfeature_index], sf_bin_size, COVERAGE_METHOD)
-
-                    sf_base_coverage_list[subfeature_index] = sf_resampled_coverage
-
-                    running_sf_bin_count += sf_bin_size
-
-                # flatten resampled subfeature coverages into a single array
-                resampled_base_coverage = numpy.concatenate(sf_base_coverage_list).ravel()
-                # reverse coverages if necessary
-                if (row["strand"] == "-"):
-                    resampled_base_coverage = numpy.flip(resampled_base_coverage)
-
-                # # find out how many mod peaks there are based off thresholds
-                # if MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
-                #     num_prop_threshold_peaks = 0
-                #     for i in range(len(feature_coverages[read_cov_label][feature_index])):
-                #         if feature_coverages[read_cov_label][feature_index][i] >= READ_DEPTH_THRESHOLD and mod_base_proportion[i] >= MOD_PROP_THRESHOLD:
-                #             num_prop_threshold_peaks += 1
-
-                #     additional_info += "\tmod peaks: {}".format(num_prop_threshold_peaks)
-
-                STOP_CLOCK("row_start", "resample_subfeature_stop")
-                additional_info = [len(mod_peaks[label][row['ID']]), ",".join(str(x) for x in mod_peaks[label][row['ID']])]
-
-
-                # if this is modification coverage, we'll 'normalise' it against the gene read depth coverage
-                if type == "bedmethyl":
-                    read_cov_label = label.split("_")[0] + "_read_depth"
-
-                    # weighted probability of m6A function
-                    # for each given site, we have P(m6A) = num_m6A / read_depth
-                    # P(m6A) prior = 0.05, which is the abundance of m6A / A in entire RNA-seq
-                    # formula for weighted probability is P_weighted = (N * P_observed) + (Weight_prior * P_prior) / (N + Weight_prior)
-                    # Weight_prior = feature_coverages[read_cov_label][feature_index].max()
-                    # P_prior = 0.01
-
-                    # resampled_base_coverage = feature_coverages[read_cov_label][feature_index] / 2
-                    # denom = (feature_coverages[read_cov_label][feature_index] + Weight_prior)
-                    # normalised_feature_coverages[feature_index] = numpy.nan_to_num( (resampled_base_coverage + (Weight_prior * P_prior)) / denom)
-
-                    # normalise against itself
-                    #normalised_feature_coverages[feature_index] = normalise_coverage(resampled_base_coverage)
-
-                    # normalise against read depth (fraction of bases methylated * normalised coverage)
-                    mod_base_proportion = numpy.nan_to_num(resampled_base_coverage / feature_coverages[read_cov_label][row['ID']])
-
-                    # NOTE: this is due to how we calculate read depth, mentioned in the bam section above
-                    # There are cases where a read may have indels/mismatches (which do not contribute to read depth) but within those sections a mod is detected
-                    # this leads to numbers greater than 1 when calculating mod proportion
-                    # So for now we'll just clamp those numbers down to 1
-                    mod_base_proportion[mod_base_proportion > 1.0] = 1.0
-
-                    if MOD_NORMALISATION == "raw":
-                        normalised_feature_coverages[label][row['ID']] = mod_base_proportion
-                    else:
-                        normalised_feature_coverages[label][row['ID']] = mod_base_proportion * normalised_feature_coverages[read_cov_label][row['ID']]
-                else:
-                    normalised_feature_coverages[label][row['ID']] = normalise_coverage(resampled_base_coverage)
-
-                feature_coverages[label][row['ID']] = resampled_base_coverage
-                AUC = round(numpy.sum(normalised_feature_coverages[label][row['ID']]) / COVERAGE_BINS, 2) # gives score between 0 and 1
-
-                STOP_CLOCK("row_start", "row_end")
-
-                # label, gene id, max coverage, gene length, auc, num mod peaks, mod peaks
-                row_coverage_summary = [label, type, row['ID'], int(max(resampled_base_coverage)), total_count_depth_gene, row['end'] - row['start'], AUC]
-
-                if additional_info:
-                    row_coverage_summary += additional_info
-
-                print("\t".join([str(x) for x in row_coverage_summary]))
-                logfile_df.loc[logfile_df_index] = row_coverage_summary
-                logfile_df_index += 1
-
-            if type == "bam":
-                samfile.close()
-
-    # drop all coverages which don't meet a coverage threshold across ALL samples
-    # this could be AUC or read depth
-
-    # for each gene, get how many rows 
-    if READ_DEPTH_THRESHOLD > 0:
-        bam_labels = []
-        for label in input_files.keys():
-            type = input_files[label]['type']
-
-            if type == "bam":
-                bam_labels.append(label)
-
-        num_low_coverage = 0
-
-        for row_index, row in matches.iterrows():
-            gene_matches_below_read_threshold = logfile_df[
-                (logfile_df.id == row['ID']) & 
-                (logfile_df.max_depth < READ_DEPTH_THRESHOLD) &
-                (logfile_df.type == "bam")]
-            
-            if len(gene_matches_below_read_threshold) > 0:
-                # print("ignoring {} since it has low read depth (<{})...".format(row['ID'], READ_DEPTH_THRESHOLD))
-                # print(gene_matches_below_read_threshold)
-
-                for label, file in input_files.items():
-                    # print(feature_coverages[label][row['ID']])
-                    feature_coverages[label].pop(row['ID'], None)
-                    normalised_feature_coverages[label].pop(row['ID'], None)
-
-                num_low_coverage += 1 
-
-        print("REMOVED {} DUE TO LOW COVERAGE (<{})".format(num_low_coverage, READ_DEPTH_THRESHOLD))
-        print("REMAINING ID's: {}".format(feature_coverages[label].keys()))
-
-    print("REMOVED {} DUE TO MISSING UTR annotation".format(len(mal_annotation)))
-
-    for label in input_files.keys():
-        label_total_depth = logfile_df[logfile_df['label'] == label].total_coverage.sum()
-        print("{} TOTAL DEPTH: {}".format(label, label_total_depth))
-
-    x_ticks = list(range(COVERAGE_BINS))
-
-    for label in input_files.keys():
-        type = input_files[label]['type']
-        if type in ['bam', 'bedmethyl', 'bed']:
-
-            # flatten down all resampled coverages for this label and store dict under label
-            total_coverage = numpy.array([sum(i) for i in zip(*list(feature_coverages[label].values()))], dtype=numpy.uint32)
-            all_normalised_total_coverage = numpy.array([sum(i) for i in zip(*list(normalised_feature_coverages[label].values()))])
-
-            # normalised mod coverage is the average weighted proportion of a modification against read depth across all genes
-            if type == "bedmethyl":
-                normalised_total_coverage = all_normalised_total_coverage / len(normalised_feature_coverages[label].keys())
-            else:
-                normalised_total_coverage = normalise_coverage(all_normalised_total_coverage)
-
-            if PLOT_DENSITY:
-                base_idx_counts = []
-                for i in range(COVERAGE_BINS):
-                    if total_coverage[i] > 0:
-                        for j in range(total_coverage[i]):
-                            base_idx_counts.append(i)
-
-                kernel = scipy.stats.gaussian_kde(base_idx_counts, bw_method=0.1)
-                # HACK PAM
-                # this is not a true KDE anymore now that we're multiplying it by total coverage
-                # it does however allow us to plot and compare multiple KDEs on the same plot
-                smoothed_tts_hist = kernel(x_ticks) * sum(total_coverage)
-                density_coverages[label] = smoothed_tts_hist
-
-            # cdf = numpy.cumsum(smoothed_tts_hist)
-
-            # if type == "bed":
-            #     sites_of_interest = total_coverage # normalised_total_coverage
-            # else:
-            coverages[label] = total_coverage
-            normalised_coverages[label] = normalised_total_coverage
-
-
-    # print("\nsummary:\nnum matches: {}\nnum bins: {}".format(num_matches, COVERAGE_BINS))
-    additional_text = "num transcripts: {}\naverage transcript length: {}".format(len(tx_lengths.keys()), int(sum(tx_lengths.values()) / len(tx_lengths.values())))
-    logfile_df.to_csv(LOGFILE_PATH, sep='\t', index=False)
-
-    # plot coverages
-    # this looks at coverage for each gene, resamples and normalises the coverage and adds it to a list
-    # then takes the average of all those resampled and normalised coverages
-    # this smooths out the cases where some genes might have read depth in the 1000's, and others in the 10's
-    # so our data isn't skewed toward genes that are higher expressed
-    # coverage: dict of read depths of transcript: eg {'sample1': [coverage...], 'sample2': [coverage...]}
-    # mod_coverage: dict of mod coverages to plot: eg {'sample1m6As': [coverage...], 'sample2m6as': [coverage...], 'sample1pseU': [coverage...]}
-    # sites_of_interest: dict of sites of interest to plot as vertical lines??? But how to do this for aggregate transcript searches?
-    #       Maybe plot vlines for individual transcript plots and areas shaded with intensity according to how often motifs appear
-    coverage_dict = {
-        "coverages": coverages,
-        "method": COVERAGE_METHOD,
-        "num_matches": num_matches,
-        "sites_of_interest": sites_of_interest,
-        "num_bins": COVERAGE_BINS,
-        "subfeature_names": corrected_subfeature_names,
-        "subfeature_info": subfeature_info,
-        "y_label": "count (nt)",
-        "additional_text": additional_text
-    }
-
-    plot_subfeature_coverage(coverage_dict)
-
-    coverage_dict['coverages'] = normalised_coverages
-    coverage_dict['y_label'] = "normalised coverage (au)"
-
-    plot_subfeature_coverage(coverage_dict)
-
-    if PLOT_DENSITY:
-        coverage_dict['coverages'] = density_coverages
-        coverage_dict['y_label'] = "density (au)"
-
-        plot_subfeature_coverage(coverage_dict)
-
-    plt.tight_layout()
-    plt.show()
-
-    if (OUTFILE):
-        plt.savefig("coverage_{}".format(OUTFILE))
-
 if COMMAND == "plot":
     print("plotting...")
     process_bamfiles()
@@ -4220,7 +3656,6 @@ if COMMAND == "plot_de":
 
     plt.show()
 
-
 if COMMAND == "plot_dmr":
     # plot transcript against dmr score
 
@@ -4358,44 +3793,6 @@ if COMMAND == "logo":
     plt.show()
 
 if COMMAND == "plot_entropy":
-    # read in an entropy regions bed file and plot a pdf histogram for mean entropy 
-    column = INPUT[0]
-    filename = INPUT[1]
-
-    bed = pandas.read_csv(filename, sep='\t')
-    entropy_values = bed[bed.columns[int(column)]].to_numpy()
-    print(len(entropy_values))
-
-    for i in range(2, len(INPUT)):
-        filename = INPUT[i]
-        b = pandas.read_csv(filename, sep='\t')
-        e = b[b.columns[int(column)]].to_numpy()
-        entropy_values = numpy.append(entropy_values, e)
-        print(len(entropy_values))
-
-
-    bins = numpy.arange(round(entropy_values.min(), 2), round(entropy_values.max(), 2), step=0.01)
-    entropy_hist, bin_edges = numpy.histogram(entropy_values, bins=bins)
-    # bin_edges has len(qscore_hist) + 1. We could find the midpoint of each edge, but let's be lazy and take the leftmost edge
-
-    # print(qscore_hist)
-    # print(bin_edges[:-1])
-
-    log_entropy_hist = numpy.log10(entropy_hist)
-    log_entropy_hist[log_entropy_hist == -numpy.inf] = 0
-
-    xnew = numpy.linspace(bin_edges[:-1].min(), bin_edges[:-1].max(), 300) 
-    spl = scipy.interpolate.make_interp_spline(bin_edges[:-1], log_entropy_hist, k=3)  # type: BSpline
-    power_smooth = spl(xnew)
-
-    axes = plt.gca()
-    axes.set_ylim(ymin=0, ymax=4)
-    plt.plot(xnew, power_smooth)
-
-    plt.figure()
-    plt.yscale('log')
-    plt.plot(bin_edges[:-1], entropy_hist)  # arguments are passed to np.histogram
-
-
-    plt.show()
+    from rqc_modules import plot_entropy
+    plot_entropy.plot_entropy(config)
 
