@@ -367,9 +367,9 @@ def find_multi_reference_alignments(d_reads):
     print()
 
 def process_bamfiles():
-    for i in range(0, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
+    for i in range(0, len(args.inputs), 2):
+        label = args.inputs[i]
+        filename = args.inputs[i+1]
 
         phred_scores = []
         mapq_scores = []
@@ -677,17 +677,17 @@ def process_input_files():
     # process input file. Each line contains a label, the type of file, and the filepath
     # label group type path
     input_files = {}
-    # if len(INPUT[1:]) % 4 != 0:
+    # if len(args.inputs[1:]) % 4 != 0:
     #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
     #     sys.exit()
     # else:
     in_index = 1
-    while in_index < len(INPUT):
-        if not INPUT[in_index].startswith("#"):
-            input_files[INPUT[in_index]] = {
-                'group': INPUT[in_index+1], 
-                'type': INPUT[in_index+2], 
-                'path': INPUT[in_index+3]
+    while in_index < len(args.inputs):
+        if not args.inputs[in_index].startswith("#"):
+            input_files[args.inputs[in_index]] = {
+                'group': args.inputs[in_index+1], 
+                'type': args.inputs[in_index+2], 
+                'path': args.inputs[in_index+3]
             }
         in_index += 4
 
@@ -776,7 +776,7 @@ def filter_gff_for_target_features(annotation_file):
     print("LOG - filtering gff file for target features...")
 
     # Try to find matches of provided type, if not, assume that input is a list of IDs
-    feature_id = INPUT[0]
+    feature_id = args.inputs[0]
     if os.path.isfile(feature_id):
         lines = []
         with open(feature_id) as f:
@@ -1162,7 +1162,7 @@ def reverse_complement(s):
 # ------------------- COMMANDS -------------------  #
 
 if COMMAND == "motif_finder":
-    MOTIF = INPUT[0]
+    MOTIF = args.inputs[0]
 
     # if filter by genomic regions
     # filter=exons
@@ -1321,7 +1321,7 @@ if COMMAND == "motif_finder":
     pprint(bases_counts)
     
 if COMMAND == "gene_neighbour_analysis":
-    gene_neighbour_tsv_file_path = INPUT[0]
+    gene_neighbour_tsv_file_path = args.inputs[0]
     print("LOADING: {}".format(gene_neighbour_tsv_file_path))
     gene_neighbour_df = pandas.read_csv(gene_neighbour_tsv_file_path, sep='\t')
     gene_neighbour_df['ID'] = gene_neighbour_df['ID'].astype('category')
@@ -1444,7 +1444,7 @@ if COMMAND == "gene_neighbour_analysis":
     plt.show()
 
 if COMMAND == "find_gene_neighbours":
-    type = INPUT[0]
+    type = args.inputs[0]
 
     ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
     GFF_DF = ANNOTATION_FILE.attributes_to_columns()
@@ -1522,12 +1522,12 @@ if COMMAND == "search":
 if COMMAND == "inspect":
     print("inspecting...")
 
-    read_id = INPUT[0]
+    read_id = args.inputs[0]
     alignments = []
 
-    for i in range(1, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
+    for i in range(1, len(args.inputs), 2):
+        label = args.inputs[i]
+        filename = args.inputs[i+1]
 
         samfile = pysam.AlignmentFile(filename, 'rb')
         iter = samfile.fetch()
@@ -1543,7 +1543,7 @@ if COMMAND == "inspect":
 
 if COMMAND == "base_coverage":
     # load annotation file
-    feature_id = INPUT[0]
+    feature_id = args.inputs[0]
     print("summarising base coverage for {}...".format(feature_id))
 
     annotation_file = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
@@ -1574,9 +1574,9 @@ if COMMAND == "base_coverage":
     print("FOUND {} MATCHES FOR {}".format(num_matches, feature_id))
 
 
-    for i in range(1, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
+    for i in range(1, len(args.inputs), 2):
+        label = args.inputs[i]
+        filename = args.inputs[i+1]
         samfile = pysam.AlignmentFile(filename, 'rb')
 
         output = pandas.DataFrame(columns = ["seq_id", "start", "end", "count_a", "count_c", "count_g", "count_t"])
@@ -1621,7 +1621,7 @@ if COMMAND == "base_coverage":
         ))
 
 if COMMAND == "plot_tes_vs_wam":
-    tes_tsv_file_path = INPUT[0]
+    tes_tsv_file_path = args.inputs[0]
     print("LOADING: {}".format(tes_tsv_file_path))
     tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
 
@@ -1635,7 +1635,7 @@ if COMMAND == "plot_tes_vs_wam":
 
     # FILTER_BY_NEIGHBOUR_TYPE = "lonely"
     tes_file_df_len_raw = len(tes_file_df)
-    print("INPUT: {}".format(tes_file_df_len_raw))
+    print("args.inputs: {}".format(tes_file_df_len_raw))
 
     if FILTER_BY_NEIGHBOUR_TYPE != "all":
         gene_list_filter = neighbour_file_df[FILTER_BY_NEIGHBOUR_TYPE]
@@ -1793,12 +1793,12 @@ if COMMAND == "calculate_offsets":
     d_offset_files_by_contig = {}
     d_coverages = {}
     d_num_pam_sites = {}
-    print(INPUT)
+    print(args.inputs)
     
     i = 0
-    while i < len(INPUT):
-        key = INPUT[i]
-        file_path = INPUT[i+1]
+    while i < len(args.inputs):
+        key = args.inputs[i]
+        file_path = args.inputs[i+1]
         print("LOADING: {}".format(file_path))
         file_df = pandas.read_csv(file_path, sep='\t')
         file_df['contig'] = file_df['contig'].astype('category')
@@ -1820,7 +1820,7 @@ if COMMAND == "calculate_offsets":
 
         i += 2
 
-    reference_df = pandas.read_csv(REFERENCE_BED, sep='\t')
+    reference_df = pandas.read_csv(args.REFERENCE_BED, sep='\t')
     reference_df['contig'] = reference_df['contig'].astype('category')
     reference_df['strand'] = reference_df['strand'].astype('category')
 
@@ -1842,9 +1842,9 @@ if COMMAND == "calculate_offsets":
 
         # for k, v in d_offset_files.items():
         for k, v in d_offset_files_by_contig[row.contig].items():
-            if IGNORE_STRAND:
-                in_range = v[(v.end >= (offset_point - DISTANCE))
-                                & (v.start <= (offset_point + DISTANCE))]
+            if args.IGNORE_STRAND:
+                in_range = v[(v.end >= (offset_point - args.DISTANCE))
+                                & (v.start <= (offset_point + args.DISTANCE))]
 
                 for_in_range = in_range[in_range.strand == "+"]
                 rev_in_range = in_range[in_range.strand == "-"]
@@ -1858,15 +1858,15 @@ if COMMAND == "calculate_offsets":
                     offsets = [-x for x in offsets]
             else:
                 if row.strand == "+":
-                    in_range = v[(v.start >= (offset_point - DISTANCE))
-                                & (v.start <= (offset_point + DISTANCE))
+                    in_range = v[(v.start >= (offset_point - args.DISTANCE))
+                                & (v.start <= (offset_point + args.DISTANCE))
                                 & (v.contig == row.contig)
                                 & (v.strand == row.strand)]
                     
                     offsets = [x - offset_point for x in in_range.start.to_list()]
                 else:
-                    in_range = v[(v.end >= (offset_point - DISTANCE))
-                                & (v.end <= (offset_point + DISTANCE))
+                    in_range = v[(v.end >= (offset_point - args.DISTANCE))
+                                & (v.end <= (offset_point + args.DISTANCE))
                                 & (v.contig == row.contig)
                                 & (v.strand == row.strand)]
                     
@@ -1888,12 +1888,12 @@ if COMMAND == "calculate_offsets":
     # TODO: write coverages as tsv file for plotting without recalculating offsets
     df = pandas.DataFrame.from_dict(d_coverages, orient='index')
     df = df.rename_axis('gene_id', axis='index')
-    df.to_csv(OUTFILE, sep='\t')
+    df.to_csv(args.OUTFILE, sep='\t')
     print(df)
     # gene_id genomic_position file_1_count file_1_list_of_positions file_2_count file_2_list_of_positions
 
 if COMMAND == "plot_relative_distance":
-    offsets_file_path = INPUT[0]
+    offsets_file_path = args.inputs[0]
     df = pandas.read_csv(offsets_file_path, sep='\t')
     df = df.set_index('gene_id')
     keys = [x for x in df.columns if x not in ['gene_id', 'position'] and "count" not in x]
@@ -2037,7 +2037,7 @@ if COMMAND == "plot_relative_distance":
     plt.show()
 
 if COMMAND == "plot_tes_wam_distance":
-    tes_tsv_file_path = INPUT[0]
+    tes_tsv_file_path = args.inputs[0]
     print("LOADING: {}".format(tes_tsv_file_path))
     tes_file_df = pandas.read_csv(tes_tsv_file_path, sep='\t')
 
@@ -2386,22 +2386,22 @@ if COMMAND == "m6A_specific_tes_analysis":
 
 if COMMAND == "tes_analysis":
     # load annotation file
-    feature_id = INPUT[0]
+    feature_id = args.inputs[0]
 
     # process input file. Each line contains a label, the type of file, and the filepath
     # label group type path
     input_files = {}
-    # if len(INPUT[1:]) % 4 != 0:
+    # if len(args.inputs[1:]) % 4 != 0:
     #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
     #     sys.exit()
     # else:
     in_index = 1
-    while in_index < len(INPUT):
-        if not INPUT[in_index].startswith("#"):
-            input_files[INPUT[in_index]] = {
-                'group': INPUT[in_index+1], 
-                'type': INPUT[in_index+2], 
-                'path': INPUT[in_index+3]
+    while in_index < len(args.inputs):
+        if not args.inputs[in_index].startswith("#"):
+            input_files[args.inputs[in_index]] = {
+                'group': args.inputs[in_index+1], 
+                'type': args.inputs[in_index+2], 
+                'path': args.inputs[in_index+3]
             }
         in_index += 4
 
@@ -3366,7 +3366,7 @@ if COMMAND == "plot":
 if COMMAND == "plot_de":
     import mplcursors
 
-    de = pandas.read_csv(INPUT[0], sep='\t')
+    de = pandas.read_csv(args.inputs[0], sep='\t')
 
     pval_cutoff = 0.05
     log10_pval_cutoff = 10 ** pval_cutoff
@@ -3663,9 +3663,9 @@ if COMMAND == "plot_dmr":
 
     heatmap_data = []
 
-    for i in range(0, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
+    for i in range(0, len(args.inputs), 2):
+        label = args.inputs[i]
+        filename = args.inputs[i+1]
 
         bed = pandas.read_csv(filename, sep='\t')
         dmr_scores = bed.iloc[:,4]
@@ -3689,15 +3689,15 @@ if COMMAND == "find_dmr":
     # - the average scores across C1,2 vs K1,2 is above 1 likelihood
     # AND the average score across c1vsc2 and k1vsk2 is below 1 likelihood
 
-    label = INPUT[0]
-    filename = INPUT[1]
-    bed = pandas.read_csv(INPUT[1], sep='\t')
+    label = args.inputs[0]
+    filename = args.inputs[1]
+    bed = pandas.read_csv(args.inputs[1], sep='\t')
     df = bed[bed.columns[3:5]]
     df.columns = ["region", label]
 
-    for i in range(2, len(INPUT), 2):
-        label = INPUT[i]
-        filename = INPUT[i+1]
+    for i in range(2, len(args.inputs), 2):
+        label = args.inputs[i]
+        filename = args.inputs[i+1]
 
         this_bed = pandas.read_csv(filename, sep='\t')
         dmr_scores = this_bed[this_bed.columns[3:5]]
@@ -3724,9 +3724,9 @@ if COMMAND == "find_dmr":
 if COMMAND == "logo":
     import logomaker
 
-    MINUS_OFFSET = int(INPUT[0]) + 1
-    PLUS_OFFSET = int(INPUT[1]) - 1
-    filename = INPUT[2]
+    MINUS_OFFSET = int(args.inputs[0]) + 1
+    PLUS_OFFSET = int(args.inputs[1]) - 1
+    filename = args.inputs[2]
 
     gff = process_annotation_file()
     gff_df = gff.attributes_to_columns()
