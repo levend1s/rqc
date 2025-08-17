@@ -9,12 +9,13 @@ numpy.seterr(divide='ignore', invalid='ignore')
 from rqc_modules import motif_finder
 from rqc_modules import calculate_offsets
 from rqc_modules import plot_relative_distance
+from rqc_modules import plot_coverage
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="rqc",
-        description="RQC – a RNA-seq tool for transcript level analysis."
+        description="RQC – a lightweight RNA-seq tool for transcript level analysis."
     )
 
     subparsers = parser.add_subparsers(
@@ -51,6 +52,42 @@ def build_parser():
     plot_relative_distance_parser.add_argument("-o", "--output", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
 
     plot_relative_distance_parser.set_defaults(func=plot_relative_distance.plot_relative_distance)
+
+    # ---- plot_coverage command ----
+    plot_coverage_parser = subparsers.add_parser("plot_coverage", help="plot relative offsets from a file")
+    plot_coverage_parser.add_argument("-i", "--input", required=True, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
+    plot_coverage_parser.add_argument("-m", "--mode", required=True, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-c", "--coverage_method", required=False, default="max", help="sum, average, max")
+    plot_coverage_parser.add_argument("-p", "--padding", required=False, type=int, default=0, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-b", "--bins", required=True, type=int, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("--line_width", required=False, type=int, default=1, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-r", "--padding_ratio", required=False, type=float, default=0.0, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-d", "--read_depth", required=True, type=int, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-n", "--mod_normalisation", required=False, default="raw", help="input file listing coverage data")
+    plot_coverage_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
+    plot_coverage_parser.add_argument("--type", required=False, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
+    plot_coverage_parser.add_argument("--plot_density", action="store_true", help="plot density of coverage (expensive)")
+    plot_coverage_parser.add_argument("--separate_y_axes", action="store_true", help="plot density of coverage (expensive)")
+
+    plot_coverage_parser.add_argument("-o", "--output", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
+
+    plot_coverage_parser.set_defaults(func=plot_coverage.plot_coverage)
+
+    # ---- approximate_tes command ----
+
+    # ---- wam_analysis command ----
+
+    # ---- tes_vs_wam_analysis command ----
+
+    # ---- plot_tes command ----
+    # colour by canonical m6A
+    # filter by poly-adenylation
+
+    # ---- find_gene_neighbours command ----
+
+    # ---- gene_neighbour_analysis command ----
 
     return parser
 

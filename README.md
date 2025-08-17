@@ -104,6 +104,13 @@ python rqc.py -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfa
 
 # if you have a json file you can extract an entry (must be list of gene/transcript ids) with jq in a subshell
 python rqc.py -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff plot_coverage "$(cat /Users/joshualevendis/Documents/RNA/rqc/pfal_mRNA_exon_counts.json | jq -r '."25"')" $(head -n 1 samples.txt)
+
+
+python rqc.py plot_coverage -m subfeature -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --ids PF3D7_1123900.1 -i ./samples/laptop_all_mods_samples.txt --separate_y_axes
+
+python rqc.py plot_coverage -m subfeature_cds -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --padding 100 --padding_ratio 0.1 --bins 100 --read_depth 0 --ids PF3D7_1123900.1 -i ./samples/laptop_all_mods_samples.txt
+
+
 ```
 
 # motif_finder

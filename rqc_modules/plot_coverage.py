@@ -1,51 +1,64 @@
+import ast
+import math
+import numpy
+import pandas
+import pysam
+import scipy.stats
+import matplotlib.pyplot as plt
+
+from rqc_modules.utils import process_annotation_file, resample_coverage, normalise_coverage, getSubfeatures, STOP_CLOCK, START_CLOCK, plot_subfeature_coverage
+from rqc_modules.constants import BAM_PILEUP_DEFAULT_FLAGS, BAM_REVERSE_STRAND, MODKIT_BEDMETHYL_HEADER, GENERIC_BED_HEADER, PYSAM_PILEUP_MAX_DEPTH
+
 def plot_coverage(args):
     # load annotation file
-    feature_id = INPUT[0]
+    INPUT = args.input
+    ANNOTATION_FILE = args.annotation
+    COVERAGE_TYPE = args.mode
+    COVERAGE_PADDING = args.padding
+    COVERAGE_BINS = args.bins
+    PADDING_RATIO = args.padding_ratio
+    READ_DEPTH_THRESHOLD = args.read_depth
+    IDS = args.ids
+    FEATURE_TYPE = args.type
+    VERBOSE = args.verbose
+    COVERAGE_METHOD = args.coverage_method
+    MOD_NORMALISATION = args.mod_normalisation
+    PLOT_DENSITY = args.plot_density
+    SEPARATE_Y_AXES = args.separate_y_axes
+    LINE_WIDTH = args.line_width
+    OUTPUT = args.output
 
     # process input file. Each line contains a label, the type of file, and the filepath
     input_files = {}
-    # if len(INPUT[1:]) % 4 != 0:
-    #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
-    #     sys.exit()
-    # else:
-    in_index = 1
-    while in_index < len(INPUT):
-        if not INPUT[in_index].startswith("#"):
-            input_files[INPUT[in_index]] = {
-                'group': INPUT[in_index+1], 
-                'type': INPUT[in_index+2], 
-                'path': INPUT[in_index+3]
-            }
-        in_index += 4
+    with open(INPUT, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("#") or line.strip() == "":
+                continue
+            else:
+                print(line)
+                line = line.split()
+                input_files[line[0]] = {
+                    'group': line[1], 
+                    'type': line[2], 
+                    'path': line[3]
+                }
 
     # load annotation file and find indexes for all parent children
-    ANNOTATION_FILE = gffpandas.read_gff3(ANNOTATION_FILE_PATH)
-    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+    gff_df = process_annotation_file(ANNOTATION_FILE)
+    if COVERAGE_PADDING:
+        gff_df["type"] = gff_df["type"].cat.add_categories(["{}bp".format(COVERAGE_PADDING)])
 
-    for row_index, row in GFF_DF.iterrows():
-        if row['Parent'] in GFF_PARENT_TREE:
-            GFF_PARENT_TREE[row['Parent']].append(row_index)
-        else:
-            GFF_PARENT_TREE[row['Parent']] = [row_index]
-
-    # Try to find matches of provided type, if not, assume that input is a list of IDs
-    matches = ANNOTATION_FILE.filter_feature_of_type([feature_id])
-    if len(matches.df) == 0:
-        evaluated_input = ast.literal_eval(feature_id)
-        matches = ANNOTATION_FILE.get_feature_by_attribute("ID", evaluated_input)
-        print("Looking for {} IDs, found {} matches. Plotting gene coverage for {}".format(len(evaluated_input) , len(matches.df), evaluated_input))
+    if FEATURE_TYPE:
+        matches = gff_df[gff_df['type'] == FEATURE_TYPE]
     else:
-        print("Found {} matches for type {}. Plotting gene coverage...".format(len(matches.df), feature_id))
+        matches = gff_df[gff_df['ID'].isin(IDS)]
+    if matches.empty:
+        print("ERROR: no matches found for type {} and ids {}".format(FEATURE_TYPE, IDS))
 
-    num_matches = len(matches.df)
-    PYSAM_PILEUP_MAX_DEPTH = 8000 # default
+    num_matches = len(matches)
     subfeature_names = []
     subfeature_info = {}
-    matches = matches.attributes_to_columns()
-    matches['strand'] = matches['strand'].astype('category')
-    matches['type'] = matches['type'].astype('category')
-    matches['seq_id'] = matches['seq_id'].astype('category')
-
 
     index = 0
     sites_of_interest = None
@@ -60,7 +73,7 @@ def plot_coverage(args):
 
 
     LOGFILE_PATH = "rqc_plot_coverage_stats.log"
-    log_header = ["label", "type", "id", "max_depth", "total_coverage", "length", "AUC", "num peaks", "peak locations"]
+    log_header = ["label", "type", "id", "max_depth", "total_coverage", "length", "AUC"]
     print("\t".join(log_header))
     logfile_df = pandas.DataFrame(columns=log_header)
     logfile_df_index = 0
@@ -97,9 +110,10 @@ def plot_coverage(args):
             mal_annotation = []
             for row_index, row in matches.iterrows():
                 # find subfeatures
-                START_CLOCK("row_start")
+                if VERBOSE:
+                    START_CLOCK("row_start")
 
-                row_subfeatures = getSubfeatures(row['ID'], COVERAGE_TYPE, COVERAGE_PADDING)
+                row_subfeatures = getSubfeatures(gff_df, row['ID'], COVERAGE_TYPE, COVERAGE_PADDING)
 
                 subfeature_names = row_subfeatures['type'].to_list()
 
@@ -209,18 +223,18 @@ def plot_coverage(args):
                             subfeature_base_coverages[subfeature_index][subfeature_mod_positions[mod_pos_index]] = num_mods_at_pos[mod_pos_index]
 
                         # valid_cov and percent_mod determine 'cannonical mods'
-                        if CANNONICAL_MOD_PROP_THRESHOLD > 0 and CANNONICAL_MOD_READ_DEPTH_THRESHOLD > 0:
-                            mod_peak_matches = mod_matches[
-                                (mod_matches.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
-                                (mod_matches.valid_cov >= CANNONICAL_MOD_READ_DEPTH_THRESHOLD)
-                            ]
+                        # if CANNONICAL_MOD_PROP_THRESHOLD > 0 and READ_DEPTH_THRESHOLD > 0:
+                        #     mod_peak_matches = mod_matches[
+                        #         (mod_matches.percent_mod >= (CANNONICAL_MOD_PROP_THRESHOLD * 100)) & 
+                        #         (mod_matches.valid_cov >= READ_DEPTH_THRESHOLD)
+                        #     ]
 
-                            peak_positions = mod_peak_matches['end'].to_numpy() - row['start']
+                        #     peak_positions = mod_peak_matches['end'].to_numpy() - row['start']
 
-                            if (row["strand"] == "-"):
-                                peak_positions = tx_lengths[row['ID']] - peak_positions
+                        #     if (row["strand"] == "-"):
+                        #         peak_positions = tx_lengths[row['ID']] - peak_positions
 
-                            mod_peaks[label][row['ID']] += peak_positions.tolist()
+                        #     mod_peaks[label][row['ID']] += peak_positions.tolist()
 
                     elif type == "bed":
                         site_matches = row_site_matches_df[
@@ -277,7 +291,9 @@ def plot_coverage(args):
 
 
                 sf_base_coverage_list = [None] * num_subfeatures
-                STOP_CLOCK("row_start", "coverage_stop")
+
+                if VERBOSE:
+                    STOP_CLOCK("row_start", "coverage_stop")
 
                 if COVERAGE_PADDING:
                     num_bins_cds = int(COVERAGE_BINS * (1 - (2 * PADDING_RATIO)))
@@ -327,8 +343,9 @@ def plot_coverage(args):
 
                 #     additional_info += "\tmod peaks: {}".format(num_prop_threshold_peaks)
 
-                STOP_CLOCK("row_start", "resample_subfeature_stop")
-                additional_info = [len(mod_peaks[label][row['ID']]), ",".join(str(x) for x in mod_peaks[label][row['ID']])]
+                if VERBOSE:
+                    STOP_CLOCK("row_start", "resample_subfeature_stop")
+                # additional_info = [len(mod_peaks[label][row['ID']]), ",".join(str(x) for x in mod_peaks[label][row['ID']])]
 
 
                 # if this is modification coverage, we'll 'normalise' it against the gene read depth coverage
@@ -368,13 +385,14 @@ def plot_coverage(args):
                 feature_coverages[label][row['ID']] = resampled_base_coverage
                 AUC = round(numpy.sum(normalised_feature_coverages[label][row['ID']]) / COVERAGE_BINS, 2) # gives score between 0 and 1
 
-                STOP_CLOCK("row_start", "row_end")
+                if VERBOSE:
+                    STOP_CLOCK("row_start", "row_end")
 
                 # label, gene id, max coverage, gene length, auc, num mod peaks, mod peaks
                 row_coverage_summary = [label, type, row['ID'], int(max(resampled_base_coverage)), total_count_depth_gene, row['end'] - row['start'], AUC]
 
-                if additional_info:
-                    row_coverage_summary += additional_info
+                # if additional_info:
+                #     row_coverage_summary += additional_info
 
                 print("\t".join([str(x) for x in row_coverage_summary]))
                 logfile_df.loc[logfile_df_index] = row_coverage_summary
@@ -487,21 +505,23 @@ def plot_coverage(args):
         "additional_text": additional_text
     }
 
-    plot_subfeature_coverage(coverage_dict)
+    plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
 
     coverage_dict['coverages'] = normalised_coverages
     coverage_dict['y_label'] = "normalised coverage (au)"
 
-    plot_subfeature_coverage(coverage_dict)
+    plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
+
 
     if PLOT_DENSITY:
         coverage_dict['coverages'] = density_coverages
         coverage_dict['y_label'] = "density (au)"
 
-        plot_subfeature_coverage(coverage_dict)
+        plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
+
 
     plt.tight_layout()
     plt.show()
 
-    if (OUTFILE):
-        plt.savefig("coverage_{}".format(OUTFILE))
+    if (OUTPUT):
+        plt.savefig("coverage_{}".format(OUTPUT))

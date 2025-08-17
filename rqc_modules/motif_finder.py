@@ -25,12 +25,7 @@ def motif_finder(args):
     # filter=exons
     # filter=first_exon
     # filter=last_exon
-    gff = process_annotation_file(ANNOTATION_FILE)
-    gff_df = gff.attributes_to_columns()
-    gff_df['strand'] = gff_df['strand'].astype('category')
-    gff_df['seq_id'] = gff_df['seq_id'].astype('category')
-    gff_df['ID'] = gff_df['ID'].astype('category')
-    gff_df['type'] = gff_df['type'].astype('category')
+    gff_df = process_annotation_file(ANNOTATION_FILE)
 
     HAS_LOCUS_TAG = 'locus_tag' in gff_df.columns.to_list()
     if HAS_LOCUS_TAG:

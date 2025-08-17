@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pysam
 import gffpandas.gffpandas as gffpandas
 import ast
+import time
 
 d_phred = {}
 d_mapq = {}
@@ -347,7 +348,7 @@ def get_plot_color(l):
 
     return this_color
 
-def plot_subfeature_coverage(coverages):
+def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_type):
     sample_labels = {}
     ymax = 0
     for label, cov in coverages['coverages'].items():
@@ -387,15 +388,13 @@ def plot_subfeature_coverage(coverages):
 
         plt_index += 1
 
-    linewidth = LINE_WIDTH
-
     for k, v in sample_labels.items():
         if num_samples > 1:
             this_axes = axes[plt_index]
         else:
             this_axes = axes
 
-        if (len(v) == 2) and SEPARATE_Y_AXES:
+        if (len(v) == 2) and separate_y_axes:
             cov_1_label = v[0]
             cov_1 = coverages['coverages'][cov_1_label]
             cov_1_color = get_plot_color(cov_1_label)
@@ -404,7 +403,7 @@ def plot_subfeature_coverage(coverages):
             cov_2 = coverages['coverages'][cov_2_label]
             cov_2_color = get_plot_color(cov_2_label)
 
-            this_axes.plot(cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color, linewidth=linewidth)
+            this_axes.plot(cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color, linewidth=line_width)
             this_axes.fill_between(x_ticks, cov_1, alpha=0.2, color=cov_1_color)
             this_axes.tick_params(axis='y', labelcolor=cov_1_color)
             this_axes.set_ylim(ymin=0)
@@ -412,7 +411,7 @@ def plot_subfeature_coverage(coverages):
             this_axes.set_ylabel(' '.join(cov_1_label.split("_")[1:]), color=cov_1_color)
 
             this_axes_2 = this_axes.twinx()
-            this_axes_2.plot(cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color, linewidth=linewidth)
+            this_axes_2.plot(cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color, linewidth=line_width)
             this_axes_2.fill_between(x_ticks, cov_2, alpha=0.2, color=cov_2_color)
             this_axes_2.tick_params(axis='y', labelcolor=cov_2_color)
             this_axes_2.set_ylim(ymin=0)
@@ -423,7 +422,7 @@ def plot_subfeature_coverage(coverages):
                 cov = coverages['coverages'][label]
                 this_color = get_plot_color(label)
 
-                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color, linewidth=linewidth)
+                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color, linewidth=line_width)
                 this_axes.fill_between(x_ticks, cov, alpha=0.2, color=this_color)
 
             this_axes.legend(loc="upper left", title=k)
@@ -444,16 +443,16 @@ def plot_subfeature_coverage(coverages):
         num_subfeatures = len(coverages['subfeature_names'])
 
         label_rotation = 45
-        if COVERAGE_TYPE in ("gene"):
+        if coverage_type in ("gene"):
             label_rotation = 0
 
         curr_pos = 0
 
         for l in range(num_subfeatures):
-            subfeature_width = subfeature_info[coverages['subfeature_names'][l]]
+            subfeature_width = coverages['subfeature_info'][coverages['subfeature_names'][l]]
             line_x_coord = curr_pos + subfeature_width
 
-            this_axes.axvline(x= line_x_coord, color='darkgray', ls="--", linewidth=linewidth)
+            this_axes.axvline(x= line_x_coord, color='darkgray', ls="--", linewidth=line_width)
             label_x_coord = curr_pos + int(subfeature_width / 2)
 
             if plt_index == (num_samples - 1):
@@ -471,18 +470,16 @@ def plot_subfeature_coverage(coverages):
 
         plt_index += 1
 
-def getSubfeatures(id, coverage_type, coverage_padding):
+def getSubfeatures(annotation, id, coverage_type, coverage_padding):
 
     if coverage_type in ["subfeature", "subfeature_cds"]:
         # plasmodium specific thing? drop exons, keep only CDS and UTR
         # exons seem to overlap with UTR regions in plasmodium gff
 
-        row_subfeatures = ANNOTATION_FILE.df.iloc[GFF_PARENT_TREE[id]]
+        # row_subfeatures = ANNOTATION_FILE.df.iloc[GFF_PARENT_TREE[id]]
+        row_subfeatures = annotation[annotation['Parent'] == id]
         row_subfeatures = row_subfeatures.sort_values(by=['start'])
         row_subfeatures = row_subfeatures[row_subfeatures.type != "exon"]        
-        row_subfeatures['strand'] = row_subfeatures['strand'].astype('category')
-        row_subfeatures['type'] = row_subfeatures['type'].astype('category')
-        row_subfeatures['seq_id'] = row_subfeatures['seq_id'].astype('category')
 
         # EDGE CASE: collapse multiple UTR's into a single UTR # eg utr_PF3D7_1105800.1_1
         # if len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1:
@@ -501,9 +498,6 @@ def getSubfeatures(id, coverage_type, coverage_padding):
         row_subfeatures = GFF_DF[GFF_DF.ID == id]
         # drop everything after attributes
         row_subfeatures = row_subfeatures.drop(columns=row_subfeatures.columns[9:])
-        row_subfeatures['strand'] = row_subfeatures['strand'].astype('category')
-        row_subfeatures['type'] = row_subfeatures['type'].astype('category')
-        row_subfeatures['seq_id'] = row_subfeatures['seq_id'].astype('category')
     else:
         print("WARNING: unknown coverage type: {}".format(coverage_type))
 
@@ -512,29 +506,18 @@ def getSubfeatures(id, coverage_type, coverage_padding):
     if coverage_padding > 0:
         first_feature = row_subfeatures.loc[row_subfeatures.index[0]]
         last_feature = row_subfeatures.loc[row_subfeatures.index[-1]]
-        max_index = max(row_subfeatures.index)
-        row_subfeatures.loc[max_index + 1] = [
-            first_feature['seq_id'],
-            "",
-            "{}bp".format(coverage_padding),
-            first_feature['start'] - coverage_padding,
-            first_feature['start'],
-            0,
-            first_feature['strand'],
-            "",
-            ""
-        ]
-        row_subfeatures.loc[max_index + 2] = [
-            last_feature['seq_id'],
-            "",
-            "{}bp".format(coverage_padding),
-            last_feature['end'],
-            last_feature['end'] + coverage_padding,
-            0,
-            last_feature['strand'],
-            "",
-            ""
-        ]
+        max_index = len(row_subfeatures)-1
+
+        row_subfeatures = pandas.concat([row_subfeatures, row_subfeatures.iloc[[0, -1]]], ignore_index=True)
+
+        row_subfeatures.loc[max_index + 1, 'start'] = first_feature['start'] - coverage_padding
+        row_subfeatures.loc[max_index + 1, 'end'] = first_feature['start']
+        row_subfeatures.loc[max_index + 1, 'type'] = "{}bp".format(coverage_padding)
+
+        row_subfeatures.loc[max_index + 2, 'start'] = last_feature['end']
+        row_subfeatures.loc[max_index + 2, 'end'] = last_feature['end'] + coverage_padding
+        row_subfeatures.loc[max_index + 2, 'type'] = "{}bp".format(coverage_padding)
+
         row_subfeatures = row_subfeatures.sort_values(by=['start'])
 
     return row_subfeatures
@@ -573,7 +556,12 @@ def process_annotation_file(annotation_file_path=None):
     print("LOG - loading gff file...")
     # load annotation file and find indexes for all parent children
     ANNOTATION_FILE = gffpandas.read_gff3(annotation_file_path)
-    GFF_DF = ANNOTATION_FILE.attributes_to_columns()
+
+    gff_df = ANNOTATION_FILE.attributes_to_columns()
+    gff_df['strand'] = gff_df['strand'].astype('category')
+    gff_df['seq_id'] = gff_df['seq_id'].astype('category')
+    gff_df['ID'] = gff_df['ID'].astype('category')
+    gff_df['type'] = gff_df['type'].astype('category')
 
     # for row_index, row in GFF_DF.iterrows():
     #     if row['Parent'] in GFF_PARENT_TREE:
@@ -581,7 +569,7 @@ def process_annotation_file(annotation_file_path=None):
     #     else:
     #         GFF_PARENT_TREE[row['Parent']] = [row_index]
 
-    return ANNOTATION_FILE
+    return gff_df
 
 def process_genome_file(genome_file_path=None, contig_lengths = None):
     print("LOG - loading fasta file...")
