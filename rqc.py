@@ -69,6 +69,8 @@ def build_parser():
     plot_coverage_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
     plot_coverage_parser.add_argument("--plot_density", action="store_true", help="plot density of coverage (expensive)")
     plot_coverage_parser.add_argument("--separate_y_axes", action="store_true", help="plot density of coverage (expensive)")
+    plot_coverage_parser.add_argument("--skip_malannotations", action="store_true", help="plot density of coverage (expensive)")
+
     plot_coverage_parser.add_argument("-c", "--coverage_method", required=False, default="max", help="sum, average, max")
     plot_coverage_parser.add_argument("-n", "--mod_normalisation", required=False, default="raw", help="input file listing coverage data")
     plot_coverage_parser.add_argument("-o", "--output", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")

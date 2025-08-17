@@ -27,6 +27,7 @@ def plot_coverage(args):
     SEPARATE_Y_AXES = args.separate_y_axes
     LINE_WIDTH = args.line_width
     OUTPUT = args.output
+    SKIP_MALANNOTATIONS = args.skip_malannotations
 
     # process input file. Each line contains a label, the type of file, and the filepath
     input_files = {}
@@ -36,7 +37,6 @@ def plot_coverage(args):
             if line.startswith("#") or line.strip() == "":
                 continue
             else:
-                print(line)
                 line = line.split()
                 input_files[line[0]] = {
                     'group': line[1], 
@@ -117,13 +117,12 @@ def plot_coverage(args):
 
                 subfeature_names = row_subfeatures['type'].to_list()
 
-                SKIP_MALANNOTATIONS = False
-                # if SKIP_MALANNOTATIONS and ("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
-                # (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
-                # (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
-                #     print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
-                #     mal_annotation.append(row.ID)
-                #     continue
+                if SKIP_MALANNOTATIONS and ("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
+                (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
+                (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
+                    print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
+                    mal_annotation.append(row.ID)
+                    continue
 
                 # gen coverage for each subfeature in a gene
                 subfeature_index = 0
