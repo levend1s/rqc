@@ -105,3 +105,38 @@ python rqc.py -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfa
 # if you have a json file you can extract an entry (must be list of gene/transcript ids) with jq in a subshell
 python rqc.py -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff plot_coverage "$(cat /Users/joshualevendis/Documents/RNA/rqc/pfal_mRNA_exon_counts.json | jq -r '."25"')" $(head -n 1 samples.txt)
 ```
+
+# motif_finder
+
+```
+# find all motifs of TTTN or NGG, where N=anything
+python rqc.py motif_finder -a CpBGF_genome_V1.gff -g CpBGF_genome_v1.fasta -o TTTN_crypto_bgf.tsv -m "TTT."
+python rqc.py motif_finder -a CpBGF_genome_V1.gff -g CpBGF_genome_v1.fasta -o TTTN_crypto_bgf.tsv -m ".GG"
+
+# find all stop codons within CDS regions (stop codon is TAG, TAA, TGA, must be at the end of the region ($)) or start codons
+python rqc.py motif_finder -a CpBGF_genome_V1.gff -g CpBGF_genome_v1.fasta -o stop_codons_crypto_bgf.tsv -m "(TA[AG]|TGA)$" -f CDS
+python rqc.py motif_finder -a CpBGF_genome_V1.gff -g CpBGF_genome_v1.fasta -o start_codons_crypto_bgf.tsv -m "^ATG" -f CDS
+
+
+# get the list of gene ids from the crypto gff file (parsing is annotation specific)
+grep protein_coding CpBGF_genome_V1.gff | awk '$3=="gene" {split ($9,x,/[-;]/); print x[2]}' > pcg_list_crypto_bgf.tsv
+
+# based on the 7th column, and sorted by version, keep only the first entry for start codons (sort -V) or last entry for stop codons (sort -rV). These should be the true start and stop codons.
+awk '{split ($7,x,/[-]/); print $0"\t"x[1]}' start_codons_crypto_bgf.tsv | sort -V -k7 - | awk '!seen[$8]++' > start_codons_crypto_bgf.filtered.tsv
+awk '{split ($7,x,/[-]/); print $0"\t"x[1]}' stop_codons_crypto_bgf.tsv | sort -rV -k7 - | awk '!seen[$8]++' > stop_codons_crypto_bgf.filtered.tsv
+
+# print any gene ids missing from the list of start codons 
+while read line; do grep -q "$line" start_codons_crypto_bgf.filtered.tsv || echo $line; done < pcg_list_crypto_bgf.tsv
+while read line; do grep -q "$line" stop_codons_crypto_bgf.filtered.tsv || echo $line; done < pcg_list_crypto_bgf.tsv
+```
+
+# calculate_offsets
+
+```
+python rqc.py calculate_offsets -d 100 -r pam_analysis/start_codons_crypto_bgf.filtered.tsv -o pam_analysis/crypto_bgf_start_offsets.tsv -i NGG pam_analysis/NGG_crypto_bgf.tsv TTTN pam_analysis/TTTN_crypto_bgf.tsv
+```
+
+# plot_relative_distance
+```
+python rqc.py plot_relative_distance -l "start codon" -d 50 -i pam_analysis/crypto_bgf_start_offsets.tsv -o crypto_start.eps
+```

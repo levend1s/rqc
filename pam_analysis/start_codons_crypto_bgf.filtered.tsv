@@ -1,4 +1,3 @@
-contig	start	end	name	score	strand	ID	ID
 CP141118.1	48887	48890	ATG	0	-	cpbgf_10010-CDS1	cpbgf_10010
 CP141118.1	50396	50399	ATG	0	-	cpbgf_10020-CDS1	cpbgf_10020
 CP141118.1	50868	50871	atg	0	+	cpbgf_10030-CDS1	cpbgf_10030
