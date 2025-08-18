@@ -143,3 +143,8 @@ python rqc.py sequence_logo -a PlasmoDB-67_Pfalciparum3D7.gff -g PlasmoDB-67_Pfa
 # if the bed file is 1 indexed, can adjust
 python rqc.py sequence_logo -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -g ~/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta -l 3 -p 0 --adjust -1 -i pam_analysis/start_codons_plasmo.tsv
 ```
+
+# approximate_tes
+```
+python rqc.py approximate_tes -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids PF3D7_1123900.1
+```

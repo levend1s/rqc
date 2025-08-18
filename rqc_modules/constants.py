@@ -13,7 +13,9 @@ BAM_DUPLICATE = 0x400
 BAM_PILEUP_DEFAULT_FLAGS = BAM_UNMAPPED | BAM_SECONDARY_ALIGNMENT | BAM_FAIL_QC | BAM_DUPLICATE
 PYSAM_PILEUP_MAX_DEPTH = 8000 # default
 
-TES_SUMMARY_HEADER = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "tes_curve_r2", "tes_curve_coeff", "average_expression", "cannonical_mods", "wam_before", "wam_after", "wam_change"]
+TES_SUMMARY_HEADER_OLD = ["gene_id", "wart_change", "wart_before", "wart_after", "p_inter_treatment", "p_same_treatment", "tes", "tes_curve_r2", "tes_curve_coeff", "average_expression"]
+
+TES_SUMMARY_HEADER = ["gene_id", "annotation TES", "approximate TES", "ave expr", "run-on prop"]
 
 MODKIT_BEDMETHYL_HEADER = [
     "contig", "start", "end", "code", "score", "strand", 

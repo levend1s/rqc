@@ -531,24 +531,21 @@ def STOP_CLOCK(name, stop_name):
     if DEBUG:
         print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
 
-def process_input_files():
-    print("LOG - processing input files...")
-    # process input file. Each line contains a label, the type of file, and the filepath
-    # label group type path
+def process_input_files(INPUT):
     input_files = {}
-    # if len(args.inputs[1:]) % 4 != 0:
-    #     print("ERROR: not enough information in specified files. Check each input follows the format [LABEL] [TYPE] [PATH]")
-    #     sys.exit()
-    # else:
-    in_index = 1
-    while in_index < len(args.inputs):
-        if not args.inputs[in_index].startswith("#"):
-            input_files[args.inputs[in_index]] = {
-                'group': args.inputs[in_index+1], 
-                'type': args.inputs[in_index+2], 
-                'path': args.inputs[in_index+3]
-            }
-        in_index += 4
+
+    with open(INPUT, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("#") or line.strip() == "":
+                continue
+            else:
+                line = line.split()
+                input_files[line[0]] = {
+                    'group': line[1], 
+                    'type': line[2], 
+                    'path': line[3]
+                }
 
     return input_files
 

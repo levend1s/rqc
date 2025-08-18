@@ -11,6 +11,8 @@ from rqc_modules import calculate_offsets
 from rqc_modules import plot_relative_distance
 from rqc_modules import plot_coverage
 from rqc_modules import sequence_logo
+from rqc_modules import approximate_tes
+from rqc_modules import plot_entropy
 
 
 def build_parser():
@@ -72,7 +74,7 @@ def build_parser():
     plot_coverage_parser.add_argument("--separate_y_axes", action="store_true", help="plot density of coverage (expensive)")
     plot_coverage_parser.add_argument("--skip_malannotations", action="store_true", help="plot density of coverage (expensive)")
 
-    plot_coverage_parser.add_argument("-c", "--coverage_method", required=False, default="max", help="sum, average, max")
+    plot_coverage_parser.add_argument("-c", "--coverage_method", required=False, default="max", help="How to calculate the coverage for each bin: sum, average, max")
     plot_coverage_parser.add_argument("-n", "--mod_normalisation", required=False, default="raw", help="input file listing coverage data")
     plot_coverage_parser.add_argument("-o", "--output", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
     plot_coverage_parser.add_argument("-p", "--padding", required=False, type=int, default=0, help="input file listing coverage data")
@@ -82,6 +84,25 @@ def build_parser():
     plot_coverage_parser.set_defaults(func=plot_coverage.plot_coverage)
 
     # ---- approximate_tes command ----
+    approximate_tes_parser = subparsers.add_parser("approximate_tes", help="Based of RNA-seq data and a GFF file, approximate the transcription end sites (TES) of genes.")
+    approximate_tes_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
+    approximate_tes_parser.add_argument("-i", "--input", required=True, help="input file listing coverage data")
+
+    approximate_tes_parser.add_argument("--adjust", required=False, type=int, default=0, help="adjust if the bed files are indexed funny, shifts indexes by this amount")
+    approximate_tes_parser.add_argument("-o", "--output", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
+    approximate_tes_parser.add_argument("-p", "--padding", required=False, type=int, default=0, help="input file listing coverage data")
+    approximate_tes_parser.add_argument("-d", "--read_depth", required=False, type=int, default=20, help="input file listing coverage data")
+    approximate_tes_parser.add_argument("--poly_a_filter", required=False, type=int, default=0, help="input file listing coverage data")
+    approximate_tes_parser.add_argument("--filter_for_m6A", required=False, nargs="*", type=int, help="filter for only reads with m6A modification at these positions")
+    approximate_tes_parser.add_argument("--filter_out_m6A", required=False, nargs="*", type=int, help="filter for only reads without m6A modification at these positions")
+    approximate_tes_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
+    approximate_tes_parser.add_argument("--feature_counts", action="store_true", help="if provided filter reads which featureCounts has mapped to a gene")
+
+    # at least one of these is required
+    approximate_tes_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
+    approximate_tes_parser.add_argument("--type", required=False, help="input file listing coverage data")
+
+    approximate_tes_parser.set_defaults(func=approximate_tes.approximate_tes)
 
     # ---- wam_analysis command ----
 

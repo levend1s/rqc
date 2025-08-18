@@ -2,13 +2,13 @@
 28C1_featureCounts featureCounts control /Users/joshlevendis/Downloads/featureCountsStranded/28C1_to_pfal.50MAPQ.sorted.bam.featureCounts
 28C1_m6A_0.95 control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.95.0p.a.bed
 
-#28C2_read_depth control bam /Users/joshlevendis/Downloads/bams/28C2_to_pfal.50MAPQ.sorted.bam
-#28C2_featureCounts control featureCounts /Users/joshlevendis/Downloads/featureCountsStranded/28C2_to_pfal.50MAPQ.sorted.bam.featureCounts
-#28C2_m6A_0.95 control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C2_to_pfal_0.95.0p.a.bed
+28C2_read_depth control bam /Users/joshlevendis/Downloads/bams/28C2_to_pfal.50MAPQ.sorted.bam
+28C2_featureCounts control featureCounts /Users/joshlevendis/Downloads/featureCountsStranded/28C2_to_pfal.50MAPQ.sorted.bam.featureCounts
+28C2_m6A_0.95 control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C2_to_pfal_0.95.0p.a.bed
 
-28K1_read_depth knock-sideways bam /Users/joshlevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam
-28K1_featureCounts knock-sideways featureCounts /Users/joshlevendis/Downloads/featureCountsStranded/28K1_to_pfal.50MAPQ.sorted.bam.featureCounts
-28K1_m6A_0.95 knock-sideways bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28K1_to_pfal_0.95.0p.a.bed
+#28K1_read_depth knock-sideways bam /Users/joshlevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam
+#28K1_featureCounts knock-sideways featureCounts /Users/joshlevendis/Downloads/featureCountsStranded/28K1_to_pfal.50MAPQ.sorted.bam.featureCounts
+#28K1_m6A_0.95 knock-sideways bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28K1_to_pfal_0.95.0p.a.bed
 
 #28K2_read_depth knock-sideways bam /Users/joshlevendis/Downloads/bams/28K2_to_pfal.50MAPQ.sorted.bam
 #28K2_featureCounts knock-sideways featureCounts /Users/joshlevendis/Downloads/featureCountsStranded/28K2_to_pfal.50MAPQ.sorted.bam.featureCounts
