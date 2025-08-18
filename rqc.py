@@ -10,6 +10,7 @@ from rqc_modules import motif_finder
 from rqc_modules import calculate_offsets
 from rqc_modules import plot_relative_distance
 from rqc_modules import plot_coverage
+from rqc_modules import sequence_logo
 
 
 def build_parser():
@@ -93,6 +94,21 @@ def build_parser():
     # ---- find_gene_neighbours command ----
 
     # ---- gene_neighbour_analysis command ----
+
+    # ---- logo command ----
+
+    sequence_logo_parser = subparsers.add_parser("sequence_logo", help="find motifs in genome")
+    sequence_logo_parser.add_argument("-l", "--length", required=True, type=int, help="distancce to search for motif (±)")
+    sequence_logo_parser.add_argument("-o", "--output", required=False, help="output file to save image to")
+    sequence_logo_parser.add_argument("-i", "--input", required=True, help="input bed file with genomic coords")
+    sequence_logo_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
+    sequence_logo_parser.add_argument("-g", "--genome", required=True, help="genome file (FASTA)")
+    sequence_logo_parser.add_argument("--adjust", required=False, type=int, default=0, help="adjust if the bed files are indexed funny, shifts indexes by this amount")
+
+    sequence_logo_parser.add_argument("-p", "--padding_distance", required=False, type=int, default=0, help="distance to pad the motif sequence (default: 2)")
+
+    sequence_logo_parser.set_defaults(func=sequence_logo.sequence_logo)
+
 
     return parser
 

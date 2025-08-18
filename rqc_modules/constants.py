@@ -21,6 +21,15 @@ MODKIT_BEDMETHYL_HEADER = [
     "num_canonical", "num_other_mod", "num_delete", "num_fail", "num_diff", "num_nocall"
 ]
 
+GENERIC_BED_HEADER_BASE = [
+    "contig",
+    "start",
+    "end",
+    "name",
+    "score",
+    "strand"
+]
+
 GENERIC_BED_HEADER = [
     "contig",
     "start",

@@ -135,3 +135,11 @@ python rqc.py calculate_offsets -d 100 -r pam_analysis/start_codons_crypto_bgf.f
 ```
 python rqc.py plot_relative_distance -l "start codon" -d 50 -i pam_analysis/crypto_bgf_start_offsets.tsv -o crypto_start.eps
 ```
+
+# sequence_logo
+```
+python rqc.py sequence_logo -a PlasmoDB-67_Pfalciparum3D7.gff -g PlasmoDB-67_Pfalciparum3D7_Genome.fasta -l 1 -p 2 -i drach_m6A_sites_28u32u36.bed
+
+# if the bed file is 1 indexed, can adjust
+python rqc.py sequence_logo -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -g ~/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta -l 3 -p 0 --adjust -1 -i pam_analysis/start_codons_plasmo.tsv
+```
