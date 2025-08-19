@@ -221,6 +221,11 @@ def approximate_tes(args):
         average_not_beyond_3p = 0
         average_not_in_feature_counts = 0
 
+        if row['strand'] == "+":
+            annotation_row_3p_end = row['end']
+        else:   
+            annotation_row_3p_end = row['start']
+
         for label in bam_labels:
             if len(d_tts[label][row['ID']]) < READ_DEPTH_THRESHOLD:
                 SAMPLE_HAS_LOW_EXP = True
@@ -235,7 +240,7 @@ def approximate_tes(args):
 
         if SAMPLE_HAS_LOW_EXP or average_expression < READ_DEPTH_THRESHOLD:
             # print pandas tsv row summary
-            row_summary = [row['ID'], row['end'], 0, average_expression, 0]
+            row_summary = [row['ID'], annotation_row_3p_end, 0, average_expression, 0]
             summary_df.loc[summary_df_index] = row_summary
             summary_df_index += 1
             continue
@@ -486,7 +491,7 @@ def approximate_tes(args):
         d_wart[row['ID']] = rt
 
         # FIXME: row end should be start for negative strand?
-        row_summary = [row['ID'], row['end'], readthrough_split_point, average_expression, d_wart[row['ID']]]
+        row_summary = [row['ID'], annotation_row_3p_end, readthrough_split_point, average_expression, d_wart[row['ID']]]
         summary_df.loc[summary_df_index] = row_summary
         summary_df_index += 1
 

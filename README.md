@@ -147,4 +147,11 @@ python rqc.py sequence_logo -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_P
 # approximate_tes
 ```
 python rqc.py approximate_tes -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids PF3D7_1123900.1
+
+python rqc.py approximate_tes -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids $(jq -r '.Pf3D7_01_v3_mRNA[]' ./pfal_mRNA_exon_counts.json)
+```
+
+# gene methylation analysis
+```
+python rqc.py gene_methylation_analysis -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids PF3D7_1123900.1 -d 20 -r 0.7
 ```

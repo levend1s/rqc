@@ -13,6 +13,7 @@ from rqc_modules import plot_coverage
 from rqc_modules import sequence_logo
 from rqc_modules import approximate_tes
 from rqc_modules import plot_entropy
+from rqc_modules import gene_methylation_analysis
 
 
 def build_parser():
@@ -104,7 +105,26 @@ def build_parser():
 
     approximate_tes_parser.set_defaults(func=approximate_tes.approximate_tes)
 
-    # ---- wam_analysis command ----
+    # ---- gene_methylation_analysis command ----
+    # My gut feeling is that mapping mod sites from a bedmethyl to a gff is not the best way, since gff annotation is poor and may not include readthrough sites.
+    # I think it would be better to go through each gene, use my (nanopore specific) method of finding reads associated with a gene, then do mod analysis on those reads.    
+    gene_methylation_analysis_parser = subparsers.add_parser("gene_methylation_analysis", help="Based of RNA-seq data and a GFF file, approximate the transcription end sites (TES) of genes.")
+    gene_methylation_analysis_parser.add_argument("-i", "--input", required=True, help="input file listing coverage data")
+
+    gene_methylation_analysis_parser.add_argument("--type", required=False, help="input file listing coverage data")
+    gene_methylation_analysis_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
+
+    gene_methylation_analysis_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
+    gene_methylation_analysis_parser.add_argument("--poly_a_filter", required=False, type=int, default=0, help="input file listing coverage data")
+    gene_methylation_analysis_parser.add_argument("-p", "--padding", required=False, type=int, default=0, help="input file listing coverage data")
+    gene_methylation_analysis_parser.add_argument("-r", "--mod_ratio", required=False, type=float, default=0.5, help="input file listing coverage data")
+    gene_methylation_analysis_parser.add_argument("-d", "--read_depth", required=False, type=int, default=20, help="input file listing coverage data")
+    gene_methylation_analysis_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
+
+    gene_methylation_analysis_parser.set_defaults(func=gene_methylation_analysis.gene_methylation_analysis)
+
+
+    # ---- weighted_methylation_change_analysis command ----
 
     # ---- tes_vs_wam_analysis command ----
 

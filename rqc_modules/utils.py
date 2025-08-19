@@ -559,6 +559,10 @@ def process_annotation_file(annotation_file_path=None):
     gff_df['seq_id'] = gff_df['seq_id'].astype('category')
     gff_df['ID'] = gff_df['ID'].astype('category')
     gff_df['type'] = gff_df['type'].astype('category')
+    gff_df['start'] = gff_df['start'].astype('int')
+    gff_df['end'] = gff_df['end'].astype('int')
+
+
 
     # for row_index, row in GFF_DF.iterrows():
     #     if row['Parent'] in GFF_PARENT_TREE:
