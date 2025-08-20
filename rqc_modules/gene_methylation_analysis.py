@@ -142,15 +142,20 @@ def gene_methylation_analysis(args):
             row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS
             row_flags_requires = 0
 
+
             if row['strand'] == '+':
                 row_flag_filters = BAM_PILEUP_DEFAULT_FLAGS | BAM_REVERSE_STRAND
+                a_code = 'A'
             else:
                 row_flags_requires = BAM_REVERSE_STRAND
+                a_code = 'a'
 
             gene_length = row['end'] - row['start'] + 1
             d_coverage = {
                 "total_depth": [0] * gene_length,
                 "count_a": [0] * gene_length,
+                "count_t": [0] * gene_length,
+
                 "m6A": [0] * gene_length
             }
 
@@ -168,7 +173,8 @@ def gene_methylation_analysis(args):
                 column_bases_read = list(filter(None, column.get_query_sequences()))
                 
                 d_coverage['total_depth'][column.reference_pos - row['start'] + 1] = len(column_bases_read)
-                d_coverage['count_a'][column.reference_pos - row['start'] + 1] = column_bases_read.count('A')
+                d_coverage['count_a'][column.reference_pos - row['start'] + 1] = column_bases_read.count(a_code)
+
 
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
@@ -181,15 +187,18 @@ def gene_methylation_analysis(args):
 
                         if read_3p_end <= most_3p_subfeature.end:
                             # this is [(read index, 256 * mod_prob)...]
+
+                            ref_pos = numpy.array(r.get_reference_positions(full_length=True))
+
                             mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev'])
                             if mods_probs:
                                 # keep only mod positions which are above mod prob threshold
-                                ref_pos = numpy.array(r.get_reference_positions(full_length=True))
                                 read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
-                                # print(ref_pos[read_mod_positions])
+                                genomic_mod_positions = ref_pos[read_mod_positions]
 
-                            else:
-                                read_indexes_to_process.append(i)
+                                for mod in genomic_mod_positions:
+                                    if mod != None:
+                                        d_coverage['m6A'][mod - row['start'] - 1] += 1
                         else:
                             read_outside_3p_end.append(r.query_name)
 
@@ -208,25 +217,39 @@ def gene_methylation_analysis(args):
                                 genomic_mod_positions = ref_pos[read_mod_positions]
 
                                 for mod in genomic_mod_positions:
-                                    if mod == None:
-                                        print(ref_pos)
-                                        print(read_mod_positions)
+                                    if mod != None:
+                                        d_coverage['m6A'][mod - row['start'] - 1] += 1
 
-                                    d_coverage['m6A'][mod - row['start'] + 1] += 1
-
-                                # TODO keep only mod positions within the gene
-                                num_mod += len(genomic_mod_positions)
                         else:
                             read_outside_3p_end.append(r.query_name)
                 else:
                     read_on_different_strand += 1
 
-            # convert d_coverage to genomic space
-            # d_coverage['total_depth'] = [x + row.start for x in d_coverage['total_depth']]
+            mod_ratio = numpy.array(d_coverage['m6A']) / numpy.array(d_coverage['total_depth'])
+            mod_ratio_read_depth_tuples = list(zip(mod_ratio, d_coverage['total_depth']))
 
-            print("num_a: {}, num_mod: {}".format(num_a, num_mod))
-            print(d_this_row_mod_counts)
-        samfile.close()
+            # now I have coverages for m6A, total depth and Adenosines per gene
+            # Now i'd like to calculate average methylation for the gene. I want to do this for only "canonical" m6A positions (defined by a m6A/A ratio), for non-canonical m6A positions, and a total m6A/A ratio.
+            # first, create a new list of m6A/A ratios for each position
+            # Then create a list of tuples of (m6A/A ratio, read depth) for each position, this will allow me to calculate a weighted average for the m6A/A ratio
+            # Split this into canonical and non-canonical mod positions, where canonical mod positions are defined by the m6A/A ratio being above the CANNONICAL_MOD_PROP_THRESHOLD
+
+            canonical_mods = [(a, b) for a, b in mod_ratio_read_depth_tuples if a >= CANNONICAL_MOD_PROP_THRESHOLD and b >= READ_DEPTH_THRESHOLD]
+            non_canonical_mods = [(a, b) for a, b in mod_ratio_read_depth_tuples if a < CANNONICAL_MOD_PROP_THRESHOLD or b < READ_DEPTH_THRESHOLD]
+
+            weighted_average_canonical_mod = sum(v * w for v, w in canonical_mods) / sum([b for a, b, in canonical_mods])
+            weighted_average_non_canonical_mod = sum(v * w for v, w in non_canonical_mods) / sum([b for a, b, in non_canonical_mods])
+            total_mod_to_unmodified_ratio = sum(d_coverage['m6A']) / sum(d_coverage['count_a'])
+
+            print(canonical_mods)
+            print(weighted_average_canonical_mod)
+
+            print(weighted_average_non_canonical_mod)
+            print(total_mod_to_unmodified_ratio)
+
+
+
+    samfile.close()
 
     # we now have gone through each gene and calculated canonical mod depth, and non canonical mod depth, and total mod/unmodified ratio
     # gene id | type | strand | sample1 - list of canonical mod positions (genomic) | sample1 - total m6A/A | sample2 - list of canonical mod positions (genomic) | sample2 - total m6A/A | cMod average methylation (weighted by cMod read depth)) | non-cMod average methylation
