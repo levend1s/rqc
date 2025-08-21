@@ -15,6 +15,9 @@ from rqc_modules.utils import START_CLOCK, STOP_CLOCK, getSubfeatures
 
 from rqc_modules.constants import TES_SUMMARY_HEADER, FEATURECOUNTS_HEADER
 
+def process_row():
+    continue
+
 def approximate_tes(args):
     # load annotation file
     ANNOTATION_FILE = args.annotation
