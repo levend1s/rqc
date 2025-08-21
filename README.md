@@ -34,7 +34,7 @@ $ pip install -r requirements.txt
 
 or
 
-$ virtualenv env
+$ python3 -m virtualenv env
 $ source env/bin/activate
 $ pip install -r requirements.txt
 
@@ -153,7 +153,7 @@ python rqc.py approximate_tes -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67
 
 # gene methylation analysis
 
-This calculates average methylation (m6A) for genes.
+This calculates average methylation (m6A) for genes. It calculates separates statistic
 
 ```
 python rqc.py gene_methylation_analysis -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids PF3D7_1123900.1 -d 20 -r 0.7
