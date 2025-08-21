@@ -110,6 +110,7 @@ def build_parser():
     # I think it would be better to go through each gene, use my (nanopore specific) method of finding reads associated with a gene, then do mod analysis on those reads.    
     gene_methylation_analysis_parser = subparsers.add_parser("gene_methylation_analysis", help="Based of RNA-seq data and a GFF file, approximate the transcription end sites (TES) of genes.")
     gene_methylation_analysis_parser.add_argument("-i", "--input", required=True, help="input file listing coverage data")
+    gene_methylation_analysis_parser.add_argument("-o", "--output", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
 
     gene_methylation_analysis_parser.add_argument("--type", required=False, help="input file listing coverage data")
     gene_methylation_analysis_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
@@ -118,8 +119,11 @@ def build_parser():
     gene_methylation_analysis_parser.add_argument("--poly_a_filter", required=False, type=int, default=0, help="input file listing coverage data")
     gene_methylation_analysis_parser.add_argument("-p", "--padding", required=False, type=int, default=0, help="input file listing coverage data")
     gene_methylation_analysis_parser.add_argument("-r", "--mod_ratio", required=False, type=float, default=0.5, help="input file listing coverage data")
+    gene_methylation_analysis_parser.add_argument("-c", "--mod_prob_threshold", required=False, type=float, default=0.95, help="input file listing coverage data")
+
     gene_methylation_analysis_parser.add_argument("-d", "--read_depth", required=False, type=int, default=20, help="input file listing coverage data")
     gene_methylation_analysis_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
+    gene_methylation_analysis_parser.add_argument("-g", "--genome", required=False, help="genome file (FASTA)")
 
     gene_methylation_analysis_parser.set_defaults(func=gene_methylation_analysis.gene_methylation_analysis)
 

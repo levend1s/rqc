@@ -528,8 +528,7 @@ def START_CLOCK(name):
 def STOP_CLOCK(name, stop_name):
     clock_stop = time.time()
     diff = clock_stop - CLOCKS[name]
-    if DEBUG:
-        print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
+    print("\tDEBUG: time between {} and {}: {}s".format(name, stop_name, diff))
 
 def process_input_files(INPUT):
     input_files = {}
