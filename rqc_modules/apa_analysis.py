@@ -1,15 +1,19 @@
 import pandas
 import pysam
 import numpy
+import itertools
 import math
 import scipy.stats
-from scipy.signal import find_peaks
+import scipy.interpolate
+import scipy.optimize
 import matplotlib.pyplot as plt
+from kneed import KneeLocator
+from statsmodels.stats.proportion import proportions_ztest
 
 from rqc_modules.utils import process_annotation_file, process_genome_file, normalise_numpy_array, power_func, reverse_complement, process_input_files
 from rqc_modules.utils import START_CLOCK, STOP_CLOCK, getSubfeatures
 
-from rqc_modules.constants import TES_SUMMARY_HEADER, FEATURECOUNTS_HEADER, UNIQUE_APA_DISTANCE
+from rqc_modules.constants import TES_SUMMARY_HEADER, FEATURECOUNTS_HEADER
 
 def process_row():
     print("process row")
@@ -76,7 +80,7 @@ def approximate_tes(args):
             feature_counts_df['targets'] = feature_counts_df['targets'].astype('category')
 
         # generate coverage for all matches in this bam file
-        for _, row in matches.iterrows():
+        for row_index, row in matches.iterrows():
             summary_df_index = 0
             read_on_different_strand = 0
 
@@ -136,6 +140,8 @@ def approximate_tes(args):
                 gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
                 gene_read_ids_fc = set(gene_reads['read_id'])
 
+            found = 0
+            not_found = 0
             missing_from_fc = 0
             no_poly_a = 0
             poly_a_lengths = []
@@ -167,8 +173,11 @@ def approximate_tes(args):
 
             d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
             d_not_in_feature_counts[label][row['ID']] = missing_from_fc
+            # STOP_CLOCK("row_start", "stop")
 
+            # print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
             print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), read_on_different_strand, missing_from_fc, len(read_outside_3p_end), len(missing_cannonical_mods)))
+
 
         samfile.close()
 
@@ -178,6 +187,7 @@ def approximate_tes(args):
     d_x_ticks = {}
     d_poly_a_length_hists = {}
     d_tts_hist = {}
+    d_cdfs = {}
     d_kdes = {}
     d_max_hist_count_poly_a = {}
     d_max_hist_count_tts = {}
@@ -190,22 +200,9 @@ def approximate_tes(args):
         d_poly_a_length_hists[label] = {}
         d_tts_hist[label] = {}
         d_kdes[label] = {}
+        d_cdfs[label] = {}
 
-    summary_header = [
-        "label",
-        "ID",
-        "type",
-        "strand",
-        "3' annotation end",
-        "tts_count",
-        "canonical_pa_site",
-        "apa_score",
-        "genomic_apa_sites",
-        "pa_site_counts",
-        "pa_site_proportions"
-    ]
-    print("\t".join(map(str, summary_header)))
-    results = []
+    
 
     summary_df_index = 0
     for row_index, row in matches.iterrows():
@@ -263,7 +260,7 @@ def approximate_tes(args):
         x_ticks = range(min_tts, max_tts)
 
         # calculate hists
-        # print("{} - Generating transcript end site histograms...".format(row['ID']))
+        print("{} - Generating transcript end site histograms...".format(row['ID']))
         for label in bam_labels:
             poly_a_length_range = list(range(1, max(d_poly_a_lengths[label][gene_id]) + 1))
             poly_a_hist = [d_poly_a_lengths[label][gene_id].count(i) for i in poly_a_length_range]
@@ -283,14 +280,17 @@ def approximate_tes(args):
             d_tts_hist[label][row['ID']] = tts_hist
 
 
+
         # generate dennsity plots
         if len(matches) == 1:
-            # print("{} - Generating transcript end site density information...".format(row['ID']))
+            print("{} - Generating transcript end site density information...".format(row['ID']))
             for label in bam_labels:
                 kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id], bw_method=0.1)
                 smoothed_tts_hist = kernel(x_ticks)
+                cdf = numpy.cumsum(smoothed_tts_hist)
 
                 d_kdes[label][row['ID']] = smoothed_tts_hist
+                d_cdfs[label][row['ID']] = cdf
 
                 if max_density < max(smoothed_tts_hist):
                     max_density = max(smoothed_tts_hist)
@@ -303,49 +303,187 @@ def approximate_tes(args):
         d_max_density[gene_id] = max_density
         d_x_ticks[row['ID']] = x_ticks
 
-        tts_hist = [d_tts[label][gene_id].count(i) for i in range(min_tts, max_tts)]
-        peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=20)
-        
-        genomic_apa_sites = peaks + min_tts
-        max_height_apa = 0
-        canonical_pa_site = 0
-        second_max_height_apa = 0
+        # !!!! start of TES analysis, decide where the readthrough split point is
+        # First, calculate the elbow for TES sites by count/frequency
+        tes_variance_tests = ["z"]#, "x2", "mw-u", "ks"]
 
-        if len(peaks) > 1:
-            sorted_genomic_peaks_by_height = sorted(zip(genomic_apa_sites, peak_dict['peak_heights']), key=lambda x: x[1])
-            max_height_apa = sorted_genomic_peaks_by_height[-1][1]
-            canonical_pa_site = sorted_genomic_peaks_by_height[-1][0]
+        d_read_through_counts = {}
+        d_normal_read_counts = {}
+        d_cannonical_tes = {}
+        d_max_can_tes = {}
+        d_sorted_tes = {}
+        d_knee = {}
+        d_tes_vs_prop = {}
+        d_readthrough_split_points = {}
+        d_fitted_curve_r_squared = {}
+        d_fitted_curve_coeff = {}
 
-            second_max_height_apa = sorted_genomic_peaks_by_height[-2][1]
-            apa_score = second_max_height_apa / max_height_apa
-        else:
-            apa_score = 1
+        # calculate readthrough proportions for each sample
+        print("{} - Finding max common transcript end site...".format(row['ID']))
 
-        pa_site_proportions = []
+        for label in bam_labels:
+            d_tes_vs_prop[label] = []
 
-        for p in genomic_apa_sites:
+            for c, p in d_tts_hist[label][row['ID']]:
+                if row['strand'] == "-":
+                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x < p])
+                    num_normal = len([x for x in d_tts[label][gene_id] if x >= p])
+                else:
+                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x > p])
+                    num_normal = len([x for x in d_tts[label][gene_id] if x <= p])
+                
+                rt_prop = num_read_throughs / num_normal
+
+                # only keep this if there are fewer readthroughs than normals
+                # NOTE this assumption doesn't work if there is one clean cut site for all reads
+                # or the majority of reads
+                if rt_prop < 1:
+                    d_tes_vs_prop[label].append((p, rt_prop))
+
+            # if we couldn't add any TES which had fewer readthroughs than normals
+            # Then this must be a clean cut gene... The final TES must be the splitpoint
+            if len(d_tes_vs_prop[label]) == 1:
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                d_fitted_curve_coeff[label] = numpy.inf
+                # TODO add type info to reporting dict
+                continue
+
+            # sort by genomic position
+            sorted_tes_prop = sorted(d_tes_vs_prop[label], key=lambda a: a[0], reverse=False)
+            pos = [x[0] for x in sorted_tes_prop]
+            prop = [x[1] for x in sorted_tes_prop]
+
+            # fit curve to TES data that will be used to to find the kneedle of the curve
+            # data will have bumps and many false knees/elbows that we want to smooth out
+            # so the kneedle function finds the correct knee
+
+            # interpolate points between the few points we have so we can better approximate a
+            # curve that fits our data
+            pos_normalised = normalise_numpy_array(numpy.array(pos))
+            x_interp = numpy.linspace(0, 1, 100)
+            pos_y_interp = scipy.interpolate.interp1d(pos_normalised, prop)
+            prop_normalised_interpolated = [pos_y_interp(x) for x in x_interp]
+
+            # if strand is positive direction in kneedle function are reversed
             if row['strand'] == "-":
-                num_read_throughs = len([x for x in d_tts[label][gene_id] if x < p])
-                num_normal = len([x for x in d_tts[label][gene_id] if x >= p])
+                elbow_direction = "increasing"
+                initial_guess = [1, 0.1, 0]
             else:
-                num_read_throughs = len([x for x in d_tts[label][gene_id] if x > p])
-                num_normal = len([x for x in d_tts[label][gene_id] if x <= p])
-            
-            rt_prop = num_read_throughs / num_normal
-            pa_site_proportions.append(rt_prop)
+                elbow_direction = "decreasing"
+                initial_guess = [-1, 0.1, 1]
 
-        num_tts = len(d_tts[label][gene_id])
-        pa_site_counts = list(peak_dict['peak_heights'])
+            # len(prop) < 100
+            abc, pcov = scipy.optimize.curve_fit(
+                power_func,
+                x_interp,
+                prop_normalised_interpolated,
+                p0=initial_guess,
+                maxfev=5000
+            )
 
-        # TODO add max_read_depth
-        row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, apa_score, genomic_apa_sites, pa_site_counts, pa_site_proportions]
-        print("\t".join(map(str, row_summary)))
-        results.append(row_summary)
+            y_fitted = power_func(x_interp, *abc)
+            if VERBOSE:
+                print(abc)
+                plt.scatter(x_interp, prop_normalised_interpolated)
+                plt.scatter(x_interp, y_fitted)
+                plt.show()
+            # calculate R^2
+            # https://stackoverflow.com/questions/19189362/getting-the-r-squared-value-using-curve-fit
+            residuals = prop_normalised_interpolated - power_func(x_interp, *abc)
+            residual_sum_squares = numpy.sum(residuals ** 2)
+            total_sum_squares = numpy.sum((prop_normalised_interpolated - numpy.mean(prop_normalised_interpolated)) ** 2)
+            r_squared = 1 - (residual_sum_squares / total_sum_squares)
 
-    # go through d_kdes, find all local max's with count > read_depth threshold and call these poly_adenylation sites
-    # The max PA is the canonical poly_adenylation site, and belongs in it's own column
+            print("r_squared: {}".format(r_squared))
 
-    summary_df = pandas.DataFrame(results, columns=summary_header)
+            fitted_curve_coeff = abc[1]
+            d_fitted_curve_coeff[label] = fitted_curve_coeff
+
+            # if we estimated a concave curve, take the final TES as end site
+            if fitted_curve_coeff <= 1 and row['strand'] == "-":
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][0][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                continue
+
+            if fitted_curve_coeff >= 1 and row['strand'] == "+":
+                d_readthrough_split_points[label] = d_tes_vs_prop[label][-1][0]
+                d_fitted_curve_r_squared[label] = numpy.inf
+                continue
+
+            # as the genomic position increases, the splitpoint readthrough proportion gets bigger
+            kneedle = KneeLocator(x_interp, y_fitted, S=1.0, curve='convex', direction=elbow_direction)
+
+            # convert normalised elbow point back to genomic space
+            if kneedle.knee:
+                normalised_elbow_pos = kneedle.knee
+            else:
+                print("WARNING: {} - couldn't determine knee, setting as max TES".format(row['ID']))
+                if row['strand'] == "-":
+                    normalised_elbow_pos = 0
+                else:
+                    normalised_elbow_pos = 1
+
+            genomic_elbow_pos = pos[0] + ((max(pos) - min(pos)) * normalised_elbow_pos)
+            d_readthrough_split_points[label] = genomic_elbow_pos
+            d_fitted_curve_r_squared[label] = r_squared
+
+        print("{} - readthrough_split_points: {}".format(row['ID'], d_readthrough_split_points))
+
+        # take the average of the control readthrough splitpoints and r^2
+        readthrough_split_point = 0
+        for label in bam_labels:
+            readthrough_split_point += d_readthrough_split_points[label]
+
+        readthrough_split_point = int(readthrough_split_point / len(bam_labels))
+
+        if VERBOSE:
+            fig, axes = plt.subplots()
+            for label in bam_labels:
+                # TODO add title of gene number, y axis labels etc, only do this if debug
+                axes.scatter(*zip(*d_tes_vs_prop[label]), label=label, s=1)
+
+                axes.axvline(x= readthrough_split_point, color='red', ls="--", linewidth=1.0)
+                axes.legend()
+            plt.show()
+
+        # split into readthroughs and normals based on our TES
+        print("{} - Finding readthrough proportions...".format(row['ID']))
+        for label in bam_labels:
+            if row['strand'] == "-":
+                num_read_throughs = len([x for x in d_tts[label][gene_id] if x < readthrough_split_point])
+                num_normal = len([x for x in d_tts[label][gene_id] if x >= readthrough_split_point])
+            else:
+                num_read_throughs = len([x for x in d_tts[label][gene_id] if x > readthrough_split_point])
+                num_normal = len([x for x in d_tts[label][gene_id] if x <= readthrough_split_point])
+
+            d_read_through_counts[label] = num_read_throughs
+            d_normal_read_counts[label] = num_normal
+
+        # CALCULATE WEIGHTED AVERAGE READTHROUGH RATIO
+        weighted_rt_ratios = []
+        d_wart = {}
+
+        # calculate sum of total cannonical mods read depth across all samples for weighting
+        print("{} - Calculating weighted proportion change in readthroughs...".format(row['ID']))
+        valid_cov_total = 0
+        weighted_outputs = []
+        for label in bam_labels:
+            valid_cov_total += d_normal_read_counts[label] + d_read_through_counts[label]
+
+        for label in bam_labels:
+            weight = (d_normal_read_counts[label] + d_read_through_counts[label]) / valid_cov_total
+
+            this_weighted_mod_proportion = (d_read_through_counts[label] / d_normal_read_counts[label]) * weight
+            weighted_outputs.append(this_weighted_mod_proportion)
+
+        rt = sum(weighted_outputs)
+        d_wart[row['ID']] = rt
+
+        # FIXME: row end should be start for negative strand?
+        row_summary = [row['ID'], annotation_row_3p_end, readthrough_split_point, average_expression, d_wart[row['ID']]]
+        summary_df.loc[summary_df_index] = row_summary
+        summary_df_index += 1
 
     print(summary_df)
 
