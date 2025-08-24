@@ -92,21 +92,20 @@ def approximate_tes(args):
 
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
-            row_subfeatures = getSubfeatures(gff_df, row['ID'], "subfeature", 0)
+            # row_subfeatures = getSubfeatures(gff_df, row['ID'], "subfeature", 0)
 
             read_indexes_to_process = []
 
-            missing_cannonical_mods = []
             read_outside_3p_end = []
 
             # example: PF3D7_0709050.1
-            if len(row_subfeatures) == 0:
-                most_3p_subfeature = row
-            else:
-                if row['strand'] == "-":
-                    most_3p_subfeature = row_subfeatures.iloc[0]
-                else:
-                    most_3p_subfeature = row_subfeatures.iloc[-1]
+            # if len(row_subfeatures) == 0:
+            #     most_3p_subfeature = row
+            # else:
+            #     if row['strand'] == "-":
+            #         most_3p_subfeature = row_subfeatures.iloc[0]
+            #     else:
+            #         most_3p_subfeature = row_subfeatures.iloc[-1]
 
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
@@ -117,7 +116,7 @@ def approximate_tes(args):
                     if row['strand'] == "-":
                         read_3p_end = r.reference_start
 
-                        if read_3p_end <= most_3p_subfeature.end:
+                        if read_3p_end <= row.end:
                             read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
@@ -125,50 +124,39 @@ def approximate_tes(args):
                     else:
                         read_3p_end = r.reference_end
 
-                        if read_3p_end >= most_3p_subfeature.start:
+                        if read_3p_end >= row.start:
                             read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
-                else:
-                    read_on_different_strand += 1
 
-            if FILTER_FOR_FEATURE_COUNTS:
-                gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
-                gene_read_ids_fc = set(gene_reads['read_id'])
-
-            missing_from_fc = 0
             no_poly_a = 0
             poly_a_lengths = []
             tts_sites = []
 
             for i in read_indexes_to_process:
                 r = reads_in_region[i]
-                if FILTER_FOR_FEATURE_COUNTS and (r.qname not in gene_read_ids_fc):
-                    missing_from_fc += 1
-                    continue
+            
+                if row['strand'] == "-":
+                    tts_sites.append(r.reference_start)
                 else:
-                    if row['strand'] == "-":
-                        tts_sites.append(r.reference_start)
-                    else:
-                        tts_sites.append(r.reference_end)
+                    tts_sites.append(r.reference_end)
 
-                    # if SINGLE_GENE_ANALYSIS:
-                    if r.has_tag('pt:i'):
-                        poly_a_length = r.get_tag('pt:i')
-                        poly_a_lengths.append(poly_a_length)
-                    else:
-                        # print("WARNING: {} does not have poly a tag".format(r.qname))
-                        no_poly_a += 1
-                        poly_a_lengths.append(0)
+                # if SINGLE_GENE_ANALYSIS:
+                if r.has_tag('pt:i'):
+                    poly_a_length = r.get_tag('pt:i')
+                    poly_a_lengths.append(poly_a_length)
+                else:
+                    # print("WARNING: {} does not have poly a tag".format(r.qname))
+                    no_poly_a += 1
+                    poly_a_lengths.append(0)
 
 
             d_poly_a_lengths[label][row['ID']] = poly_a_lengths
             d_tts[label][row['ID']] = tts_sites
 
             d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
-            d_not_in_feature_counts[label][row['ID']] = missing_from_fc
 
-            print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), read_on_different_strand, missing_from_fc, len(read_outside_3p_end), len(missing_cannonical_mods)))
+            print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), len(read_outside_3p_end)))
 
         samfile.close()
 
@@ -186,11 +174,6 @@ def approximate_tes(args):
     d_max_tts = {}
     d_max_density = {}
 
-    for label in bam_labels:
-        d_poly_a_length_hists[label] = {}
-        d_tts_hist[label] = {}
-        d_kdes[label] = {}
-
     summary_header = [
         "label",
         "ID",
@@ -207,39 +190,17 @@ def approximate_tes(args):
     print("\t".join(map(str, summary_header)))
     results = []
 
-    summary_df_index = 0
-    for row_index, row in matches.iterrows():
-        SAMPLE_HAS_LOW_EXP = False
-        average_expression = 0
-        average_not_beyond_3p = 0
-        average_not_in_feature_counts = 0
+    for label in bam_labels:
+        d_poly_a_length_hists[label] = {}
+        d_tts_hist[label] = {}
+        d_kdes[label] = {}
 
+    for row_index, row in matches.iterrows():
         if row['strand'] == "+":
             annotation_row_3p_end = row['end']
         else:   
             annotation_row_3p_end = row['start']
 
-        for label in bam_labels:
-            if len(d_tts[label][row['ID']]) < READ_DEPTH_THRESHOLD:
-                SAMPLE_HAS_LOW_EXP = True
-
-            average_expression += len(d_tts[label][row['ID']])
-            average_not_beyond_3p += d_not_beyond_3p[label][row['ID']]
-            average_not_in_feature_counts += d_not_in_feature_counts[label][row['ID']]
-
-        average_expression = math.floor(average_expression / len(bam_labels))
-        average_not_beyond_3p = math.floor(average_not_beyond_3p / len(bam_labels))
-        average_not_in_feature_counts = math.floor(average_not_in_feature_counts / len(bam_labels))
-
-        if SAMPLE_HAS_LOW_EXP or average_expression < READ_DEPTH_THRESHOLD:
-            # print pandas tsv row summary
-            row_summary = [row['ID'], annotation_row_3p_end, 0, average_expression, 0]
-            summary_df.loc[summary_df_index] = row_summary
-            summary_df_index += 1
-            continue
-
-        # calculate histograms for this gene
-        # if SINGLE_GENE_ANALYSIS:
         gene_id = row['ID']
 
         max_hist_count_poly_a = 0
@@ -303,51 +264,52 @@ def approximate_tes(args):
         d_max_density[gene_id] = max_density
         d_x_ticks[row['ID']] = x_ticks
 
-        tts_hist = [d_tts[label][gene_id].count(i) for i in range(min_tts, max_tts)]
-        peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=20)
-        
-        genomic_apa_sites = peaks + min_tts
-        max_height_apa = 0
-        canonical_pa_site = 0
-        second_max_height_apa = 0
-
-        if len(peaks) > 1:
-            sorted_genomic_peaks_by_height = sorted(zip(genomic_apa_sites, peak_dict['peak_heights']), key=lambda x: x[1])
-            max_height_apa = sorted_genomic_peaks_by_height[-1][1]
-            canonical_pa_site = sorted_genomic_peaks_by_height[-1][0]
-
-            second_max_height_apa = sorted_genomic_peaks_by_height[-2][1]
-            apa_score = second_max_height_apa / max_height_apa
-        else:
-            apa_score = 1
-
-        pa_site_proportions = []
-
-        for p in genomic_apa_sites:
-            if row['strand'] == "-":
-                num_read_throughs = len([x for x in d_tts[label][gene_id] if x < p])
-                num_normal = len([x for x in d_tts[label][gene_id] if x >= p])
-            else:
-                num_read_throughs = len([x for x in d_tts[label][gene_id] if x > p])
-                num_normal = len([x for x in d_tts[label][gene_id] if x <= p])
+        for label in bam_labels:
+            tts_hist = [d_tts[label][gene_id].count(i) for i in range(min_tts, max_tts)]
+            peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=20)
             
-            rt_prop = num_read_throughs / num_normal
-            pa_site_proportions.append(rt_prop)
+            genomic_apa_sites = peaks + min_tts
+            max_height_apa = 0
+            canonical_pa_site = 0
+            second_max_height_apa = 0
 
-        num_tts = len(d_tts[label][gene_id])
-        pa_site_counts = list(peak_dict['peak_heights'])
+            if len(peaks) > 1:
+                sorted_genomic_peaks_by_height = sorted(zip(genomic_apa_sites, peak_dict['peak_heights']), key=lambda x: x[1])
+                max_height_apa = sorted_genomic_peaks_by_height[-1][1]
+                canonical_pa_site = sorted_genomic_peaks_by_height[-1][0]
 
-        # TODO add max_read_depth
-        row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, apa_score, genomic_apa_sites, pa_site_counts, pa_site_proportions]
-        print("\t".join(map(str, row_summary)))
-        results.append(row_summary)
+                second_max_height_apa = sorted_genomic_peaks_by_height[-2][1]
+                apa_score = second_max_height_apa / max_height_apa
+            else:
+                apa_score = 1
+
+            pa_site_proportions = []
+
+            for p in genomic_apa_sites:
+                if row['strand'] == "-":
+                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x < p])
+                    num_normal = len([x for x in d_tts[label][gene_id] if x >= p])
+                else:
+                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x > p])
+                    num_normal = len([x for x in d_tts[label][gene_id] if x <= p])
+                
+                rt_prop = num_read_throughs / num_normal
+                pa_site_proportions.append(rt_prop)
+
+            num_tts = len(d_tts[label][gene_id])
+            pa_site_counts = list(peak_dict['peak_heights'])
+
+            # TODO add max_read_depth
+            row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, apa_score, genomic_apa_sites, pa_site_counts, pa_site_proportions]
+            print("\t".join(map(str, row_summary)))
+            results.append(row_summary)
 
     # go through d_kdes, find all local max's with count > read_depth threshold and call these poly_adenylation sites
     # The max PA is the canonical poly_adenylation site, and belongs in it's own column
 
     summary_df = pandas.DataFrame(results, columns=summary_header)
 
-    print(summary_df)
+    # print(summary_df)
 
     if OUTFILE:
         summary_df.to_csv(OUTFILE, sep='\t', index=False)
