@@ -128,6 +128,8 @@ def build_parser():
     gene_methylation_analysis_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
     gene_methylation_analysis_parser.add_argument("-g", "--genome", required=False, help="genome file (FASTA)")
 
+    gene_methylation_analysis_parser.add_argument("--compare_methylation_between_treatments", required=False, nargs="*", help="filter for only reads without m6A modification at these positions")
+
     gene_methylation_analysis_parser.set_defaults(func=gene_methylation_analysis.gene_methylation_analysis)
 
 

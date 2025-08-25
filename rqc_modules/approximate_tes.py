@@ -339,6 +339,9 @@ def approximate_tes(args):
 
     raw_summary_df = pandas.DataFrame(raw_results, columns=raw_summary_header)
 
+    if OUTFILE:
+        raw_summary_df.to_csv("raw_{}".format(OUTFILE), sep='\t', index=False)
+
     # go through d_kdes, find all local max's with count > read_depth threshold and call these poly_adenylation sites
     # The max PA is the canonical poly_adenylation site, and belongs in it's own column
     if COMPARE_APA_BETWEEN_TREATMENTS:
@@ -398,11 +401,10 @@ def approximate_tes(args):
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
 
-    summary_df = pandas.DataFrame(results, columns=summary_header)
+        summary_df = pandas.DataFrame(results, columns=summary_header)
 
-    if OUTFILE:
-        raw_summary_df.to_csv("raw_{}".format(OUTFILE), sep='\t', index=False)
-        summary_df.to_csv(OUTFILE, sep='\t', index=False)
+        if OUTFILE:
+            summary_df.to_csv(OUTFILE, sep='\t', index=False)
 
 
     # --------- PLOT ---------- #

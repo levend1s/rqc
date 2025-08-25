@@ -12,6 +12,9 @@ from rqc_modules.utils import START_CLOCK, STOP_CLOCK
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import partial
 
+import statsmodels.formula.api as smf
+import statsmodels.api as sm
+
 import multiprocessing
 multiprocessing.set_start_method('fork')  # Use 'fork' instead of 'spawn'
 numpy.seterr(divide='ignore', invalid='ignore')
@@ -58,7 +61,8 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
         max_depth=PYSAM_PILEUP_MAX_DEPTH,
         flag_require=row_flags_requires,
         flag_filter=row_flag_filters,
-        truncate = True
+        truncate = True,
+        min_base_quality=0
     ):
         # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
         column_bases_read = list(column.get_query_sequences(add_indels=True))
@@ -116,7 +120,9 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
         if pos <= row.end and pos >= row.start:
             d_coverage['m6A'][pos - row['start']] = count
 
-    mod_ratio = numpy.array(d_coverage['m6A']) / numpy.array(d_coverage['total_depth'])
+    # mod_ratio = numpy.array(d_coverage['m6A']) / numpy.array(d_coverage['total_depth'])
+
+    mod_ratio = [(a / b) if a > 0 and b > 0 else 0 for a, b in zip(d_coverage['m6A'], d_coverage['total_depth'])]
     genomic_coords = [i + row['start'] for i in range(gene_length)]
     mod_ratio_read_depth_tuples = list(zip(mod_ratio, d_coverage['total_depth'], d_coverage['m6A'], genomic_coords))
 
@@ -170,6 +176,7 @@ def gene_methylation_analysis(args):
     GENOME = args.genome
     MOD_PROB_THRESHOLD = args.mod_prob_threshold
     OUTPUT = args.output
+    COMPARE_METHYLATION_BETWEEN_TREATMENTS = args.compare_methylation_between_treatments
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
 
@@ -195,18 +202,20 @@ def gene_methylation_analysis(args):
 
     bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
 
-    summary_header = [
+    raw_summary_header = [
         "label",
         "ID",
         "type",
         "strand",
-        "max read depth",
-        "canonical mods",
-        "average mod ratio (canonical)",
-        "average mod ratio (non-canonical)",
-        "total mod / unmodified ratio"
+        "max_depth",
+        "canonical_mods",
+        "canonical_wam",
+        "non_canonical_wam",
+        "total_wam"
     ]
-    print("\t".join(map(str, summary_header)))
+    print("\t".join(map(str, raw_summary_header)))
+
+    raw_results = []
 
     for label in bam_labels:
         with ThreadPoolExecutor() as executor:
@@ -220,12 +229,99 @@ def gene_methylation_analysis(args):
                 canonical_mod_prop_threshold=CANNONICAL_MOD_PROP_THRESHOLD
             )
 
-            results = list(executor.map(process_row_partial, [row for _, row in matches.iterrows()]))
+            label_raw_results = list(executor.map(process_row_partial, [row for _, row in matches.iterrows()]))
 
-    results_df = pandas.DataFrame(results, columns=summary_header)
+        raw_results += label_raw_results
+
+    raw_results_df = pandas.DataFrame(raw_results, columns=raw_summary_header)
 
     if OUTPUT:
-        results_df.to_csv(OUTPUT, sep='\t', index=False)
+        raw_results_df.to_csv("raw_{}".format(OUTPUT), sep='\t', index=False)
+
+    if COMPARE_METHYLATION_BETWEEN_TREATMENTS:
+        summary_header = [
+            "ID",
+            "type",
+            "strand",
+            "canonical_mods",
+            "average_depth_g1",
+            "average_depth_g2",
+            "canonical_wam_g1",
+            "canonical_wam_g2",
+            "non_canonical_wam_g1",
+            "non_canonical_wam_g2",
+            "total_wam_g1",
+            "total_wam_g2",
+            "test_stat",
+            "p_val"
+        ]
+        print("\t".join(map(str, summary_header)))
+        results = []
+        group_1_prefix = COMPARE_METHYLATION_BETWEEN_TREATMENTS[0]
+        group_2_prefix = COMPARE_METHYLATION_BETWEEN_TREATMENTS[1]
+
+        group1_rows = raw_results_df[raw_results_df['label'].str.startswith(group_1_prefix)]
+        group2_rows = raw_results_df[raw_results_df['label'].str.startswith(group_2_prefix)]
+
+        group1_bam_labels = group1_rows.label.to_list()
+        group2_bam_labels = group2_rows.label.to_list()
+
+        # go through each row, determine quantify change in 
+        for row_index, row in matches.iterrows():
+            these_rows_g1 = group1_rows[group1_rows['ID'] == row.ID]
+            these_rows_g2 = group2_rows[group2_rows['ID'] == row.ID]
+
+            canonical_mods = []
+
+            for _, row_result in raw_results_df[raw_results_df.ID == row.ID].iterrows():
+                canonical_mods.append(row_result.canonical_mods)
+
+            canonical_mods = list(set([item for sublist in canonical_mods for item in sublist]))
+
+            average_depth_g1 = int(sum(these_rows_g1.max_depth.to_list()) / len(these_rows_g1.max_depth.to_list()))
+            average_depth_g2 = int(sum(these_rows_g2.max_depth.to_list()) / len(these_rows_g2.max_depth.to_list()))
+
+            canonical_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.canonical_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
+            canonical_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.canonical_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+
+            non_canonical_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.non_canonical_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
+            non_canonical_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.non_canonical_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+
+            total_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.total_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
+            total_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.total_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+
+            group_depth = these_rows_g1.max_depth.to_list() + these_rows_g2.max_depth.to_list()
+            group_canonical_wam = these_rows_g1.canonical_wam.to_list() + these_rows_g2.canonical_wam.to_list()
+            approx_modified = [v * w for v, w in zip(group_depth, group_canonical_wam)]
+
+            # from chatGPT
+            data = pandas.DataFrame({
+                'group': [group_1_prefix] * len(group1_bam_labels) + [group_2_prefix] * len(group2_bam_labels),
+                'approx_modified': approx_modified,
+                'depth': group_depth
+            })
+
+            data['group_binary'] = (data['group'] == group_2_prefix).astype(int)
+
+            # Failures column
+            data['approx_unmodified'] = data['depth'] - data['approx_modified']
+            response = data[['approx_modified', 'approx_unmodified']]
+
+            # Fit Binomial GLM
+            model = sm.GLM(response, sm.add_constant(data['group_binary']), family=sm.families.Binomial())
+            result = model.fit()
+            # print(result.summary())
+            test_stat = result.params.group_binary
+            pval = result.pvalues.group_binary
+
+            row_summary = [row.ID, row.type, row.strand, canonical_mods, average_depth_g1, average_depth_g2, canonical_wam_g1, canonical_wam_g2, non_canonical_wam_g1, non_canonical_wam_g2, total_wam_g1, total_wam_g2, test_stat, pval]
+            results.append(row_summary)
+            print("\t".join(map(str, row_summary)))
+
+        summary_df = pandas.DataFrame(results, columns=summary_header)
+
+        if OUTPUT:
+            summary_df.to_csv(OUTPUT, sep='\t', index=False)
 
 
 
