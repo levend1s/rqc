@@ -5,6 +5,7 @@ import math
 import scipy.stats
 from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
+from scipy.stats import ttest_rel, wilcoxon
 
 from rqc_modules.utils import process_annotation_file, process_genome_file, normalise_numpy_array, power_func, reverse_complement, process_input_files
 from rqc_modules.utils import START_CLOCK, STOP_CLOCK, getSubfeatures
@@ -13,6 +14,14 @@ from rqc_modules.constants import TES_SUMMARY_HEADER, FEATURECOUNTS_HEADER, UNIQ
 
 def process_row():
     print("process row")
+
+def find_num_read_throughs(strand, tx_end_sites, split_point, tolerance):
+    if strand == "-":
+        num_read_throughs = len([x for x in tx_end_sites if x < (split_point - tolerance)])
+    else:
+        num_read_throughs = len([x for x in tx_end_sites if x > (split_point + tolerance)])
+
+    return num_read_throughs / len(tx_end_sites)
 
 def approximate_tes(args):
     # load annotation file
@@ -27,6 +36,7 @@ def approximate_tes(args):
     FILTER_FOR_FEATURE_COUNTS = args.feature_counts
     PADDING = args.padding
     READ_DEPTH_THRESHOLD = args.read_depth
+    COMPARE_APA_BETWEEN_TREATMENTS = args.compare_apa_between_treatments
 
     # process input file. Each line contains a label, the type of file, and the filepath
     input_files = process_input_files(INPUT)
@@ -57,7 +67,16 @@ def approximate_tes(args):
 
     gene_length = 0
 
-    print("label\tgene id\treads used\treads in region\tfiltered (strand)\tfiltered (fc)\tfiltered (3p)\tfiltered (mod)")
+    row_header = [
+        "label",
+        "ID",
+        "strand",
+        "reads(mapped)",
+        "reads_in_region",
+        "filtered(strand)",
+        "filtered(3p)"
+    ]
+    print("\t".join(map(str, row_header)))
 
     for label in bam_labels:
         samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
@@ -77,9 +96,6 @@ def approximate_tes(args):
 
         # generate coverage for all matches in this bam file
         for _, row in matches.iterrows():
-            summary_df_index = 0
-            read_on_different_strand = 0
-
             reads_in_region = samfile.fetch(
                 contig=row['seq_id'], 
                 start=row['start'] - PADDING, 
@@ -97,6 +113,7 @@ def approximate_tes(args):
             read_indexes_to_process = []
 
             read_outside_3p_end = []
+            read_on_different_strand = []
 
             # example: PF3D7_0709050.1
             # if len(row_subfeatures) == 0:
@@ -128,6 +145,8 @@ def approximate_tes(args):
                             read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
+                else:
+                    read_on_different_strand.append(r.query_name)
 
             no_poly_a = 0
             poly_a_lengths = []
@@ -156,7 +175,9 @@ def approximate_tes(args):
 
             d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
 
-            print("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(label, row['ID'], len(tts_sites), len(reads_in_region), len(read_outside_3p_end)))
+
+            row_summary = [label, row.ID, row.strand, len(reads_in_region), len(tts_sites), len(read_on_different_strand), len(read_outside_3p_end)]
+            print("\t".join(map(str, row_summary)))
 
         samfile.close()
 
@@ -173,13 +194,14 @@ def approximate_tes(args):
     d_min_tts = {}
     d_max_tts = {}
     d_max_density = {}
+    d_genomic_apa_sites = {}
 
-    summary_header = [
+    raw_summary_header = [
         "label",
         "ID",
         "type",
         "strand",
-        "3' annotation end",
+        "3p_annotation end",
         "tts_count",
         "canonical_pa_site",
         "apa_score",
@@ -187,13 +209,14 @@ def approximate_tes(args):
         "pa_site_counts",
         "pa_site_proportions"
     ]
-    print("\t".join(map(str, summary_header)))
-    results = []
+    print("\t".join(map(str, raw_summary_header)))
+    raw_results = []
 
     for label in bam_labels:
         d_poly_a_length_hists[label] = {}
         d_tts_hist[label] = {}
         d_kdes[label] = {}
+        d_genomic_apa_sites[label] = {}
 
     for row_index, row in matches.iterrows():
         if row['strand'] == "+":
@@ -266,7 +289,7 @@ def approximate_tes(args):
 
         for label in bam_labels:
             tts_hist = [d_tts[label][gene_id].count(i) for i in range(min_tts, max_tts)]
-            peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=20)
+            peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=READ_DEPTH_THRESHOLD)
             
             genomic_apa_sites = peaks + min_tts
             max_height_apa = 0
@@ -280,43 +303,111 @@ def approximate_tes(args):
 
                 second_max_height_apa = sorted_genomic_peaks_by_height[-2][1]
                 apa_score = second_max_height_apa / max_height_apa
+            elif len(peaks) == 1:
+                canonical_pa_site = genomic_apa_sites[0]
+                apa_score = 0
             else:
-                apa_score = 1
+                canonical_pa_site = 0
+                apa_score = 0
 
             pa_site_proportions = []
+            POLY_ADENYLATION_TOLERANCE = 10
 
             for p in genomic_apa_sites:
-                if row['strand'] == "-":
-                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x < p])
-                    num_normal = len([x for x in d_tts[label][gene_id] if x >= p])
-                else:
-                    num_read_throughs = len([x for x in d_tts[label][gene_id] if x > p])
-                    num_normal = len([x for x in d_tts[label][gene_id] if x <= p])
+                rt_prop = find_num_read_throughs(row.strand, d_tts[label][gene_id], p, POLY_ADENYLATION_TOLERANCE)
                 
-                rt_prop = num_read_throughs / num_normal
+                # print("p: {}".format(p))
+
+                # print("num_read_throughs: {}".format(num_read_throughs))
+                # print("num_normal: {}".format(num_normal))
+                #rt_prop = num_read_throughs / num_normals
+
                 pa_site_proportions.append(rt_prop)
 
             num_tts = len(d_tts[label][gene_id])
             pa_site_counts = list(peak_dict['peak_heights'])
+            d_genomic_apa_sites[label][row.ID] = genomic_apa_sites
 
             # TODO add max_read_depth
-            row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, apa_score, genomic_apa_sites, pa_site_counts, pa_site_proportions]
+            num_dps = 2
+            row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, round(apa_score, num_dps), genomic_apa_sites, [int(x) for x in pa_site_counts], [round(float(x), num_dps) for x in pa_site_proportions]]
             print("\t".join(map(str, row_summary)))
-            results.append(row_summary)
+            raw_results.append(row_summary)
+
+    raw_summary_df = pandas.DataFrame(raw_results, columns=raw_summary_header)
 
     # go through d_kdes, find all local max's with count > read_depth threshold and call these poly_adenylation sites
     # The max PA is the canonical poly_adenylation site, and belongs in it's own column
+    if COMPARE_APA_BETWEEN_TREATMENTS:
+        summary_header = [
+            "ID",
+            "type",
+            "strand",
+            "3p_annotation_end",
+            "canonical_pa_site",
+            "average_rt_prop_g1",
+            "average_rt_prop_g2",
+            "t_stat",
+            "p_val"
+        ]
+        print("\t".join(map(str, summary_header)))
+        results = []
+        group_1_prefix = COMPARE_APA_BETWEEN_TREATMENTS[0]
+        group_2_prefix = COMPARE_APA_BETWEEN_TREATMENTS[1]
+
+        group1_rows = raw_summary_df[raw_summary_df['label'].str.startswith(group_1_prefix)]
+        group2_rows = raw_summary_df[raw_summary_df['label'].str.startswith(group_2_prefix)]
+
+        group1_bam_labels = group1_rows.label.to_list()
+        group2_bam_labels = group2_rows.label.to_list()
+
+        # go through each row, determine quantify change in 
+        for row_index, row in matches.iterrows():
+            gene_id = row.ID
+            if row['strand'] == "+":
+                annotation_row_3p_end = row['end']
+            else:   
+                annotation_row_3p_end = row['start']
+            these_rows_g1 = group1_rows[group1_rows['ID'] == row.ID]
+            # these_rows_g2 = group2_rows[group2_rows['ID'] == row.ID]
+
+            # look through both treatments and keep only apa sites common to all of them
+            canonical_pas = these_rows_g1.canonical_pa_site.to_list()
+            average_canonical_pa = int(sum(canonical_pas) / len(canonical_pas))
+
+            group1_read_through_props = []
+            group2_read_through_props = []
+
+            for label in group1_bam_labels:
+                group1_read_through_props.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
+
+            for label in group2_bam_labels:
+                group2_read_through_props.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
+
+            group1_average_rt_prop = sum(group1_read_through_props) / len(group1_read_through_props)
+            group2_average_rt_prop = sum(group2_read_through_props) / len(group2_read_through_props)
+
+            t_stat, p_val = ttest_rel(group1_read_through_props, group2_read_through_props)
+
+            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, group1_average_rt_prop, group2_average_rt_prop, t_stat, p_val]
+            results.append(row_summary)
+            print("\t".join(map(str, row_summary)))
 
     summary_df = pandas.DataFrame(results, columns=summary_header)
 
-    # print(summary_df)
-
     if OUTFILE:
+        raw_summary_df.to_csv("raw_{}".format(OUTFILE), sep='\t', index=False)
         summary_df.to_csv(OUTFILE, sep='\t', index=False)
+
 
     # --------- PLOT ---------- #
     if len(matches) == 1:
-        gene_id = matches.iloc[0]['ID']
+        row = matches.iloc[0]
+        gene_id = row.ID
+        if row.strand == "-":
+            gene_end = row.start
+        else:
+            gene_end = row.end
 
         NUM_VERT_PLOTS = 3
         fig, axes = plt.subplots(NUM_VERT_PLOTS, num_bams)
@@ -355,24 +446,24 @@ def approximate_tes(args):
             tts_count_plot.axvline(x= gene_length, color='darkgray', ls="--", linewidth=1.0)
             tts_density_plot.axvline(x= gene_length, color='darkgray', ls="--", linewidth=1.0)
 
+            for apa in d_genomic_apa_sites[label][gene_id]:
+                tts_density_plot.axvline(x= apa, color='red', ls="--", linewidth=1.0)
+
+            tts_density_plot.axvline(x= gene_end, color='grey', ls="--", linewidth=1.0)
+
+
             # add axis labels
             if axes_index == 0:
                 poly_a_plot.set(ylabel='poly-A length (nt)')
                 tts_count_plot.set(ylabel='count')
-                # axes[2, axes_index].set(xlabel='poly a length (nt)', ylabel='count')
-                tts_density_plot.set(xlabel='transcription end site (nt)', ylabel='density (au)')
+                tts_density_plot.set(xlabel='tes (nt)', ylabel='density (au)')
             else:
                 poly_a_plot.get_yaxis().set_visible(False)
                 tts_count_plot.get_yaxis().set_visible(False)
-                # axes[2, axes_index].get_yaxis().set_visible(False)
                 tts_density_plot.get_yaxis().set_visible(False)
-
 
             axes_index += 1
 
         fig.subplots_adjust(hspace=0, wspace=0.1)
         plt.show()
-
-    else:
-        print("plotting gene batch methylation changes and transcript end site changes...")
 

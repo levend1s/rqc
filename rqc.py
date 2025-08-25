@@ -98,6 +98,9 @@ def build_parser():
     approximate_tes_parser.add_argument("--filter_out_m6A", required=False, nargs="*", type=int, help="filter for only reads without m6A modification at these positions")
     approximate_tes_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
     approximate_tes_parser.add_argument("--feature_counts", action="store_true", help="if provided filter reads which featureCounts has mapped to a gene")
+    
+    approximate_tes_parser.add_argument("--compare_apa_between_treatments", required=False, nargs="*", help="filter for only reads without m6A modification at these positions")
+
 
     # at least one of these is required
     approximate_tes_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
