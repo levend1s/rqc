@@ -6,6 +6,9 @@ import scipy.stats
 from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
 from scipy.stats import ttest_rel, wilcoxon
+import statsmodels.formula.api as smf
+import statsmodels.api as sm
+
 
 from rqc_modules.utils import process_annotation_file, process_genome_file, normalise_numpy_array, power_func, reverse_complement, process_input_files
 from rqc_modules.utils import START_CLOCK, STOP_CLOCK, getSubfeatures
@@ -380,14 +383,16 @@ def approximate_tes(args):
 
             for label in group1_bam_labels:
                 group1_read_through_props.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
-
             for label in group2_bam_labels:
                 group2_read_through_props.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
 
             group1_average_rt_prop = sum(group1_read_through_props) / len(group1_read_through_props)
             group2_average_rt_prop = sum(group2_read_through_props) / len(group2_read_through_props)
 
+            # TODO try using binomial GLM
             t_stat, p_val = ttest_rel(group1_read_through_props, group2_read_through_props)
+
+
 
             row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, group1_average_rt_prop, group2_average_rt_prop, t_stat, p_val]
             results.append(row_summary)
