@@ -24,7 +24,7 @@ def find_num_read_throughs(strand, tx_end_sites, split_point, tolerance):
     else:
         num_read_throughs = len([x for x in tx_end_sites if x > (split_point + tolerance)])
 
-    return num_read_throughs / len(tx_end_sites)
+    return num_read_throughs
 
 def approximate_tes(args):
     # load annotation file
@@ -317,7 +317,7 @@ def approximate_tes(args):
             POLY_ADENYLATION_TOLERANCE = 10
 
             for p in genomic_apa_sites:
-                rt_prop = find_num_read_throughs(row.strand, d_tts[label][gene_id], p, POLY_ADENYLATION_TOLERANCE)
+                rt_prop = find_num_read_throughs(row.strand, d_tts[label][gene_id], p, POLY_ADENYLATION_TOLERANCE) / len(d_tts[label][gene_id])
                 
                 # print("p: {}".format(p))
 
@@ -379,25 +379,54 @@ def approximate_tes(args):
 
             # look through both treatments and keep only apa sites common to all of them
             canonical_pas = these_rows_g1.canonical_pa_site.to_list()
+            canonical_pas = [x for x in canonical_pas if x > 0]
             average_canonical_pa = int(sum(canonical_pas) / len(canonical_pas))
+
+            group1_num_read_throughs = []
+            group2_num_read_throughs = []
 
             group1_read_through_props = []
             group2_read_through_props = []
 
             for label in group1_bam_labels:
-                group1_read_through_props.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
+                num_read_throughs = find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE)
+                group1_num_read_throughs.append(num_read_throughs)
+                group1_read_through_props.append(num_read_throughs / len(d_tts[label][gene_id]))
             for label in group2_bam_labels:
-                group2_read_through_props.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
+                num_read_throughs = find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE)
+                group2_num_read_throughs.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
+                group2_read_through_props.append(num_read_throughs / len(d_tts[label][gene_id]))
 
             group1_average_rt_prop = sum(group1_read_through_props) / len(group1_read_through_props)
             group2_average_rt_prop = sum(group2_read_through_props) / len(group2_read_through_props)
 
-            # TODO try using binomial GLM
-            t_stat, p_val = ttest_rel(group1_read_through_props, group2_read_through_props)
+            num_tes = [len(d_tts[l][gene_id]) for l in bam_labels]
 
+            if len(canonical_pas) > 0:
+                # from chatGPT
+                data = pandas.DataFrame({
+                    'group': [group_1_prefix] * len(group1_bam_labels) + [group_2_prefix] * len(group2_bam_labels),
+                    'num_read_throughs': group1_num_read_throughs + group2_num_read_throughs,
+                    'num_tes': num_tes
+                })
 
+                data['group_binary'] = (data['group'] == group_2_prefix).astype(int)
 
-            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, group1_average_rt_prop, group2_average_rt_prop, t_stat, p_val]
+                # Failures column
+                data['num_normal'] = data['num_tes'] - data['num_read_throughs']
+                response = data[['num_read_throughs', 'num_normal']]
+
+                # Fit Binomial GLM
+                model = sm.GLM(response, sm.add_constant(data['group_binary']), family=sm.families.Binomial())
+                result = model.fit()
+                # print(result.summary())
+                test_stat = result.params.group_binary
+                pval = result.pvalues.group_binary
+            else:
+                test_stat = 0
+                pval = 0
+
+            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, group1_average_rt_prop, group2_average_rt_prop, test_stat, pval]
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
 
