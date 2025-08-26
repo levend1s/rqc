@@ -27,7 +27,10 @@ def calculate_wam(coverage, canonical_mod_prop_threshold, read_depth_threshold, 
     # first, create a new list of m6A/A ratios for each position
     # Then create a list of tuples of (m6A/A ratio, read depth) for each position, this will allow me to calculate a weighted average for the m6A/A ratio
     # Split this into canonical and non-canonical mod positions, where canonical mod positions are defined by the m6A/A ratio being above the CANNONICAL_MOD_PROP_THRESHOLD
-    
+
+    if coverage['max_read_depth'] < read_depth_threshold:
+        return [], [], 0, 0, 0
+
     mod_ratio = [(a / b) if a > 0 and b > 0 else 0 for a, b in zip(coverage['m6A'], coverage['total_depth'])]
     genomic_coords = [i + coverage['start'] for i in range(coverage['gene_length'])]
 
@@ -39,6 +42,9 @@ def calculate_wam(coverage, canonical_mod_prop_threshold, read_depth_threshold, 
     else:
         canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if a >= canonical_mod_prop_threshold and b >= read_depth_threshold]
         non_canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if a < canonical_mod_prop_threshold or b < read_depth_threshold]
+
+    if all(x == 0 for x in [b for _, b, _, _ in canonical_mods]):
+        return [], [], 0, 0, 0
 
     if len(canonical_mods) > 0:
         weighted_average_canonical_mod = sum(a * b for a, b, _, _ in canonical_mods) / sum([b for _, b, _, _ in canonical_mods])
@@ -104,6 +110,7 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
         "start": row.start - coverage_padding,
         "gene_length": gene_length,
         "max_read_depth": 0,
+        "canonical_mods": [],
         "total_depth": [0] * gene_length,
         "count_a": [0] * gene_length,
         "count_t": [0] * gene_length,
@@ -210,6 +217,7 @@ def gene_methylation_analysis(args):
     MOD_PROB_THRESHOLD = args.mod_prob_threshold
     OUTPUT = args.output
     COMPARE_METHYLATION_BETWEEN_TREATMENTS = args.compare_methylation_between_treatments
+    EXCLUDE_CONTIGS = args.exclude_contigs
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
 
@@ -228,6 +236,9 @@ def gene_methylation_analysis(args):
 
     if FEATURE_TYPE:
         matches = gff_df[gff_df['type'] == FEATURE_TYPE]
+
+        if EXCLUDE_CONTIGS:
+            matches = matches[~matches['seq_id'].isin(EXCLUDE_CONTIGS)]
     else:
         matches = gff_df[gff_df['ID'].isin(IDS)]
     if matches.empty:
@@ -346,20 +357,39 @@ def gene_methylation_analysis(args):
 
             canonical_mods = d_canonical_mods[row.ID]
 
-            average_depth_g1 = int(sum(these_rows_g1.max_depth.to_list()) / len(these_rows_g1.max_depth.to_list()))
-            average_depth_g2 = int(sum(these_rows_g2.max_depth.to_list()) / len(these_rows_g2.max_depth.to_list()))
+            # If the max depth is below threshold in either group, or if at least one sample has no canonical mods, set everything to 0 (cause it'll be an unfair comparison)
+            # Otherwise calculate average depth and wam for each group, and perform a logistic regression to determine if the difference in canonical wam between groups is significant
+            # Canonical WAM may be 0 if read depth is too low, even if we forced calculation with pre calculated canonical mod positions
+            if any(x < READ_DEPTH_THRESHOLD for x in these_rows_g1.max_depth.to_list() + these_rows_g2.max_depth.to_list()) \
+                or any(x == 0 for x in these_rows_g1.canonical_wam.to_list() + these_rows_g2.canonical_wam.to_list()) \
+                or len(canonical_mods) == 0:
+                average_depth_g1 = 0
+                average_depth_g2 = 0
 
-            canonical_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.canonical_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
-            canonical_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.canonical_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+                canonical_wam_g1 = 0
+                canonical_wam_g2 = 0
 
-            non_canonical_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.non_canonical_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
-            non_canonical_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.non_canonical_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+                non_canonical_wam_g1 = 0
+                non_canonical_wam_g2 = 0
 
-            total_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.total_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
-            total_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.total_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+                total_wam_g1 = 0
+                total_wam_g2 = 0
 
+                test_stat = 0
+                pval = 0
+            else:
+                average_depth_g1 = int(sum(these_rows_g1.max_depth.to_list()) / len(these_rows_g1.max_depth.to_list()))
+                average_depth_g2 = int(sum(these_rows_g2.max_depth.to_list()) / len(these_rows_g2.max_depth.to_list()))
 
-            if len(canonical_mods) > 0:
+                canonical_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.canonical_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
+                canonical_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.canonical_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+
+                non_canonical_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.non_canonical_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
+                non_canonical_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.non_canonical_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+
+                total_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.total_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
+                total_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.total_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
+
                 group_depth = these_rows_g1.max_depth.to_list() + these_rows_g2.max_depth.to_list()
                 group_canonical_wam = these_rows_g1.canonical_wam.to_list() + these_rows_g2.canonical_wam.to_list()
                 approx_modified = [v * w for v, w in zip(group_depth, group_canonical_wam)]
@@ -383,9 +413,6 @@ def gene_methylation_analysis(args):
                 # print(result.summary())
                 test_stat = result.params.group_binary
                 pval = result.pvalues.group_binary
-            else:
-                test_stat = 0
-                pval = 0
 
             row_summary = [row.ID, row.type, row.strand, canonical_mods, average_depth_g1, average_depth_g2, round(canonical_wam_g1, NUM_DPS), round(canonical_wam_g2, NUM_DPS), round(non_canonical_wam_g1, NUM_DPS), round(non_canonical_wam_g2, NUM_DPS), round(total_wam_g1, NUM_DPS), round(total_wam_g2, NUM_DPS), test_stat, pval]
             results.append(row_summary)

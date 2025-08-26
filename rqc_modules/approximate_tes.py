@@ -41,6 +41,7 @@ def approximate_tes(args):
     PADDING = args.padding
     READ_DEPTH_THRESHOLD = args.read_depth
     COMPARE_APA_BETWEEN_TREATMENTS = args.compare_apa_between_treatments
+    EXCLUDE_CONTIGS = args.exclude_contigs
 
     # process input file. Each line contains a label, the type of file, and the filepath
     input_files = process_input_files(INPUT)
@@ -48,10 +49,11 @@ def approximate_tes(args):
     # load annotation file and find indexes for all parent children
     gff_df = process_annotation_file(ANNOTATION_FILE)
 
-    print(input_files)
-
     if FEATURE_TYPE:
         matches = gff_df[gff_df['type'] == FEATURE_TYPE]
+
+        if EXCLUDE_CONTIGS:
+            matches = matches[~matches['seq_id'].isin(EXCLUDE_CONTIGS)]
     else:
         matches = gff_df[gff_df['ID'].isin(IDS)]
     if matches.empty:

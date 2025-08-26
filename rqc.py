@@ -99,6 +99,7 @@ def build_parser():
     approximate_tes_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
     approximate_tes_parser.add_argument("--feature_counts", action="store_true", help="if provided filter reads which featureCounts has mapped to a gene")
     
+    approximate_tes_parser.add_argument("--exclude_contigs", required=False, nargs="*", help="input file listing coverage data.")
     approximate_tes_parser.add_argument("--compare_apa_between_treatments", required=False, nargs="*", help="filter for only reads without m6A modification at these positions")
 
 
@@ -117,6 +118,7 @@ def build_parser():
 
     gene_methylation_analysis_parser.add_argument("--type", required=False, help="input file listing coverage data.")
     gene_methylation_analysis_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data.")
+    gene_methylation_analysis_parser.add_argument("--exclude_contigs", required=False, nargs="*", help="input file listing coverage data.")
 
     gene_methylation_analysis_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
     gene_methylation_analysis_parser.add_argument("--poly_a_filter", required=False, type=int, default=0, help="input file listing coverage data")
