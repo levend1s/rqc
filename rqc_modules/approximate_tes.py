@@ -9,6 +9,7 @@ from scipy.stats import ttest_rel, wilcoxon
 import statsmodels.formula.api as smf
 import statsmodels.api as sm
 
+NUM_DPS = 4
 
 from rqc_modules.utils import process_annotation_file, process_genome_file, normalise_numpy_array, power_func, reverse_complement, process_input_files
 from rqc_modules.utils import START_CLOCK, STOP_CLOCK, getSubfeatures
@@ -332,8 +333,7 @@ def approximate_tes(args):
             d_genomic_apa_sites[label][row.ID] = genomic_apa_sites
 
             # TODO add max_read_depth
-            num_dps = 2
-            row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, round(apa_score, num_dps), genomic_apa_sites, [int(x) for x in pa_site_counts], [round(float(x), num_dps) for x in pa_site_proportions]]
+            row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, round(apa_score, NUM_DPS), genomic_apa_sites, [int(x) for x in pa_site_counts], [round(float(x), NUM_DPS) for x in pa_site_proportions]]
             print("\t".join(map(str, row_summary)))
             raw_results.append(row_summary)
 
@@ -426,7 +426,7 @@ def approximate_tes(args):
                 test_stat = 0
                 pval = 0
 
-            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, group1_average_rt_prop, group2_average_rt_prop, test_stat, pval]
+            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, round(group1_average_rt_prop, NUM_DPS), round(group2_average_rt_prop, NUM_DPS), test_stat, pval]
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
 

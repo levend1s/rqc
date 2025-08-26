@@ -19,6 +19,8 @@ import multiprocessing
 multiprocessing.set_start_method('fork')  # Use 'fork' instead of 'spawn'
 numpy.seterr(divide='ignore', invalid='ignore')
 
+NUM_DPS = 4
+
 def calculate_wam(coverage, canonical_mod_prop_threshold, read_depth_threshold, use_canonical_mods = None):
     # now I have coverages for m6A, total depth and Adenosines per gene
     # Now i'd like to calculate average methylation for the gene. I want to do this for only "canonical" m6A positions (defined by a m6A/A ratio), for non-canonical m6A positions, and a total m6A/A ratio.
@@ -305,7 +307,7 @@ def gene_methylation_analysis(args):
         else:
             canonical_mod_positions, canonical_mod_ratios, wam_canonical, wam_non_canonical, wam_total = calculate_wam(coverages, CANNONICAL_MOD_PROP_THRESHOLD, READ_DEPTH_THRESHOLD)
 
-        row_summary = [coverages['label'], coverages['ID'], coverages['type'], coverages['strand'], coverages['max_read_depth'], canonical_mod_positions, canonical_mod_ratios, wam_canonical, wam_non_canonical, wam_total]
+        row_summary = [coverages['label'], coverages['ID'], coverages['type'], coverages['strand'], coverages['max_read_depth'], canonical_mod_positions, [round(x, NUM_DPS) for x in canonical_mod_ratios], round(wam_canonical, NUM_DPS), round(wam_non_canonical, NUM_DPS), round(wam_total, NUM_DPS)]
         wam_results.append(row_summary)
         print("\t".join(map(str, row_summary)))
 
@@ -385,7 +387,7 @@ def gene_methylation_analysis(args):
                 test_stat = 0
                 pval = 0
 
-            row_summary = [row.ID, row.type, row.strand, canonical_mods, average_depth_g1, average_depth_g2, canonical_wam_g1, canonical_wam_g2, non_canonical_wam_g1, non_canonical_wam_g2, total_wam_g1, total_wam_g2, test_stat, pval]
+            row_summary = [row.ID, row.type, row.strand, canonical_mods, average_depth_g1, average_depth_g2, round(canonical_wam_g1, NUM_DPS), round(canonical_wam_g2, NUM_DPS), round(non_canonical_wam_g1, NUM_DPS), round(non_canonical_wam_g2, NUM_DPS), round(total_wam_g1, NUM_DPS), round(total_wam_g2, NUM_DPS), test_stat, pval]
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
 
