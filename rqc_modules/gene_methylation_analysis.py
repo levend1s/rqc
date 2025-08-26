@@ -93,13 +93,13 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
         a_code = 't'
         pysam_mod_tuple_code = 'm6A_rev'
 
-    gene_length = row['end'] - row['start'] + 1
+    gene_length = row['end'] - row['start'] + 1 + (coverage_padding * 2)
     d_coverage = {
         "label": label,
         "ID": row.ID,
         "type": row.type,
         "strand": row.strand,
-        "start": row.start,
+        "start": row.start - coverage_padding,
         "gene_length": gene_length,
         "max_read_depth": 0,
         "total_depth": [0] * gene_length,
@@ -110,8 +110,8 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
 
     for column in samfile.pileup(
         contig=row['seq_id'], 
-        start=row['start'] - 1, 
-        stop=row['end'],
+        start=row['start'] - 1 - coverage_padding, 
+        stop=row['end'] + coverage_padding,
         # min_mapping_quality=MIN_MAPQ,
         max_depth=PYSAM_PILEUP_MAX_DEPTH,
         flag_require=row_flags_requires,
@@ -122,15 +122,15 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
         # take the number of aligned reads at this column position (column.n) minus the number of aligned reads which have either a skip or delete base at this column position (r.query_position)
         column_bases_read = list(column.get_query_sequences(add_indels=True))
         
-        d_coverage['total_depth'][column.reference_pos - row['start']] = len(column_bases_read)
-        d_coverage['count_a'][column.reference_pos - row['start']] = column_bases_read.count(a_code)
+        d_coverage['total_depth'][column.reference_pos - d_coverage['start']] = len(column_bases_read)
+        d_coverage['count_a'][column.reference_pos - d_coverage['start']] = column_bases_read.count(a_code)
 
     max_read_depth = max(d_coverage['total_depth'])
     if max_read_depth < read_depth_threshold:
         row_summary = [label, row.ID, row.type, row.strand, max_read_depth, []]
         print("\t".join(map(str, row_summary)))
 
-        return row_summary
+        return d_coverage
 
     d_coverage['max_read_depth'] = max_read_depth
 
@@ -173,8 +173,8 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
     for pos, count in genomic_mod_counts.items():
 
         # this ignores mods in a read that are outside of the gene annotation
-        if pos <= row.end and pos >= row.start:
-            d_coverage['m6A'][pos - row['start']] = count
+        if pos <= (row.end + coverage_padding) and pos >= (row.start - coverage_padding):
+            d_coverage['m6A'][pos - d_coverage['start']] = count
 
     mod_ratio = [(a / b) if a > 0 and b > 0 else 0 for a, b in zip(d_coverage['m6A'], d_coverage['total_depth'])]
     genomic_coords = [i + d_coverage['start'] for i in range(d_coverage['gene_length'])]
@@ -356,29 +356,34 @@ def gene_methylation_analysis(args):
             total_wam_g1 = sum(v * w for v, w in zip(these_rows_g1.total_wam.to_list(), these_rows_g1.max_depth.to_list())) / sum(these_rows_g1.max_depth.to_list())
             total_wam_g2 = sum(v * w for v, w in zip(these_rows_g2.total_wam.to_list(), these_rows_g2.max_depth.to_list())) / sum(these_rows_g2.max_depth.to_list())
 
-            group_depth = these_rows_g1.max_depth.to_list() + these_rows_g2.max_depth.to_list()
-            group_canonical_wam = these_rows_g1.canonical_wam.to_list() + these_rows_g2.canonical_wam.to_list()
-            approx_modified = [v * w for v, w in zip(group_depth, group_canonical_wam)]
 
-            # from chatGPT
-            data = pandas.DataFrame({
-                'group': [group_1_prefix] * len(group1_bam_labels) + [group_2_prefix] * len(group2_bam_labels),
-                'approx_modified': approx_modified,
-                'depth': group_depth
-            })
+            if len(canonical_mods) > 0:
+                group_depth = these_rows_g1.max_depth.to_list() + these_rows_g2.max_depth.to_list()
+                group_canonical_wam = these_rows_g1.canonical_wam.to_list() + these_rows_g2.canonical_wam.to_list()
+                approx_modified = [v * w for v, w in zip(group_depth, group_canonical_wam)]
 
-            data['group_binary'] = (data['group'] == group_2_prefix).astype(int)
+                # from chatGPT
+                data = pandas.DataFrame({
+                    'group': [group_1_prefix] * len(group1_bam_labels) + [group_2_prefix] * len(group2_bam_labels),
+                    'approx_modified': approx_modified,
+                    'depth': group_depth
+                })
 
-            # Failures column
-            data['approx_unmodified'] = data['depth'] - data['approx_modified']
-            response = data[['approx_modified', 'approx_unmodified']]
+                data['group_binary'] = (data['group'] == group_2_prefix).astype(int)
 
-            # Fit Binomial GLM
-            model = sm.GLM(response, sm.add_constant(data['group_binary']), family=sm.families.Binomial())
-            result = model.fit()
-            # print(result.summary())
-            test_stat = result.params.group_binary
-            pval = result.pvalues.group_binary
+                # Failures column
+                data['approx_unmodified'] = data['depth'] - data['approx_modified']
+                response = data[['approx_modified', 'approx_unmodified']]
+
+                # Fit Binomial GLM
+                model = sm.GLM(response, sm.add_constant(data['group_binary']), family=sm.families.Binomial())
+                result = model.fit()
+                # print(result.summary())
+                test_stat = result.params.group_binary
+                pval = result.pvalues.group_binary
+            else:
+                test_stat = 0
+                pval = 0
 
             row_summary = [row.ID, row.type, row.strand, canonical_mods, average_depth_g1, average_depth_g2, canonical_wam_g1, canonical_wam_g2, non_canonical_wam_g1, non_canonical_wam_g2, total_wam_g1, total_wam_g2, test_stat, pval]
             results.append(row_summary)
