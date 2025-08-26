@@ -19,6 +19,54 @@ import multiprocessing
 multiprocessing.set_start_method('fork')  # Use 'fork' instead of 'spawn'
 numpy.seterr(divide='ignore', invalid='ignore')
 
+def calculate_wam(coverage, canonical_mod_prop_threshold, read_depth_threshold, use_canonical_mods = None):
+    # now I have coverages for m6A, total depth and Adenosines per gene
+    # Now i'd like to calculate average methylation for the gene. I want to do this for only "canonical" m6A positions (defined by a m6A/A ratio), for non-canonical m6A positions, and a total m6A/A ratio.
+    # first, create a new list of m6A/A ratios for each position
+    # Then create a list of tuples of (m6A/A ratio, read depth) for each position, this will allow me to calculate a weighted average for the m6A/A ratio
+    # Split this into canonical and non-canonical mod positions, where canonical mod positions are defined by the m6A/A ratio being above the CANNONICAL_MOD_PROP_THRESHOLD
+    
+    mod_ratio = [(a / b) if a > 0 and b > 0 else 0 for a, b in zip(coverage['m6A'], coverage['total_depth'])]
+    genomic_coords = [i + coverage['start'] for i in range(coverage['gene_length'])]
+
+    tuples = zip(mod_ratio, coverage['total_depth'], coverage['m6A'], genomic_coords)
+
+    if use_canonical_mods:
+        canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if d in use_canonical_mods]
+        non_canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if d in use_canonical_mods]
+    else:
+        canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if a >= canonical_mod_prop_threshold and b >= read_depth_threshold]
+        non_canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if a < canonical_mod_prop_threshold or b < read_depth_threshold]
+
+    if len(canonical_mods) > 0:
+        weighted_average_canonical_mod = sum(a * b for a, b, _, _ in canonical_mods) / sum([b for _, b, _, _ in canonical_mods])
+        if math.isnan(weighted_average_canonical_mod):
+            weighted_average_canonical_mod = 0
+
+        canonical_mods_genomic_pos = [d for _, _, _, d in canonical_mods]
+        canonical_mod_ratios = [a for a, _, _, _ in canonical_mods]
+    else:
+        weighted_average_canonical_mod = 0
+        canonical_mods_genomic_pos = []
+        canonical_mod_ratios = []
+
+    if len(non_canonical_mods) > 0:
+        weighted_average_non_canonical_mod = sum(a * b for a, b, _, _ in non_canonical_mods) / sum([b for _, b, _, _ in non_canonical_mods])
+        if math.isnan(weighted_average_non_canonical_mod):
+            weighted_average_non_canonical_mod = 0
+    else:
+        weighted_average_non_canonical_mod = 0
+
+    sum_a = sum(coverage['count_a'])
+    if sum_a > 0:
+        total_mod_to_unmodified_ratio = sum(coverage['m6A']) / sum_a
+    else:
+        total_mod_to_unmodified_ratio = 0
+
+    return canonical_mods_genomic_pos, canonical_mod_ratios, weighted_average_canonical_mod, weighted_average_non_canonical_mod, total_mod_to_unmodified_ratio
+
+    
+
 # this is fine as long as reads_in_region is passed by reference cause its big
 def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold, read_depth_threshold, canonical_mod_prop_threshold):
     gene_length = row['end'] - row['start']
@@ -47,6 +95,13 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
 
     gene_length = row['end'] - row['start'] + 1
     d_coverage = {
+        "label": label,
+        "ID": row.ID,
+        "type": row.type,
+        "strand": row.strand,
+        "start": row.start,
+        "gene_length": gene_length,
+        "max_read_depth": 0,
         "total_depth": [0] * gene_length,
         "count_a": [0] * gene_length,
         "count_t": [0] * gene_length,
@@ -72,11 +127,12 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
 
     max_read_depth = max(d_coverage['total_depth'])
     if max_read_depth < read_depth_threshold:
-        row_summary = [label, row.ID, row.type, row.strand, max_read_depth, [], 0, 0, 0]
+        row_summary = [label, row.ID, row.type, row.strand, max_read_depth, []]
         print("\t".join(map(str, row_summary)))
 
         return row_summary
 
+    d_coverage['max_read_depth'] = max_read_depth
 
     read_indexes_to_process = []
     # filter reads
@@ -120,45 +176,20 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
         if pos <= row.end and pos >= row.start:
             d_coverage['m6A'][pos - row['start']] = count
 
-    # mod_ratio = numpy.array(d_coverage['m6A']) / numpy.array(d_coverage['total_depth'])
-
     mod_ratio = [(a / b) if a > 0 and b > 0 else 0 for a, b in zip(d_coverage['m6A'], d_coverage['total_depth'])]
-    genomic_coords = [i + row['start'] for i in range(gene_length)]
-    mod_ratio_read_depth_tuples = list(zip(mod_ratio, d_coverage['total_depth'], d_coverage['m6A'], genomic_coords))
+    genomic_coords = [i + d_coverage['start'] for i in range(d_coverage['gene_length'])]
 
+    tuples = zip(mod_ratio, d_coverage['total_depth'], genomic_coords)
 
-    # now I have coverages for m6A, total depth and Adenosines per gene
-    # Now i'd like to calculate average methylation for the gene. I want to do this for only "canonical" m6A positions (defined by a m6A/A ratio), for non-canonical m6A positions, and a total m6A/A ratio.
-    # first, create a new list of m6A/A ratios for each position
-    # Then create a list of tuples of (m6A/A ratio, read depth) for each position, this will allow me to calculate a weighted average for the m6A/A ratio
-    # Split this into canonical and non-canonical mod positions, where canonical mod positions are defined by the m6A/A ratio being above the CANNONICAL_MOD_PROP_THRESHOLD
-    canonical_mods = [(a, b, c, d) for a, b, c, d in mod_ratio_read_depth_tuples if a >= canonical_mod_prop_threshold and b >= read_depth_threshold]
-    non_canonical_mods = [(a, b, c, d) for a, b, c, d in mod_ratio_read_depth_tuples if a < canonical_mod_prop_threshold or b < read_depth_threshold]
+    canonical_mods = [c for a, b, c in tuples if a >= canonical_mod_prop_threshold and b >= read_depth_threshold]
 
-    if len(canonical_mods) > 0:
-        weighted_average_canonical_mod = sum(a * b for a, b, c, d in canonical_mods) / sum([b for a, b, c, d in canonical_mods])
-        if math.isnan(weighted_average_canonical_mod):
-            weighted_average_canonical_mod = 0
-    else:
-        weighted_average_canonical_mod = 0
+    d_coverage['canonical_mods'] = canonical_mods
 
-    if len(non_canonical_mods) > 0:
-        weighted_average_non_canonical_mod = sum(a * b for a, b, c, d in non_canonical_mods) / sum([b for a, b, c, d in non_canonical_mods])
-        if math.isnan(weighted_average_non_canonical_mod):
-            weighted_average_non_canonical_mod = 0
-    else:
-        weighted_average_non_canonical_mod = 0
-
-    sum_a = sum(d_coverage['count_a'])
-    if sum_a > 0:
-        total_mod_to_unmodified_ratio = sum(d_coverage['m6A']) / sum_a
-    else:
-        total_mod_to_unmodified_ratio = 0
-
-    row_summary = [label, row.ID, row.type, row.strand, max_read_depth, [d for a, b, c, d in canonical_mods], weighted_average_canonical_mod, weighted_average_non_canonical_mod, total_mod_to_unmodified_ratio]
+    row_summary = [label, row.ID, row.type, row.strand, max_read_depth, canonical_mods]
     print("\t".join(map(str, row_summary)))
 
-    return row_summary
+    return d_coverage
+
 
 
 # NOTE i do not think this is base and read accurate
@@ -202,17 +233,16 @@ def gene_methylation_analysis(args):
 
     bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
 
+    # CALCULATE COVERAGES
     raw_summary_header = [
         "label",
         "ID",
         "type",
         "strand",
         "max_depth",
-        "canonical_mods",
-        "canonical_wam",
-        "non_canonical_wam",
-        "total_wam"
+        "canonical_mods"
     ]
+    
     print("\t".join(map(str, raw_summary_header)))
 
     raw_results = []
@@ -233,10 +263,56 @@ def gene_methylation_analysis(args):
 
         raw_results += label_raw_results
 
-    raw_results_df = pandas.DataFrame(raw_results, columns=raw_summary_header)
+    # raw_results_df = pandas.DataFrame(raw_results, columns=raw_summary_header)
+
+    # CALCULATE WAMS (and if needed, identify common canonical mods for treatment comparison)
+    wam_results_header = [
+        "label",
+        "ID",
+        "type",
+        "strand",
+        "max_depth",
+        "canonical_mods",
+        "canonical_mod_ratios",
+        "canonical_wam",
+        "non_canonical_wam",
+        "total_wam"
+    ]
+    print("\t".join(map(str, wam_results_header)))
+    wam_results = []
+    if COMPARE_METHYLATION_BETWEEN_TREATMENTS:
+        group_1_prefix = COMPARE_METHYLATION_BETWEEN_TREATMENTS[0]
+        group_2_prefix = COMPARE_METHYLATION_BETWEEN_TREATMENTS[1]
+
+        group1_bam_labels = [l for l in bam_labels if l.startswith(group_1_prefix)]
+        group2_bam_labels = [l for l in bam_labels if l.startswith(group_2_prefix)]
+
+        d_canonical_mods = {}
+
+        for coverages in raw_results:
+            if coverages['label'].startswith(group_1_prefix):
+                if coverages['ID'] not in d_canonical_mods:
+                    d_canonical_mods[coverages['ID']] = coverages['canonical_mods']
+                else:
+                    d_canonical_mods[coverages['ID']] += coverages['canonical_mods']
+
+        for key, val in d_canonical_mods.items():
+            d_canonical_mods[key] = list(set(val))
+
+    for coverages in raw_results:
+        if COMPARE_METHYLATION_BETWEEN_TREATMENTS:
+            canonical_mod_positions, canonical_mod_ratios, wam_canonical, wam_non_canonical, wam_total = calculate_wam(coverages, CANNONICAL_MOD_PROP_THRESHOLD, READ_DEPTH_THRESHOLD, d_canonical_mods[coverages['ID']])
+        else:
+            canonical_mod_positions, canonical_mod_ratios, wam_canonical, wam_non_canonical, wam_total = calculate_wam(coverages, CANNONICAL_MOD_PROP_THRESHOLD, READ_DEPTH_THRESHOLD)
+
+        row_summary = [coverages['label'], coverages['ID'], coverages['type'], coverages['strand'], coverages['max_read_depth'], canonical_mod_positions, canonical_mod_ratios, wam_canonical, wam_non_canonical, wam_total]
+        wam_results.append(row_summary)
+        print("\t".join(map(str, row_summary)))
+
+    wam_results_df = pandas.DataFrame(wam_results, columns=wam_results_header)
 
     if OUTPUT:
-        raw_results_df.to_csv("raw_{}".format(OUTPUT), sep='\t', index=False)
+        wam_results_df.to_csv(OUTPUT, sep='\t', index=False)
 
     if COMPARE_METHYLATION_BETWEEN_TREATMENTS:
         summary_header = [
@@ -257,26 +333,16 @@ def gene_methylation_analysis(args):
         ]
         print("\t".join(map(str, summary_header)))
         results = []
-        group_1_prefix = COMPARE_METHYLATION_BETWEEN_TREATMENTS[0]
-        group_2_prefix = COMPARE_METHYLATION_BETWEEN_TREATMENTS[1]
 
-        group1_rows = raw_results_df[raw_results_df['label'].str.startswith(group_1_prefix)]
-        group2_rows = raw_results_df[raw_results_df['label'].str.startswith(group_2_prefix)]
-
-        group1_bam_labels = group1_rows.label.to_list()
-        group2_bam_labels = group2_rows.label.to_list()
+        group1_rows = wam_results_df[wam_results_df['label'].str.startswith(group_1_prefix)]
+        group2_rows = wam_results_df[wam_results_df['label'].str.startswith(group_2_prefix)]
 
         # go through each row, determine quantify change in 
-        for row_index, row in matches.iterrows():
+        for _, row in matches.iterrows():
             these_rows_g1 = group1_rows[group1_rows['ID'] == row.ID]
             these_rows_g2 = group2_rows[group2_rows['ID'] == row.ID]
 
-            canonical_mods = []
-
-            for _, row_result in raw_results_df[raw_results_df.ID == row.ID].iterrows():
-                canonical_mods.append(row_result.canonical_mods)
-
-            canonical_mods = list(set([item for sublist in canonical_mods for item in sublist]))
+            canonical_mods = d_canonical_mods[row.ID]
 
             average_depth_g1 = int(sum(these_rows_g1.max_depth.to_list()) / len(these_rows_g1.max_depth.to_list()))
             average_depth_g2 = int(sum(these_rows_g2.max_depth.to_list()) / len(these_rows_g2.max_depth.to_list()))
@@ -321,7 +387,7 @@ def gene_methylation_analysis(args):
         summary_df = pandas.DataFrame(results, columns=summary_header)
 
         if OUTPUT:
-            summary_df.to_csv(OUTPUT, sep='\t', index=False)
+            summary_df.to_csv("compare_{}".format(OUTPUT), sep='\t', index=False)
 
 
 
