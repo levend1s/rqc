@@ -241,49 +241,65 @@ def approximate_tes(args):
 
         # find min, maxs, 
         for label in bam_labels:
-            if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
-                min_tts = min(d_tts[label][gene_id])
+            if len(d_tts[label][row.ID]) < READ_DEPTH_THRESHOLD:
+                min_tts = 0
+                max_tts = 0
+                max_poly_a = 0
+            else:
+                if min_tts > min(d_tts[label][gene_id]) or min_tts == 0:
+                    min_tts = min(d_tts[label][gene_id])
 
-            if max_tts < max(d_tts[label][gene_id]):
-                max_tts = max(d_tts[label][gene_id])
+                if max_tts < max(d_tts[label][gene_id]):
+                    max_tts = max(d_tts[label][gene_id])
 
-            if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
-                max_poly_a = max(d_poly_a_lengths[label][gene_id])
+                if max_poly_a < max(d_poly_a_lengths[label][gene_id]):
+                    max_poly_a = max(d_poly_a_lengths[label][gene_id])
         
         x_ticks = range(min_tts, max_tts)
 
         # calculate hists
         # print("{} - Generating transcript end site histograms...".format(row['ID']))
+        max_hist_count_poly_a = 0
+        max_hist_count_tts = 0
+
         for label in bam_labels:
-            poly_a_length_range = list(range(1, max(d_poly_a_lengths[label][gene_id]) + 1))
-            poly_a_hist = [d_poly_a_lengths[label][gene_id].count(i) for i in poly_a_length_range]
-            
-            unique_tes = set(d_tts[label][gene_id])
-            tts_hist = [(d_tts[label][gene_id].count(i), i) for i in unique_tes]
+            if len(d_tts[label][row.ID]) < READ_DEPTH_THRESHOLD or len(d_poly_a_lengths[label][gene_id]) < READ_DEPTH_THRESHOLD:
+                d_poly_a_length_hists[label][row['ID']] = []
+                d_tts_hist[label][row['ID']] = []
+            else:
+                poly_a_length_range = list(range(1, max(d_poly_a_lengths[label][gene_id]) + 1))
+                poly_a_hist = [d_poly_a_lengths[label][gene_id].count(i) for i in poly_a_length_range]
+                
+                unique_tes = set(d_tts[label][gene_id])
+                tts_hist = [(d_tts[label][gene_id].count(i), i) for i in unique_tes]
 
-            # split the tuple cause here we're interested in the biggest count in the hist
-            e0 = [e[0] for e in tts_hist]
-            if max_hist_count_tts < max(e0):
-                max_hist_count_tts = max(e0)
+                # split the tuple cause here we're interested in the biggest count in the hist
+                e0 = [e[0] for e in tts_hist]
+                if max_hist_count_tts < max(e0):
+                    max_hist_count_tts = max(e0)
 
-            if max_hist_count_poly_a < max(poly_a_hist):
-                max_hist_count_poly_a = max(poly_a_hist)
+                if max_hist_count_poly_a < max(poly_a_hist):
+                    max_hist_count_poly_a = max(poly_a_hist)
 
-            d_poly_a_length_hists[label][row['ID']] = poly_a_hist
-            d_tts_hist[label][row['ID']] = tts_hist
+                d_poly_a_length_hists[label][row['ID']] = poly_a_hist
+                d_tts_hist[label][row['ID']] = tts_hist
 
 
         # generate dennsity plots
+        max_density = 0
         if len(matches) == 1:
             # print("{} - Generating transcript end site density information...".format(row['ID']))
-            for label in bam_labels:
-                kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id], bw_method=0.1)
-                smoothed_tts_hist = kernel(x_ticks)
+            if len(d_tts[label][row.ID]) < READ_DEPTH_THRESHOLD:
+                d_kdes[label][row['ID']] = []
+            else:
+                for label in bam_labels:
+                    kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id], bw_method=0.1)
+                    smoothed_tts_hist = kernel(x_ticks)
 
-                d_kdes[label][row['ID']] = smoothed_tts_hist
+                    d_kdes[label][row['ID']] = smoothed_tts_hist
 
-                if max_density < max(smoothed_tts_hist):
-                    max_density = max(smoothed_tts_hist)
+                    if max_density < max(smoothed_tts_hist):
+                        max_density = max(smoothed_tts_hist)
 
         d_max_hist_count_poly_a[gene_id] = max_hist_count_poly_a
         d_max_hist_count_tts[gene_id] = max_hist_count_tts
@@ -291,48 +307,50 @@ def approximate_tes(args):
         d_min_tts[gene_id] = min_tts
         d_max_tts[gene_id] = max_tts
         d_max_density[gene_id] = max_density
-        d_x_ticks[row['ID']] = x_ticks
+        d_x_ticks[gene_id] = x_ticks
 
         for label in bam_labels:
-            tts_hist = [d_tts[label][gene_id].count(i) for i in range(min_tts, max_tts)]
-            peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=READ_DEPTH_THRESHOLD)
-            
-            genomic_apa_sites = peaks + min_tts
-            max_height_apa = 0
-            canonical_pa_site = 0
-            second_max_height_apa = 0
-
-            if len(peaks) > 1:
-                sorted_genomic_peaks_by_height = sorted(zip(genomic_apa_sites, peak_dict['peak_heights']), key=lambda x: x[1])
-                max_height_apa = sorted_genomic_peaks_by_height[-1][1]
-                canonical_pa_site = sorted_genomic_peaks_by_height[-1][0]
-
-                second_max_height_apa = sorted_genomic_peaks_by_height[-2][1]
-                apa_score = second_max_height_apa / max_height_apa
-            elif len(peaks) == 1:
-                canonical_pa_site = genomic_apa_sites[0]
-                apa_score = 0
-            else:
+            if len(d_tts[label][row.ID]) < READ_DEPTH_THRESHOLD:
+                d_kdes[label][row['ID']] = []
+                num_tts = 0
                 canonical_pa_site = 0
                 apa_score = 0
-
-            pa_site_proportions = []
-            POLY_ADENYLATION_TOLERANCE = 10
-
-            for p in genomic_apa_sites:
-                rt_prop = find_num_read_throughs(row.strand, d_tts[label][gene_id], p, POLY_ADENYLATION_TOLERANCE) / len(d_tts[label][gene_id])
+                genomic_apa_sites = []
+                pa_site_counts = []
+                pa_site_proportions = []
+            else:
+                tts_hist = [d_tts[label][gene_id].count(i) for i in range(min_tts, max_tts)]
+                peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=READ_DEPTH_THRESHOLD)
                 
-                # print("p: {}".format(p))
+                genomic_apa_sites = peaks + min_tts
+                max_height_apa = 0
+                canonical_pa_site = 0
+                second_max_height_apa = 0
 
-                # print("num_read_throughs: {}".format(num_read_throughs))
-                # print("num_normal: {}".format(num_normal))
-                #rt_prop = num_read_throughs / num_normals
+                if len(peaks) > 1:
+                    sorted_genomic_peaks_by_height = sorted(zip(genomic_apa_sites, peak_dict['peak_heights']), key=lambda x: x[1])
+                    max_height_apa = sorted_genomic_peaks_by_height[-1][1]
+                    canonical_pa_site = sorted_genomic_peaks_by_height[-1][0]
 
-                pa_site_proportions.append(rt_prop)
+                    second_max_height_apa = sorted_genomic_peaks_by_height[-2][1]
+                    apa_score = second_max_height_apa / max_height_apa
+                elif len(peaks) == 1:
+                    canonical_pa_site = genomic_apa_sites[0]
+                    apa_score = 0
+                else:
+                    canonical_pa_site = 0
+                    apa_score = 0
 
-            num_tts = len(d_tts[label][gene_id])
-            pa_site_counts = list(peak_dict['peak_heights'])
-            d_genomic_apa_sites[label][row.ID] = genomic_apa_sites
+                pa_site_proportions = []
+                POLY_ADENYLATION_TOLERANCE = 10
+
+                for p in genomic_apa_sites:
+                    rt_prop = find_num_read_throughs(row.strand, d_tts[label][gene_id], p, POLY_ADENYLATION_TOLERANCE) / len(d_tts[label][gene_id])
+                    pa_site_proportions.append(rt_prop)
+
+                num_tts = len(d_tts[label][gene_id])
+                pa_site_counts = list(peak_dict['peak_heights'])
+                d_genomic_apa_sites[label][row.ID] = genomic_apa_sites
 
             # TODO add max_read_depth
             row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, round(apa_score, NUM_DPS), genomic_apa_sites, [int(x) for x in pa_site_counts], [round(float(x), NUM_DPS) for x in pa_site_proportions]]
@@ -353,6 +371,8 @@ def approximate_tes(args):
             "strand",
             "3p_annotation_end",
             "canonical_pa_site",
+            "average_num_tts_g1",
+            "average_num_tts_g2",
             "average_rt_prop_g1",
             "average_rt_prop_g2",
             "t_stat",
@@ -366,8 +386,8 @@ def approximate_tes(args):
         group1_rows = raw_summary_df[raw_summary_df['label'].str.startswith(group_1_prefix)]
         group2_rows = raw_summary_df[raw_summary_df['label'].str.startswith(group_2_prefix)]
 
-        group1_bam_labels = group1_rows.label.to_list()
-        group2_bam_labels = group2_rows.label.to_list()
+        group1_bam_labels = [l for l in bam_labels if l.startswith(group_1_prefix)]
+        group2_bam_labels = [l for l in bam_labels if l.startswith(group_2_prefix)]
 
         # go through each row, determine quantify change in 
         for row_index, row in matches.iterrows():
@@ -377,34 +397,38 @@ def approximate_tes(args):
             else:   
                 annotation_row_3p_end = row['start']
             these_rows_g1 = group1_rows[group1_rows['ID'] == row.ID]
-            # these_rows_g2 = group2_rows[group2_rows['ID'] == row.ID]
+            these_rows_g2 = group2_rows[group2_rows['ID'] == row.ID]
 
             # look through both treatments and keep only apa sites common to all of them
             canonical_pas = these_rows_g1.canonical_pa_site.to_list()
             canonical_pas = [x for x in canonical_pas if x > 0]
-            average_canonical_pa = int(sum(canonical_pas) / len(canonical_pas))
 
-            group1_num_read_throughs = []
-            group2_num_read_throughs = []
-
-            group1_read_through_props = []
-            group2_read_through_props = []
-
-            for label in group1_bam_labels:
-                num_read_throughs = find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE)
-                group1_num_read_throughs.append(num_read_throughs)
-                group1_read_through_props.append(num_read_throughs / len(d_tts[label][gene_id]))
-            for label in group2_bam_labels:
-                num_read_throughs = find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE)
-                group2_num_read_throughs.append(find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE))
-                group2_read_through_props.append(num_read_throughs / len(d_tts[label][gene_id]))
-
-            group1_average_rt_prop = sum(group1_read_through_props) / len(group1_read_through_props)
-            group2_average_rt_prop = sum(group2_read_through_props) / len(group2_read_through_props)
-
-            num_tes = [len(d_tts[l][gene_id]) for l in bam_labels]
+            average_num_tts_g1 = int(sum(these_rows_g1.tts_count.to_list()) / len(these_rows_g1.tts_count.to_list()))
+            average_num_tts_g2 = int(sum(these_rows_g2.tts_count.to_list()) / len(these_rows_g2.tts_count.to_list()))
 
             if len(canonical_pas) > 0:
+                average_canonical_pa = int(sum(canonical_pas) / len(canonical_pas))
+
+                group1_num_read_throughs = []
+                group2_num_read_throughs = []
+
+                group1_read_through_props = []
+                group2_read_through_props = []
+
+                for label in group1_bam_labels:
+                    num_read_throughs = find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE)
+                    group1_num_read_throughs.append(num_read_throughs)
+                    group1_read_through_props.append(num_read_throughs / len(d_tts[label][gene_id]))
+                for label in group2_bam_labels:
+                    num_read_throughs = find_num_read_throughs(row.strand, d_tts[label][gene_id], average_canonical_pa, POLY_ADENYLATION_TOLERANCE)
+                    group2_num_read_throughs.append(num_read_throughs)
+                    group2_read_through_props.append(num_read_throughs / len(d_tts[label][gene_id]))
+
+                group1_average_rt_prop = sum(group1_read_through_props) / len(group1_read_through_props)
+                group2_average_rt_prop = sum(group2_read_through_props) / len(group2_read_through_props)
+
+                num_tes = [len(d_tts[l][gene_id]) for l in bam_labels]
+
                 # from chatGPT
                 data = pandas.DataFrame({
                     'group': [group_1_prefix] * len(group1_bam_labels) + [group_2_prefix] * len(group2_bam_labels),
@@ -425,21 +449,24 @@ def approximate_tes(args):
                 test_stat = result.params.group_binary
                 pval = result.pvalues.group_binary
             else:
+                average_canonical_pa = 0
+                group1_average_rt_prop = 0
+                group2_average_rt_prop = 0
                 test_stat = 0
                 pval = 0
 
-            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, round(group1_average_rt_prop, NUM_DPS), round(group2_average_rt_prop, NUM_DPS), test_stat, pval]
+            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, average_num_tts_g1, average_num_tts_g2, round(group1_average_rt_prop, NUM_DPS), round(group2_average_rt_prop, NUM_DPS), test_stat, pval]
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
 
         summary_df = pandas.DataFrame(results, columns=summary_header)
 
         if OUTFILE:
-            summary_df.to_csv(OUTFILE, sep='\t', index=False)
+            summary_df.to_csv("compare_{}".format(OUTFILE), sep='\t', index=False)
 
 
     # --------- PLOT ---------- #
-    if len(matches) == 1:
+    if len(matches) == 1 and len(d_tts[label][row.ID]) >= READ_DEPTH_THRESHOLD:
         row = matches.iloc[0]
         gene_id = row.ID
         if row.strand == "-":

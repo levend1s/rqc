@@ -160,3 +160,6 @@ python rqc.py gene_methylation_analysis -a ~/Downloads/Pfalciparum3D7/gff/data/P
 python rqc.py gene_methylation_analysis -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids PF3D7_1338200.1 -d 20 -r 0.7
 time python rqc.py gene_methylation_analysis -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids $(jq -r '.Pf3D7_01_v3_mRNA[]' ./pfal_mRNA_exon_counts.json) -d 10 -r 0.5
 ```
+
+
+python rqc.py gene_methylation_analysis -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i laptop_samples.txt --type mRNA -d 10 -r 0.5 --compare_methylation_between_treatments 28C 28K -p 500 -o mrna_gene_methylation_analysis.tsv --exclude_contigs Pf3D7_API_v3 Pf3D7_MIT_v3
