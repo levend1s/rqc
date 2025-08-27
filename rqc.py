@@ -134,18 +134,13 @@ def build_parser():
 
     gene_methylation_analysis_parser.set_defaults(func=gene_methylation_analysis.gene_methylation_analysis)
 
-
-    # ---- weighted_methylation_change_analysis command ----
-
-    # ---- tes_vs_wam_analysis command ----
-
-    # ---- plot_tes command ----
-    # colour by canonical m6A
-    # filter by poly-adenylation
-
     # ---- find_gene_neighbours command ----
 
     # ---- gene_neighbour_analysis command ----
+
+    # ---- filter_bam_by_mod command ----
+
+    # ---- m6A_specific_tes_analysis command ----
 
     # ---- logo command ----
 
