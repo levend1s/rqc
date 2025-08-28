@@ -12,7 +12,6 @@ from rqc_modules import plot_relative_distance
 from rqc_modules import plot_coverage
 from rqc_modules import sequence_logo
 from rqc_modules import approximate_tes
-from rqc_modules import plot_entropy
 from rqc_modules import gene_methylation_analysis
 
 
