@@ -13,6 +13,7 @@ from rqc_modules import plot_coverage
 from rqc_modules import sequence_logo
 from rqc_modules import approximate_tes
 from rqc_modules import gene_methylation_analysis
+from rqc_modules import filter_bam_by_mod
 
 
 def build_parser():
@@ -138,6 +139,17 @@ def build_parser():
     # ---- gene_neighbour_analysis command ----
 
     # ---- filter_bam_by_mod command ----
+    filter_bam_by_mod_parser = subparsers.add_parser("filter_bam_by_mod", help="filter a bam file by modification status in a region")
+    filter_bam_by_mod_parser.add_argument("-i", "--input",              required=True,  help="input file listing coverage data.")
+    filter_bam_by_mod_parser.add_argument("-t", "--mod_prob_threshold", required=False, type=float, default=0.95, help="input file listing coverage data")
+    filter_bam_by_mod_parser.add_argument("--include",  required=True,  type=int, nargs="*", help="filter for only reads without m6A modification at these positions")
+    filter_bam_by_mod_parser.add_argument("-c", "--contig",             required=True,  help="output filtered bam file.")
+    filter_bam_by_mod_parser.add_argument("-s", "--strand",             required=True,  help="output filtered bam file.")
+    filter_bam_by_mod_parser.add_argument("-m", "--mod",                required=False,  default="m6A", help="output filtered bam file.")
+
+    filter_bam_by_mod_parser.set_defaults(func=filter_bam_by_mod.filter_bam_by_mod)
+
+    
 
     # ---- m6A_specific_tes_analysis command ----
 

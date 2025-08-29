@@ -163,3 +163,8 @@ time python rqc.py gene_methylation_analysis -a ~/Downloads/Pfalciparum3D7/gff/d
 
 
 python rqc.py gene_methylation_analysis -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i laptop_samples.txt --type mRNA -d 10 -r 0.5 --compare_methylation_between_treatments 28C 28K -p 500 -o mrna_gene_methylation_analysis.tsv --exclude_contigs Pf3D7_API_v3 Pf3D7_MIT_v3
+
+# filter_bam_by_mod
+```
+python rqc.py filter_bam_by_mod --include 213060 -s + -c Pf3D7_02_v3 -i laptop_samples.txt
+```
