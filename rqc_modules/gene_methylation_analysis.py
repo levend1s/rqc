@@ -19,7 +19,7 @@ import multiprocessing
 multiprocessing.set_start_method('fork')  # Use 'fork' instead of 'spawn'
 numpy.seterr(divide='ignore', invalid='ignore')
 
-NUM_DPS = 4
+NUM_DPS = 8
 
 def calculate_wam(coverage, canonical_mod_prop_threshold, read_depth_threshold, use_canonical_mods = None):
     # now I have coverages for m6A, total depth and Adenosines per gene
@@ -34,11 +34,11 @@ def calculate_wam(coverage, canonical_mod_prop_threshold, read_depth_threshold, 
     mod_ratio = [(a / b) if a > 0 and b > 0 else 0 for a, b in zip(coverage['m6A'], coverage['total_depth'])]
     genomic_coords = [i + coverage['start'] for i in range(coverage['gene_length'])]
 
-    tuples = zip(mod_ratio, coverage['total_depth'], coverage['m6A'], genomic_coords)
+    tuples = list(zip(mod_ratio, coverage['total_depth'], coverage['m6A'], genomic_coords))
 
     if use_canonical_mods:
         canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if d in use_canonical_mods]
-        non_canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if d in use_canonical_mods]
+        non_canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if d not in use_canonical_mods]
     else:
         canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if a >= canonical_mod_prop_threshold and b >= read_depth_threshold]
         non_canonical_mods = [(a, b, c, d) for a, b, c, d in tuples if a < canonical_mod_prop_threshold or b < read_depth_threshold]
