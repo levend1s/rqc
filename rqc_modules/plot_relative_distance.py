@@ -79,10 +79,20 @@ def plot_relative_distance(args):
         'NGG': 'green',
         'NGG_count': 'green',
         'TTTN': 'blue',
-        'TTTN_count': 'blue'
+        'TTTN_count': 'blue',
+        'm6a': 'purple',
+        'm6a_count': 'purple',
+        'annotation_three_p': 'green',
+        'annotation_three_p_count': 'green'
     }
 
     fig, axes = plt.subplots()
+
+    d_labels = {
+        'annotation_three_p': 'annotated 3\' end',
+        'm6a': 'canonical m6A'
+    }
+
 
     for k, v in d_offset_hists.items():
         if PLOT_COUNTS:
@@ -94,9 +104,9 @@ def plot_relative_distance(args):
         axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=d_colors[k])
 
     # TODO HACK
-    CUSTOM_Y_MAX = 60
+    CUSTOM_Y_MAX = None
 
-    axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
+    axes.axvline(x=0, color='grey', ls="--", linewidth=1.0)
     # axes.set_ylabel('count')
     axes.set_ylabel('site frequency (%)')
 
@@ -109,23 +119,26 @@ def plot_relative_distance(args):
     axes.legend()
     plt.legend(loc="upper right")
 
+    if OUTPUT:
+        plt.savefig("plot_relative_distance_offsets_{}".format(OUTPUT), dpi=300, transparent=True, format=OUTPUT_FORMAT)
+
     # KDE plot
-    # fig, axes = plt.subplots()
+    fig, axes = plt.subplots()
 
-    # for k, v in d_offset_kdes.items():
-    #     axes.plot(x_ticks, v, label=k, color=d_colors[k])
-    #     axes.fill_between(x_ticks, v, alpha=0.2, color=d_colors[k])
+    for k, v in d_offset_kdes.items():
+        axes.plot(x_ticks, v, label=d_labels[k], color=d_colors[k])
+        axes.fill_between(x_ticks, v, alpha=0.2, color=d_colors[k])
 
-    # axes.axvline(x=0, color='grey', label=REFERENCE_LABEL, ls="--", linewidth=1.0)
-    # axes.set_ylabel('count')
-    # axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
-    # axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
-    # axes.set_ylim(ymin=0)
+    axes.axvline(x=0, color='grey', ls="--", linewidth=1.0)
+    axes.set_ylabel('count')
+    axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
+    axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
+    axes.set_ylim(ymin=0)
 
-    # # if CUSTOM_Y_MAX:
-    #     # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
-    # axes.legend()
-    # plt.legend(loc="upper right")
+    # if CUSTOM_Y_MAX:
+        # axes.set_ylim(ymin=0, ymax=CUSTOM_Y_MAX)
+    axes.legend()
+    plt.legend(loc="upper right")
 
     print("reference count: {}".format(len(df)))
     for k, v in d_total_offsets.items():
@@ -134,7 +147,7 @@ def plot_relative_distance(args):
     # plot distribution of pam site count around each reference point
     # HIST OF PAM COUNT PER GENE
     if OUTPUT:
-        plt.savefig("plot_relative_distance_offsets_{}".format(OUTPUT), format=OUTPUT_FORMAT)
+        plt.savefig("plot_relative_distance_offsets_density_{}".format(OUTPUT), dpi=300, transparent=True, format=OUTPUT_FORMAT)
 
     fig, axes = plt.subplots()
 

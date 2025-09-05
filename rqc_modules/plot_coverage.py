@@ -28,6 +28,16 @@ def plot_coverage(args):
     LINE_WIDTH = args.line_width
     OUTPUT = args.output
     SKIP_MALANNOTATIONS = args.skip_malannotations
+    IGNORE_STRAND = False
+    print("SKIP MALANNOTATIONS: {}".format(SKIP_MALANNOTATIONS))
+
+    OUTPUT = args.output
+
+    if OUTPUT:
+        OUTPUT_FORMAT = OUTPUT.split(".")[-1] if OUTPUT else "png"
+
+        if OUTPUT_FORMAT not in ["png", "eps", "pdf"]:
+            raise ValueError("Output format must be one of: png, eps, pdf")
 
     # process input file. Each line contains a label, the type of file, and the filepath
     input_files = {}
@@ -53,6 +63,7 @@ def plot_coverage(args):
         matches = gff_df[gff_df['type'] == FEATURE_TYPE]
     else:
         matches = gff_df[gff_df['ID'].isin(IDS)]
+
     if matches.empty:
         print("ERROR: no matches found for type {} and ids {}".format(FEATURE_TYPE, IDS))
 
@@ -117,9 +128,9 @@ def plot_coverage(args):
 
                 subfeature_names = row_subfeatures['type'].to_list()
 
-                if SKIP_MALANNOTATIONS and ("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
+                if SKIP_MALANNOTATIONS and (("five_prime_UTR" not in subfeature_names) or ("three_prime_UTR" not in subfeature_names) or \
                 (len(row_subfeatures[row_subfeatures.type == "five_prime_UTR"]) > 1) or \
-                (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1):
+                (len(row_subfeatures[row_subfeatures.type == "three_prime_UTR"]) > 1)):
                     print("ERROR: {} has no or misannotated UTR's, skipping...".format(row.ID))
                     mal_annotation.append(row.ID)
                     continue
@@ -506,11 +517,16 @@ def plot_coverage(args):
 
     plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
 
+    if OUTPUT:
+        plt.savefig("plot_coverage_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+
     coverage_dict['coverages'] = normalised_coverages
     coverage_dict['y_label'] = "normalised coverage (au)"
 
     plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
 
+    if OUTPUT:
+        plt.savefig("plot_coverage_normalised_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
 
     if PLOT_DENSITY:
         coverage_dict['coverages'] = density_coverages
@@ -518,9 +534,9 @@ def plot_coverage(args):
 
         plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
 
+        if OUTPUT:
+            plt.savefig("plot_coverage_density_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
 
     plt.tight_layout()
     plt.show()
 
-    if (OUTPUT):
-        plt.savefig("coverage_{}".format(OUTPUT))

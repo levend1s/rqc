@@ -49,8 +49,13 @@ def calculate_offsets(args):
         i += 2
 
     # HACK for malformed bed file that my pipeline produces
-    special_bed_header = GENERIC_BED_HEADER + ["base_ID"]
-    reference_df = pandas.read_csv(REFERENCE_BED, sep='\t', names=special_bed_header, header=None)
+    LAZY = False
+    if LAZY:
+        special_bed_header = GENERIC_BED_HEADER + ["base_ID"]
+        reference_df = pandas.read_csv(REFERENCE_BED, sep='\t', names=special_bed_header, header=None)
+    else:
+        reference_df = pandas.read_csv(REFERENCE_BED, sep='\t')
+    
     reference_df['contig'] = reference_df['contig'].astype('category')
     reference_df['strand'] = reference_df['strand'].astype('category')
 
@@ -59,6 +64,7 @@ def calculate_offsets(args):
         # if row_index > TEST_LIMIT:
             # break
 
+        print(row)
         if row.strand == "+":
             offset_point = int(row.start)
         else:
@@ -66,6 +72,7 @@ def calculate_offsets(args):
 
         print("processing row {} (of {})...".format(row_index, len(reference_df)))
 
+        # TODO; this should not be necessary? why are we bound by IDs...
         d_coverages[row.ID] = {}
 
         d_coverages[row.ID]["position"] = offset_point

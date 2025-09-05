@@ -13,7 +13,7 @@ def sequence_logo(args):
     ANNOTATION_FILE = args.annotation
     INPUT = args.input
     ADJUST = args.adjust
-    OUTFILE = args.output
+    OUTPUT = args.output
 
     gff_df = process_annotation_file(ANNOTATION_FILE)
 
@@ -73,4 +73,8 @@ def sequence_logo(args):
     print(labels)
     l.ax.set_xticklabels([""] + labels)
     l.ax.set_ylabel('count')
+
+    if OUTPUT:
+        plt.savefig("logo_{}".format(OUTPUT), transparent=True, dpi=300)
+
     plt.show()

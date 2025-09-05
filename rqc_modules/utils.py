@@ -425,7 +425,7 @@ def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_ty
                 this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color, linewidth=line_width)
                 this_axes.fill_between(x_ticks, cov, alpha=0.2, color=this_color)
 
-            this_axes.legend(loc="upper left", title=k)
+            # this_axes.legend(loc="upper left", title=k)
             this_axes.set_ylabel(coverages['y_label'], color="black")
             this_axes.set_ylim(ymin=0, ymax=ymax*1.1)
             this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
@@ -495,7 +495,7 @@ def getSubfeatures(annotation, id, coverage_type, coverage_padding):
 
     elif coverage_type == "gene":
         # row_subfeatures = matches.iloc[index:index+1]
-        row_subfeatures = GFF_DF[GFF_DF.ID == id]
+        row_subfeatures = annotation[annotation.ID == id]
         # drop everything after attributes
         row_subfeatures = row_subfeatures.drop(columns=row_subfeatures.columns[9:])
     else:

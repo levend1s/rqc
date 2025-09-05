@@ -1,13 +1,11 @@
 import pandas
 import pysam
 import numpy
-import math
-import scipy.stats
 from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
-from scipy.stats import ttest_rel, wilcoxon
-import statsmodels.formula.api as smf
+from scipy.stats import ttest_rel, wilcoxon, kruskal, gaussian_kde
 import statsmodels.api as sm
+
 
 NUM_DPS = 4
 
@@ -64,9 +62,9 @@ def approximate_tes(args):
     d_poly_a_lengths = {}
     d_tts = {}
     d_mod_info = {}
+    d_utr_lengths = {}
     
     d_not_beyond_3p = {}
-    d_not_in_feature_counts = {}
 
     bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
     summary_df = pandas.DataFrame(columns=TES_SUMMARY_HEADER)
@@ -90,15 +88,9 @@ def approximate_tes(args):
         d_poly_a_lengths[label] = {}
         d_tts[label] = {}
         d_mod_info[label] = {}
+        d_utr_lengths[label] = {}
         
         d_not_beyond_3p[label] = {}
-        d_not_in_feature_counts[label] = {}
-
-        # attempt to find the relevent featureCounts file in input_files
-        if FILTER_FOR_FEATURE_COUNTS:
-            feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
-            feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
-            feature_counts_df['targets'] = feature_counts_df['targets'].astype('category')
 
         # generate coverage for all matches in this bam file
         for _, row in matches.iterrows():
@@ -114,21 +106,25 @@ def approximate_tes(args):
 
             # !!!!! START NANOPORE SPECIFIC !!!!!
             # filter out reads where the 3' end is not in or beyond the last feature (3'UTR or last exon) of the target gene
-            # row_subfeatures = getSubfeatures(gff_df, row['ID'], "subfeature", 0)
 
             read_indexes_to_process = []
 
             read_outside_3p_end = []
             read_on_different_strand = []
 
-            # example: PF3D7_0709050.1
-            # if len(row_subfeatures) == 0:
-            #     most_3p_subfeature = row
-            # else:
-            #     if row['strand'] == "-":
-            #         most_3p_subfeature = row_subfeatures.iloc[0]
-            #     else:
-            #         most_3p_subfeature = row_subfeatures.iloc[-1]
+            row_subfeatures = getSubfeatures(gff_df, row['ID'], "subfeature", 0)
+            row_subfeatures = row_subfeatures[row_subfeatures.type == "CDS"]
+
+            if len(row_subfeatures) == 0:
+                if row['strand'] == "-":
+                    cds_three_p_end = row.start
+                else:
+                    cds_three_p_end = row.end
+            else:
+                if row['strand'] == "-":
+                    cds_three_p_end = row_subfeatures.iloc[0].start
+                else:
+                    cds_three_p_end = row_subfeatures.iloc[-1].end
 
             # NOTE: now the longest function in the TES analysis
             for i in range(len(reads_in_region)):
@@ -138,16 +134,18 @@ def approximate_tes(args):
                 if (row['strand'] == "+" and r.is_forward) or (row['strand'] == "-" and r.is_reverse):
                     if row['strand'] == "-":
                         read_3p_end = r.reference_start
+                        read_3p_start = r.reference_end
 
-                        if read_3p_end <= row.end:
+                        if read_3p_end <= cds_three_p_end and read_3p_start >= cds_three_p_end:
                             read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
 
                     else:
                         read_3p_end = r.reference_end
+                        read_3p_start = r.reference_start
 
-                        if read_3p_end >= row.start:
+                        if read_3p_end >= cds_three_p_end and read_3p_start <= cds_three_p_end:
                             read_indexes_to_process.append(i)
                         else:
                             read_outside_3p_end.append(r.query_name)
@@ -157,14 +155,19 @@ def approximate_tes(args):
             no_poly_a = 0
             poly_a_lengths = []
             tts_sites = []
+            utr_lengths = []
 
             for i in read_indexes_to_process:
                 r = reads_in_region[i]
-            
+
+                # TODO: does r.reference start / end give the true transcipt end site, or just where it finishes mapping to reference?
                 if row['strand'] == "-":
                     tts_sites.append(r.reference_start)
+                    # TODO: account for soft clipping here
+                    utr_lengths.append(cds_three_p_end - r.reference_start)
                 else:
                     tts_sites.append(r.reference_end)
+                    utr_lengths.append(r.reference_end - cds_three_p_end)
 
                 # if SINGLE_GENE_ANALYSIS:
                 if r.has_tag('pt:i'):
@@ -178,6 +181,7 @@ def approximate_tes(args):
 
             d_poly_a_lengths[label][row['ID']] = poly_a_lengths
             d_tts[label][row['ID']] = tts_sites
+            d_utr_lengths[label][row['ID']] = utr_lengths
 
             d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
 
@@ -293,7 +297,7 @@ def approximate_tes(args):
                 d_kdes[label][row['ID']] = []
             else:
                 for label in bam_labels:
-                    kernel = scipy.stats.gaussian_kde(d_tts[label][gene_id], bw_method=0.1)
+                    kernel = gaussian_kde(d_tts[label][gene_id], bw_method=0.1)
                     smoothed_tts_hist = kernel(x_ticks)
 
                     d_kdes[label][row['ID']] = smoothed_tts_hist
@@ -375,8 +379,12 @@ def approximate_tes(args):
             "average_num_tts_g2",
             "average_rt_prop_g1",
             "average_rt_prop_g2",
-            "t_stat",
-            "p_val"
+            "t_stat_rt_prop",
+            "p_val_rt_prop",
+            "mean_utr_length_g1",
+            "mean_utr_length_g2",
+            "t_test_utr_length",
+            "p_val_utr_length"
         ]
         print("\t".join(map(str, summary_header)))
         results = []
@@ -446,16 +454,50 @@ def approximate_tes(args):
                 model = sm.GLM(response, sm.add_constant(data['group_binary']), family=sm.families.Binomial())
                 result = model.fit()
                 # print(result.summary())
-                test_stat = result.params.group_binary
-                pval = result.pvalues.group_binary
+                rt_prop_test_stat = result.params.group_binary
+                rt_prop_pval = result.pvalues.group_binary
+
+                # test for change in UTR length
+                group1_utr_lengths = []
+                group2_utr_lengths = [] 
+
+                for label in group1_bam_labels:
+                    group1_utr_lengths += d_utr_lengths[label][gene_id]
+                for label in group2_bam_labels:
+                    group2_utr_lengths += d_utr_lengths[label][gene_id]
+
+                utr_length_test_stat, utr_length_pval = kruskal(group1_utr_lengths, group2_utr_lengths)
+                group1_mean_utr = numpy.mean(group1_utr_lengths)
+                group2_mean_utr = numpy.mean(group2_utr_lengths)
+
             else:
                 average_canonical_pa = 0
                 group1_average_rt_prop = 0
                 group2_average_rt_prop = 0
-                test_stat = 0
-                pval = 0
+                rt_prop_test_stat = 0
+                rt_prop_pval = 0
+                group1_mean_utr = 0
+                group2_mean_utr = 0
+                utr_length_test_stat = 0
+                utr_length_pval = 0
 
-            row_summary = [row.ID, row.type, row.strand, annotation_row_3p_end, average_canonical_pa, average_num_tts_g1, average_num_tts_g2, round(group1_average_rt_prop, NUM_DPS), round(group2_average_rt_prop, NUM_DPS), test_stat, pval]
+            row_summary = [
+                row.ID, 
+                row.type, 
+                row.strand, 
+                annotation_row_3p_end, 
+                average_canonical_pa, 
+                average_num_tts_g1, 
+                average_num_tts_g2, 
+                round(group1_average_rt_prop, NUM_DPS), 
+                round(group2_average_rt_prop, NUM_DPS), 
+                rt_prop_test_stat, 
+                rt_prop_pval,
+                int(group1_mean_utr),
+                int(group2_mean_utr),
+                utr_length_test_stat,
+                utr_length_pval
+            ]
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
 

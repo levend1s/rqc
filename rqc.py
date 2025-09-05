@@ -82,6 +82,7 @@ def build_parser():
     plot_coverage_parser.add_argument("-r", "--padding_ratio", required=False, type=float, default=0.0, help="input file listing coverage data")
     plot_coverage_parser.add_argument("--line_width", required=False, type=int, default=1, help="input file listing coverage data")
 
+
     plot_coverage_parser.set_defaults(func=plot_coverage.plot_coverage)
 
     # ---- approximate_tes command ----
@@ -101,7 +102,6 @@ def build_parser():
     
     approximate_tes_parser.add_argument("--exclude_contigs", required=False, nargs="*", help="input file listing coverage data.")
     approximate_tes_parser.add_argument("--compare_apa_between_treatments", required=False, nargs="*", help="filter for only reads without m6A modification at these positions")
-
 
     # at least one of these is required
     approximate_tes_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
@@ -136,6 +136,7 @@ def build_parser():
 
     # ---- find_gene_neighbours command ----
 
+    # TODO: maybe below is uneccesary, can i use R to interpret the above tsv?
     # ---- gene_neighbour_analysis command ----
 
     # ---- filter_bam_by_mod command ----
@@ -149,9 +150,9 @@ def build_parser():
 
     filter_bam_by_mod_parser.set_defaults(func=filter_bam_by_mod.filter_bam_by_mod)
 
-    
-
     # ---- m6A_specific_tes_analysis command ----
+
+
 
     # ---- logo command ----
 
