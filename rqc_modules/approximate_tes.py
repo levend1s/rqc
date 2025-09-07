@@ -5,7 +5,7 @@ from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
 from scipy.stats import ttest_rel, wilcoxon, kruskal, gaussian_kde
 import statsmodels.api as sm
-
+import os
 
 NUM_DPS = 4
 
@@ -40,6 +40,15 @@ def approximate_tes(args):
     READ_DEPTH_THRESHOLD = args.read_depth
     COMPARE_APA_BETWEEN_TREATMENTS = args.compare_apa_between_treatments
     EXCLUDE_CONTIGS = args.exclude_contigs
+    POLY_A_FILTER = args.poly_a_filter
+
+    if OUTFILE:
+        output_dir = os.path.dirname(OUTFILE)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        OUTPUT_COMPARE = OUTFILE.replace(".tsv", "_compare.tsv")
+        OUTPUT_RAW = OUTFILE.replace(".tsv", "_raw.tsv")
 
     # process input file. Each line contains a label, the type of file, and the filepath
     input_files = process_input_files(INPUT)
@@ -78,7 +87,8 @@ def approximate_tes(args):
         "reads(mapped)",
         "reads_in_region",
         "filtered(strand)",
-        "filtered(3p)"
+        "filtered(3p)",
+        "filtered(poly_a)"
     ]
     print("\t".join(map(str, row_header)))
 
@@ -152,6 +162,20 @@ def approximate_tes(args):
                 else:
                     read_on_different_strand.append(r.query_name)
 
+            filtered_poly_a = 0
+            if POLY_A_FILTER > 0:
+                reads_with_poly_a = []
+                for i in read_indexes_to_process:
+                    r = reads_in_region[i]
+                    if r.has_tag('pt:i'):
+                        poly_a_length = r.get_tag('pt:i')
+                        if poly_a_length >= POLY_A_FILTER:
+                            reads_with_poly_a.append(i)
+
+                # print("INFO: filtered {} reads with poly a filter <= {}".format(len(read_indexes_to_process) - len(reads_with_poly_a), POLY_A_FILTER))
+                filtered_poly_a = len(read_indexes_to_process) - len(reads_with_poly_a)
+                read_indexes_to_process = reads_with_poly_a
+
             no_poly_a = 0
             poly_a_lengths = []
             tts_sites = []
@@ -186,7 +210,7 @@ def approximate_tes(args):
             d_not_beyond_3p[label][row['ID']] = len(read_outside_3p_end)
 
 
-            row_summary = [label, row.ID, row.strand, len(reads_in_region), len(tts_sites), len(read_on_different_strand), len(read_outside_3p_end)]
+            row_summary = [label, row.ID, row.strand, len(reads_in_region), len(tts_sites), len(read_on_different_strand), len(read_outside_3p_end), filtered_poly_a]
             print("\t".join(map(str, row_summary)))
 
         samfile.close()
@@ -207,6 +231,7 @@ def approximate_tes(args):
     d_genomic_apa_sites = {}
 
     raw_summary_header = [
+        "contig",
         "label",
         "ID",
         "type",
@@ -217,7 +242,9 @@ def approximate_tes(args):
         "apa_score",
         "genomic_apa_sites",
         "pa_site_counts",
-        "pa_site_proportions"
+        "pa_site_proportions",
+        "mean_utr_length",
+        "mean_poly_a_length"
     ]
     print("\t".join(map(str, raw_summary_header)))
     raw_results = []
@@ -293,10 +320,10 @@ def approximate_tes(args):
         max_density = 0
         if len(matches) == 1:
             # print("{} - Generating transcript end site density information...".format(row['ID']))
-            if len(d_tts[label][row.ID]) < READ_DEPTH_THRESHOLD:
-                d_kdes[label][row['ID']] = []
-            else:
-                for label in bam_labels:
+            for label in bam_labels:
+                if len(d_tts[label][gene_id]) < READ_DEPTH_THRESHOLD:
+                    d_kdes[label][gene_id] = [0] * len(x_ticks)
+                else:
                     kernel = gaussian_kde(d_tts[label][gene_id], bw_method=0.1)
                     smoothed_tts_hist = kernel(x_ticks)
 
@@ -315,13 +342,16 @@ def approximate_tes(args):
 
         for label in bam_labels:
             if len(d_tts[label][row.ID]) < READ_DEPTH_THRESHOLD:
-                d_kdes[label][row['ID']] = []
+                d_kdes[label][row['ID']] = [0] * len(x_ticks)
                 num_tts = 0
                 canonical_pa_site = 0
                 apa_score = 0
                 genomic_apa_sites = []
                 pa_site_counts = []
                 pa_site_proportions = []
+                d_genomic_apa_sites[label][row.ID] = []
+                mean_utr_length = 0
+                mean_poly_a_length = 0
             else:
                 tts_hist = [d_tts[label][gene_id].count(i) for i in range(min_tts, max_tts)]
                 peaks, peak_dict = find_peaks(tts_hist, distance=UNIQUE_APA_DISTANCE, height=READ_DEPTH_THRESHOLD)
@@ -355,36 +385,42 @@ def approximate_tes(args):
                 num_tts = len(d_tts[label][gene_id])
                 pa_site_counts = list(peak_dict['peak_heights'])
                 d_genomic_apa_sites[label][row.ID] = genomic_apa_sites
+                mean_utr_length = round(numpy.mean(d_utr_lengths[label][gene_id]), NUM_DPS)
+                mean_poly_a_length = round(numpy.mean(d_poly_a_lengths[label][gene_id]), NUM_DPS)
 
             # TODO add max_read_depth
-            row_summary = [label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, round(apa_score, NUM_DPS), genomic_apa_sites, [int(x) for x in pa_site_counts], [round(float(x), NUM_DPS) for x in pa_site_proportions]]
+            row_summary = [row.seq_id, label, row.ID, row.type, row.strand, annotation_row_3p_end, num_tts, canonical_pa_site, round(apa_score, NUM_DPS), genomic_apa_sites, [int(x) for x in pa_site_counts], [round(float(x), NUM_DPS) for x in pa_site_proportions], mean_utr_length, mean_poly_a_length]
             print("\t".join(map(str, row_summary)))
             raw_results.append(row_summary)
 
     raw_summary_df = pandas.DataFrame(raw_results, columns=raw_summary_header)
 
     if OUTFILE:
-        raw_summary_df.to_csv("raw_{}".format(OUTFILE), sep='\t', index=False)
+        raw_summary_df.to_csv(OUTPUT_RAW, sep='\t', index=False)
 
     # go through d_kdes, find all local max's with count > read_depth threshold and call these poly_adenylation sites
     # The max PA is the canonical poly_adenylation site, and belongs in it's own column
     if COMPARE_APA_BETWEEN_TREATMENTS:
         summary_header = [
+            "contig",
             "ID",
             "type",
             "strand",
             "3p_annotation_end",
             "canonical_pa_site",
-            "average_num_tts_g1",
-            "average_num_tts_g2",
-            "average_rt_prop_g1",
-            "average_rt_prop_g2",
-            "t_stat_rt_prop",
+            "num_tx_used",
+            "mean_rt_prop_g1",
+            "mean_rt_prop_g2",
+            "test_stat_rt_prop",
             "p_val_rt_prop",
             "mean_utr_length_g1",
             "mean_utr_length_g2",
-            "t_test_utr_length",
-            "p_val_utr_length"
+            "test_stat_utr_length",
+            "p_val_utr_length",
+            "mean_poly_a_length_g1",
+            "mean_poly_a_length_g2",
+            "test_stat_poly_a_length",
+            "p_val_poly_a_length"
         ]
         print("\t".join(map(str, summary_header)))
         results = []
@@ -411,8 +447,9 @@ def approximate_tes(args):
             canonical_pas = these_rows_g1.canonical_pa_site.to_list()
             canonical_pas = [x for x in canonical_pas if x > 0]
 
-            average_num_tts_g1 = int(sum(these_rows_g1.tts_count.to_list()) / len(these_rows_g1.tts_count.to_list()))
-            average_num_tts_g2 = int(sum(these_rows_g2.tts_count.to_list()) / len(these_rows_g2.tts_count.to_list()))
+            num_tx_used = []
+            for label in bam_labels:
+                num_tx_used.append(len(d_tts[label][gene_id]))
 
             if len(canonical_pas) > 0:
                 average_canonical_pa = int(sum(canonical_pas) / len(canonical_pas))
@@ -470,25 +507,44 @@ def approximate_tes(args):
                 group1_mean_utr = numpy.mean(group1_utr_lengths)
                 group2_mean_utr = numpy.mean(group2_utr_lengths)
 
+                # test for change in poly_a length
+                group1_poly_a_lengths = []
+                group2_poly_a_lengths = [] 
+
+                for label in group1_bam_labels:
+                    group1_poly_a_lengths += d_poly_a_lengths[label][gene_id]
+                for label in group2_bam_labels:
+                    group2_poly_a_lengths += d_poly_a_lengths[label][gene_id]
+
+                test_stat_poly_a_length, p_val_poly_a_length = kruskal(group1_poly_a_lengths, group2_poly_a_lengths)
+                mean_poly_a_length_g1 = numpy.mean(group1_poly_a_lengths)
+                mean_poly_a_length_g2 = numpy.mean(group2_poly_a_lengths)
+
             else:
                 average_canonical_pa = 0
                 group1_average_rt_prop = 0
                 group2_average_rt_prop = 0
                 rt_prop_test_stat = 0
                 rt_prop_pval = 0
+
                 group1_mean_utr = 0
                 group2_mean_utr = 0
                 utr_length_test_stat = 0
                 utr_length_pval = 0
 
+                mean_poly_a_length_g1 = 0
+                mean_poly_a_length_g2 = 0
+                test_stat_poly_a_length = 0
+                p_val_poly_a_length = 0
+
             row_summary = [
+                row.seq_id,
                 row.ID, 
                 row.type, 
                 row.strand, 
                 annotation_row_3p_end, 
                 average_canonical_pa, 
-                average_num_tts_g1, 
-                average_num_tts_g2, 
+                num_tx_used,
                 round(group1_average_rt_prop, NUM_DPS), 
                 round(group2_average_rt_prop, NUM_DPS), 
                 rt_prop_test_stat, 
@@ -496,7 +552,11 @@ def approximate_tes(args):
                 int(group1_mean_utr),
                 int(group2_mean_utr),
                 utr_length_test_stat,
-                utr_length_pval
+                utr_length_pval,
+                round(mean_poly_a_length_g1, NUM_DPS),
+                round(mean_poly_a_length_g2, NUM_DPS),
+                test_stat_poly_a_length,
+                p_val_poly_a_length
             ]
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
@@ -504,7 +564,7 @@ def approximate_tes(args):
         summary_df = pandas.DataFrame(results, columns=summary_header)
 
         if OUTFILE:
-            summary_df.to_csv("compare_{}".format(OUTFILE), sep='\t', index=False)
+            summary_df.to_csv(OUTPUT_COMPARE, sep='\t', index=False)
 
 
     # --------- PLOT ---------- #

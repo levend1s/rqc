@@ -103,6 +103,7 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
 
     gene_length = row['end'] - row['start'] + 1 + (coverage_padding * 2)
     d_coverage = {
+        "contig": row['seq_id'],
         "label": label,
         "ID": row.ID,
         "type": row.type,
@@ -248,6 +249,7 @@ def gene_methylation_analysis(args):
 
     # CALCULATE COVERAGES
     raw_summary_header = [
+        "contig",
         "label",
         "ID",
         "type",
@@ -280,6 +282,7 @@ def gene_methylation_analysis(args):
 
     # CALCULATE WAMS (and if needed, identify common canonical mods for treatment comparison)
     wam_results_header = [
+        "contig",
         "label",
         "ID",
         "type",
@@ -318,7 +321,7 @@ def gene_methylation_analysis(args):
         else:
             canonical_mod_positions, canonical_mod_ratios, wam_canonical, wam_non_canonical, wam_total = calculate_wam(coverages, CANNONICAL_MOD_PROP_THRESHOLD, READ_DEPTH_THRESHOLD)
 
-        row_summary = [coverages['label'], coverages['ID'], coverages['type'], coverages['strand'], coverages['max_read_depth'], canonical_mod_positions, [round(x, NUM_DPS) for x in canonical_mod_ratios], round(wam_canonical, NUM_DPS), round(wam_non_canonical, NUM_DPS), round(wam_total, NUM_DPS)]
+        row_summary = [coverages['contig'], coverages['label'], coverages['ID'], coverages['type'], coverages['strand'], coverages['max_read_depth'], canonical_mod_positions, [round(x, NUM_DPS) for x in canonical_mod_ratios], round(wam_canonical, NUM_DPS), round(wam_non_canonical, NUM_DPS), round(wam_total, NUM_DPS)]
         wam_results.append(row_summary)
         print("\t".join(map(str, row_summary)))
 
