@@ -41,6 +41,7 @@ def approximate_tes(args):
     COMPARE_APA_BETWEEN_TREATMENTS = args.compare_apa_between_treatments
     EXCLUDE_CONTIGS = args.exclude_contigs
     POLY_A_FILTER = args.poly_a_filter
+    GENERATE_BAM = args.generate_bam
 
     if OUTFILE:
         output_dir = os.path.dirname(OUTFILE)
@@ -212,6 +213,16 @@ def approximate_tes(args):
 
             row_summary = [label, row.ID, row.strand, len(reads_in_region), len(tts_sites), len(read_on_different_strand), len(read_outside_3p_end), filtered_poly_a]
             print("\t".join(map(str, row_summary)))
+
+            if len(matches) == 1 and GENERATE_BAM:
+                # write out a bam file with only these reads
+                outfile = "{}/{}_{}.bam".format(GENERATE_BAM, row.ID, label)
+                output_bam = pysam.AlignmentFile(outfile, "wb", template=samfile)
+                for i in read_indexes_to_process:
+                    r = reads_in_region[i]
+                    output_bam.write(r)
+                output_bam.close()
+
 
         samfile.close()
 

@@ -64,7 +64,6 @@ def calculate_offsets(args):
         # if row_index > TEST_LIMIT:
             # break
 
-        print(row)
         if row.strand == "+":
             offset_point = int(row.start)
         else:

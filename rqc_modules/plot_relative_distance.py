@@ -90,7 +90,9 @@ def plot_relative_distance(args):
 
     d_labels = {
         'annotation_three_p': 'annotated 3\' end',
-        'm6a': 'canonical m6A'
+        'm6a': 'canonical m6A',
+        "NGG": 'NGG',
+        "TTTN": 'TTTN'
     }
 
 
@@ -120,7 +122,8 @@ def plot_relative_distance(args):
     plt.legend(loc="upper right")
 
     if OUTPUT:
-        plt.savefig("plot_relative_distance_offsets_{}".format(OUTPUT), dpi=300, transparent=True, format=OUTPUT_FORMAT)
+        RELATIVE_OUTFILE = OUTPUT.replace(".{}".format(OUTPUT_FORMAT), "_offset_hist.{}".format(OUTPUT_FORMAT))
+        plt.savefig(RELATIVE_OUTFILE, dpi=300, transparent=True, format=OUTPUT_FORMAT)
 
     # KDE plot
     fig, axes = plt.subplots()
@@ -147,7 +150,8 @@ def plot_relative_distance(args):
     # plot distribution of pam site count around each reference point
     # HIST OF PAM COUNT PER GENE
     if OUTPUT:
-        plt.savefig("plot_relative_distance_offsets_density_{}".format(OUTPUT), dpi=300, transparent=True, format=OUTPUT_FORMAT)
+        DENSITY_OUTFILE = OUTPUT.replace(".{}".format(OUTPUT_FORMAT), "_offset_density.{}".format(OUTPUT_FORMAT))
+        plt.savefig(DENSITY_OUTFILE, dpi=300, transparent=True, format=OUTPUT_FORMAT)
 
     fig, axes = plt.subplots()
 
@@ -179,7 +183,8 @@ def plot_relative_distance(args):
     plt.legend(loc="upper right")
 
     if OUTPUT:
-        plt.savefig("plot_relative_distance_by_gene_{}".format(OUTPUT), format=OUTPUT_FORMAT)
+        PLOT_OUTFILE = OUTPUT.replace(".{}".format(OUTPUT_FORMAT), "_count_per_reference.{}".format(OUTPUT_FORMAT))
+        plt.savefig(PLOT_OUTFILE, dpi=300, transparent=True, format=OUTPUT_FORMAT)
 
 
     plt.show()
