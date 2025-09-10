@@ -1,3 +1,8 @@
+# RQC - Transcript level analysis for Nanopore dRNA-seq*
+### (*and other genome analysis tools) 
+
+<img width="1238" height="650" alt="Screenshot 2025-09-10 at 4 35 58 PM" src="https://github.com/user-attachments/assets/b49bcb80-a8cf-4e8f-b1b7-d6fc817a804b" />
+
 # SETUP
 ```
 # set up and enter virtual environment
