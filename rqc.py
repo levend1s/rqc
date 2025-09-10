@@ -61,9 +61,9 @@ def build_parser():
     plot_coverage_parser = subparsers.add_parser("plot_coverage", help="plot relative offsets from a file")
     plot_coverage_parser.add_argument("-i", "--input", required=True, help="input file listing coverage data")
     plot_coverage_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
-    plot_coverage_parser.add_argument("-m", "--mode", required=True, help="input file listing coverage data")
-    plot_coverage_parser.add_argument("-b", "--bins", required=True, type=int, help="input file listing coverage data")
-    plot_coverage_parser.add_argument("-d", "--read_depth", required=True, type=int, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-m", "--mode", required=False, default="gene", help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-b", "--bins", required=False, type=int, default=100, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("-d", "--read_depth", required=False, type=int, default=0, help="input file listing coverage data")
     
     # at least one of these is required
     plot_coverage_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
@@ -74,6 +74,7 @@ def build_parser():
     plot_coverage_parser.add_argument("--plot_density", action="store_true", help="plot density of coverage (expensive)")
     plot_coverage_parser.add_argument("--separate_y_axes", action="store_true", help="plot density of coverage (expensive)")
     plot_coverage_parser.add_argument("--skip_malannotations", action="store_true", help="plot density of coverage (expensive)")
+    plot_coverage_parser.add_argument("--ignore_strand", action="store_true", default=False, help="plot density of coverage (expensive)")
 
     plot_coverage_parser.add_argument("-c", "--coverage_method", required=False, default="max", help="How to calculate the coverage for each bin: sum, average, max")
     plot_coverage_parser.add_argument("-n", "--mod_normalisation", required=False, default="raw", help="input file listing coverage data")

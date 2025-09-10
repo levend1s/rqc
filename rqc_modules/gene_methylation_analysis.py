@@ -2,6 +2,7 @@ import pandas
 import pysam
 import numpy
 import math
+import os
 from collections import Counter
 
 from rqc_modules.utils import getSubfeatures, process_input_files, process_annotation_file
@@ -76,7 +77,7 @@ def calculate_wam(coverage, canonical_mod_prop_threshold, read_depth_threshold, 
     
 
 # this is fine as long as reads_in_region is passed by reference cause its big
-def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold, read_depth_threshold, canonical_mod_prop_threshold):
+def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold, read_depth_threshold, canonical_mod_prop_threshold, poly_a_filter):
     gene_length = row['end'] - row['start']
 
     samfile = pysam.AlignmentFile(samfile_path, 'rb')
@@ -162,6 +163,19 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
                 if read_3p_end >= row.start:
                     read_indexes_to_process.append(i)
                     
+    # filtered_poly_a = 0
+    if poly_a_filter > 0:
+        reads_with_poly_a = []
+        for i in read_indexes_to_process:
+            r = READS_IN_REGION[i]
+            if r.has_tag('pt:i'):
+                poly_a_length = r.get_tag('pt:i')
+                if poly_a_length >= poly_a_filter:
+                    reads_with_poly_a.append(i)
+
+        # print("INFO: filtered {} reads with poly a filter <= {}".format(len(read_indexes_to_process) - len(reads_with_poly_a), POLY_A_FILTER))
+        # filtered_poly_a = len(read_indexes_to_process) - len(reads_with_poly_a)
+        read_indexes_to_process = reads_with_poly_a
 
     filtered_reads_in_region = [READS_IN_REGION[i] for i in read_indexes_to_process]
 
@@ -220,6 +234,14 @@ def gene_methylation_analysis(args):
     COMPARE_METHYLATION_BETWEEN_TREATMENTS = args.compare_methylation_between_treatments
     EXCLUDE_CONTIGS = args.exclude_contigs
 
+    if OUTPUT:
+        output_dir = os.path.dirname(OUTPUT)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        OUTPUT_COMPARE = OUTPUT.replace(".tsv", "_compare.tsv")
+        OUTPUT_RAW = OUTPUT.replace(".tsv", "_raw.tsv")
+
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
 
     print("LOG: starting gene methylation analysis")
@@ -271,7 +293,8 @@ def gene_methylation_analysis(args):
                 coverage_padding=COVERAGE_PADDING,
                 pysam_mod_threshold=PYSAM_MOD_THRESHOLD,
                 read_depth_threshold=READ_DEPTH_THRESHOLD,
-                canonical_mod_prop_threshold=CANNONICAL_MOD_PROP_THRESHOLD
+                canonical_mod_prop_threshold=CANNONICAL_MOD_PROP_THRESHOLD,
+                poly_a_filter=POLY_A_FILTER
             )
 
             label_raw_results = list(executor.map(process_row_partial, [row for _, row in matches.iterrows()]))
@@ -328,10 +351,11 @@ def gene_methylation_analysis(args):
     wam_results_df = pandas.DataFrame(wam_results, columns=wam_results_header)
 
     if OUTPUT:
-        wam_results_df.to_csv(OUTPUT, sep='\t', index=False)
+        wam_results_df.to_csv(OUTPUT_RAW, sep='\t', index=False)
 
     if COMPARE_METHYLATION_BETWEEN_TREATMENTS:
         summary_header = [
+            "contig",
             "ID",
             "type",
             "strand",
@@ -417,14 +441,14 @@ def gene_methylation_analysis(args):
                 test_stat = result.params.group_binary
                 pval = result.pvalues.group_binary
 
-            row_summary = [row.ID, row.type, row.strand, canonical_mods, average_depth_g1, average_depth_g2, round(canonical_wam_g1, NUM_DPS), round(canonical_wam_g2, NUM_DPS), round(non_canonical_wam_g1, NUM_DPS), round(non_canonical_wam_g2, NUM_DPS), round(total_wam_g1, NUM_DPS), round(total_wam_g2, NUM_DPS), test_stat, pval]
+            row_summary = [row.seq_id, row.ID, row.type, row.strand, canonical_mods, average_depth_g1, average_depth_g2, round(canonical_wam_g1, NUM_DPS), round(canonical_wam_g2, NUM_DPS), round(non_canonical_wam_g1, NUM_DPS), round(non_canonical_wam_g2, NUM_DPS), round(total_wam_g1, NUM_DPS), round(total_wam_g2, NUM_DPS), test_stat, pval]
             results.append(row_summary)
             print("\t".join(map(str, row_summary)))
 
         summary_df = pandas.DataFrame(results, columns=summary_header)
 
         if OUTPUT:
-            summary_df.to_csv("compare_{}".format(OUTPUT), sep='\t', index=False)
+            summary_df.to_csv(OUTPUT_COMPARE, sep='\t', index=False)
 
 
 

@@ -28,7 +28,7 @@ def plot_coverage(args):
     LINE_WIDTH = args.line_width
     OUTPUT = args.output
     SKIP_MALANNOTATIONS = args.skip_malannotations
-    IGNORE_STRAND = False
+    IGNORE_STRAND = args.ignore_strand
     print("SKIP MALANNOTATIONS: {}".format(SKIP_MALANNOTATIONS))
 
     OUTPUT = args.output
