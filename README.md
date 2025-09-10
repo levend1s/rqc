@@ -1,31 +1,4 @@
-## RQC (RNA Quality Control)
-
-RQC helps you analyse the quality of your BAM files. Input BAM files must be sorted and indexed. RQC can do the following:
-
-* Summarise read PHRED scores for one or multiple BAM files
-* Summarise read MAPQ scores for one or multiple BAM files
-* Generate transcript coverage plots
-    * Accepts bedmethyl and BAM files for coverage plots
-    * Can specify padding
-    * Can show coverage for: 
-        * Genomic regions
-        * Genomic regions split by UTR and CDS
-        * Subfeatures (Exon and UTR boundaries) NOTE all input genes must have the same number of subfeatures for this to work accurately.
-    * Can show frequncy plot of DRACH sites (locations specified by bed file)
-    * Can generate normalised coverage plots, which average normalised individual gene coverage
-    * Can show raw proportion of mod coverage against read depth, or relative abundance
-    * Can calculate locations of 'mod peaks' if given a read depth and mod proportion threshold. If mod abundance exceeds this threshold it's considered a peak, or 'cannonical modification'.
-    * TODO: separate_plots_by_label_prefix
-    * TODO: specify colours in samples.txt
-    * TODO: coverage smoothing
-
-
-* Mapping % bar graphs against multiple genomes
-* Sequence logos
-* Violin plots for read lengths
-
-
-## SETUP
+# SETUP
 ```
 # set up and enter virtual environment
 $ python3 -m venv .venv
@@ -44,54 +17,10 @@ $ python rqc.py -q 7 -m 5 plot "36C1 Pfal" /Users/joshualevendis/Downloads/36C1_
 # exit the virtual environment
 $ deactivate
 ```
-If you have a file that looks like this:
-samples.txt
-```
-36C1_Pfal /Users/joshualevendis/Downloads/36C1_to_pfal.sorted.bam 
-36C1_Yeast /Users/joshualevendis/Downloads/36C1_to_yeast_sorted.bam 
-36C1_Human /Users/joshualevendis/Downloads/36C1_to_humans.sorted.bam
-```
-You can run something like this:
-```
-$ python rqc.py -q 7 -m 5 plot $(cat samples.txt)
-```
-![Screenshot 2024-09-21 at 10 36 34 PM](https://github.com/user-attachments/assets/9eab357d-b738-48aa-b24b-7f32687c2180)
 
+# Usage
 
-After playing around with quality filters, you can then print out the read ids of reads which passed the filter:
-```
-$ python rqc.py --check_duplicate_reads True -n 10 --sort_by phred_scores -q 7 -m 5 -l 100000 search $(cat samples.txt)
-
-searching...
-36C1_Pfal
-Empty DataFrame
-Columns: [read_id, phred_scores, mapq_scores, template_lengths]
-Index: []
-36C1_Yeast
-                                read_id  phred_scores  mapq_scores  template_lengths
-0  ed3f5afc-5154-42aa-b71c-ebfaeb361bbc          7.08            8            232367
-36C1_Human
-Empty DataFrame
-Columns: [read_id, phred_scores, mapq_scores, template_lengths]
-Index: []
-looking for read intersect in 36C1_Pfal (0) and 36C1_Yeast (1)
-looking for read intersect in 36C1_Pfal (0) and 36C1_Human (0)
-looking for read intersect in 36C1_Yeast (1) and 36C1_Human (0)
-FOUND 0 READS COMMON TO SAMPLES:
-
-sample	count	total_bases_read	mean	median	Q1	Q3	min	max	N10	N50	N90	
-36C1_Yeast	1	232367	232367	232367	232367.0	232367.0	232367	232367	232367	232367	232367	
-```
-
-
-You might then like to find information on a specific read
-```
-$ python rqc.py inspect ed3f5afc-5154-42aa-b71c-ebfaeb361bbc $(cat samples.txt)
-```
-
-## Usage
-
-# plot_coverage
+## plot_coverage
 
 The plot_coverage command takes in an annotation file, a bam file and a list of gene/transcript ids to generate coverage plots for. It generates a plot with total coverage and normalised coverage against % through gene, 0% 5' -> 3' 100%. Normalised coverage means the sequencing depth is scaled from a true number (like 1000 bases) to a number between 0 and 1. This reduces the impact a highly expressed gene has on the curve and gives a less bias comparison of coverage across the selected genes.
 
@@ -101,7 +30,23 @@ python rqc.py plot_coverage -m subfeature -a ~/Documents/RNA/honours/Pfalciparum
 python rqc.py plot_coverage -m subfeature_cds -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --padding 100 --padding_ratio 0.1 --bins 100 --read_depth 0 --ids PF3D7_1123900.1 -i ./samples/laptop_all_mods_samples.txt
 ```
 
-# motif_finder
+The input file laptop_all_mods_samples.txt should look something like this:
+```
+inosine_read_depth control bam /Users/joshlevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam
+inosine_inosine control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.17596.bed
+
+m6A_read_depth control bam /Users/joshlevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam
+m6A_m6A control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.a.bed
+
+pseudouridine_read_depth control bam /Users/joshlevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam
+pseudouridine_pseudouridine control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.17802.bed
+
+m5C_read_depth control bam /Users/joshlevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam
+m5C_m5C control bedmethyl /Users/joshlevendis/Downloads/bedmethyls/28C1_to_pfal_0.65.0p.m.bed
+```
+
+
+## motif_finder
 
 ```
 # find all motifs of TTTN or NGG, where N=anything
@@ -125,18 +70,18 @@ while read line; do grep -q "$line" start_codons_crypto_bgf.filtered.tsv || echo
 while read line; do grep -q "$line" stop_codons_crypto_bgf.filtered.tsv || echo $line; done < pcg_list_crypto_bgf.tsv
 ```
 
-# calculate_offsets
+## calculate_offsets
 
 ```
 python rqc.py calculate_offsets -d 100 -r pam_analysis/start_codons_crypto_bgf.filtered.tsv -o pam_analysis/crypto_bgf_start_offsets.tsv -i NGG pam_analysis/NGG_crypto_bgf.tsv TTTN pam_analysis/TTTN_crypto_bgf.tsv
 ```
 
-# plot_relative_distance
+## plot_relative_distance
 ```
 python rqc.py plot_relative_distance -l "start codon" -d 50 -i pam_analysis/crypto_bgf_start_offsets.tsv -o crypto_start.eps
 ```
 
-# sequence_logo
+## sequence_logo
 ```
 python rqc.py sequence_logo -a PlasmoDB-67_Pfalciparum3D7.gff -g PlasmoDB-67_Pfalciparum3D7_Genome.fasta -l 1 -p 2 -i drach_m6A_sites_28u32u36.bed
 
@@ -144,14 +89,14 @@ python rqc.py sequence_logo -a PlasmoDB-67_Pfalciparum3D7.gff -g PlasmoDB-67_Pfa
 python rqc.py sequence_logo -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -g ~/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta -l 3 -p 0 --adjust -1 -i pam_analysis/start_codons_plasmo.tsv
 ```
 
-# approximate_tes
+## approximate_tes
 ```
 python rqc.py approximate_tes -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids PF3D7_1123900.1
 
 python rqc.py approximate_tes -a ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i samples/samples.txt --ids $(jq -r '.Pf3D7_01_v3_mRNA[]' ./pfal_mRNA_exon_counts.json)
 ```
 
-# gene methylation analysis
+## gene methylation analysis
 
 This calculates average methylation (m6A) for genes. It calculates separates statistic
 
@@ -164,7 +109,7 @@ time python rqc.py gene_methylation_analysis -a ~/Downloads/Pfalciparum3D7/gff/d
 
 python rqc.py gene_methylation_analysis -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -i laptop_samples.txt --type mRNA -d 10 -r 0.5 --compare_methylation_between_treatments 28C 28K -p 500 -o mrna_gene_methylation_analysis.tsv --exclude_contigs Pf3D7_API_v3 Pf3D7_MIT_v3
 
-# filter_bam_by_mod
+## filter_bam_by_mod
 ```
 python rqc.py filter_bam_by_mod --include 213060 -s + -c Pf3D7_02_v3 -i laptop_samples.txt
 ```
