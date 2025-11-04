@@ -1,5 +1,6 @@
 
 import argparse
+from pickle import TRUE
 import numpy
 import sys
 
@@ -14,6 +15,7 @@ from rqc_modules import sequence_logo
 from rqc_modules import approximate_tes
 from rqc_modules import gene_methylation_analysis
 from rqc_modules import filter_bam_by_mod
+from rqc_modules import m6A_specific_tes_analysis
 
 
 def build_parser():
@@ -64,6 +66,11 @@ def build_parser():
     plot_coverage_parser.add_argument("-m", "--mode", required=False, default="gene", help="input file listing coverage data")
     plot_coverage_parser.add_argument("-b", "--bins", required=False, type=int, default=100, help="input file listing coverage data")
     plot_coverage_parser.add_argument("-d", "--read_depth", required=False, type=int, default=0, help="input file listing coverage data")
+    plot_coverage_parser.add_argument("--alpha", required=False, type=float, default=0.2, help="transparency level for the plot")
+    plot_coverage_parser.add_argument("--step", required=False, type=str, default="mid", help="step mode for the plot")
+    plot_coverage_parser.add_argument("--plot_type", required=False, type=str, default="line", help="type of plot to create (bar, line)")
+    plot_coverage_parser.add_argument("--scale_density_by_total_coverage", action="store_true", default=False, help="If plotting density, scale the density by the total coverage (makes areas under the curve comparable to total coverage)")
+
     
     # at least one of these is required
     plot_coverage_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data")
@@ -82,7 +89,7 @@ def build_parser():
     plot_coverage_parser.add_argument("-p", "--padding", required=False, type=int, default=0, help="input file listing coverage data")
     plot_coverage_parser.add_argument("-r", "--padding_ratio", required=False, type=float, default=0.0, help="input file listing coverage data")
     plot_coverage_parser.add_argument("--line_width", required=False, type=int, default=1, help="input file listing coverage data")
-
+    plot_coverage_parser.add_argument("--log_scale", required=False, default=False, action="store_true", help="input file listing coverage data")
 
     plot_coverage_parser.set_defaults(func=plot_coverage.plot_coverage)
 
@@ -153,7 +160,25 @@ def build_parser():
     filter_bam_by_mod_parser.set_defaults(func=filter_bam_by_mod.filter_bam_by_mod)
 
     # ---- m6A_specific_tes_analysis command ----
+    m6A_specific_tes_analysis_parser = subparsers.add_parser("m6A_specific_tes_analysis", help="Analyze m6A-specific transcript end sites")
+    m6A_specific_tes_analysis_parser.add_argument("-i", "--input", required=True, help="input file listing coverage data")
+    m6A_specific_tes_analysis_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
+    m6A_specific_tes_analysis_parser.add_argument("-p", "--coverage_padding", required=False, type=int, default=100, help="coverage padding")
+    m6A_specific_tes_analysis_parser.add_argument("-o", "--output", required=False, help="output file")
+    m6A_specific_tes_analysis_parser.add_argument("-r", "--mod_ratio", required=False, type=float, default=0.5, help="input file listing coverage data")
+    m6A_specific_tes_analysis_parser.add_argument("-c", "--mod_prob_threshold", required=False, type=float, default=0.95, help="input file listing coverage data")
+    m6A_specific_tes_analysis_parser.add_argument("--ids", required=True, nargs="*", help="input file listing coverage data.")
+    m6A_specific_tes_analysis_parser.add_argument("--poly_a_filter", required=False, type=int, default=0, help="input file listing coverage data")
+    m6A_specific_tes_analysis_parser.add_argument("-d", "--read_depth", required=False, type=int, default=20, help="input file listing coverage data")
+    m6A_specific_tes_analysis_parser.add_argument("--offset", required=False, type=int, default=None, help="If provided, shift the x-axis by this amount (useful for adjusting the gene end position)")
+    m6A_specific_tes_analysis_parser.add_argument("--separate_mod_tracks", action="store_true", help="if provided filter reads which featureCounts has mapped to a gene")
+    m6A_specific_tes_analysis_parser.add_argument("--offset_padding", required=False, type=int, default=500, help="input file listing coverage data")
 
+
+
+
+
+    m6A_specific_tes_analysis_parser.set_defaults(func=m6A_specific_tes_analysis.m6A_specific_tes_analysis)
 
 
     # ---- logo command ----

@@ -1,5 +1,5 @@
 import pandas
-from rqc_modules.constants import GENERIC_BED_HEADER
+from rqc_modules.constants import GENERIC_BED_HEADER_BASE, GENERIC_BED_HEADER
 
 def calculate_offsets(args):
     REFERENCE_BED = args.reference
@@ -28,7 +28,15 @@ def calculate_offsets(args):
         key = INPUTS[i]
         file_path = INPUTS[i+1]
         print("LOADING: {}".format(file_path))
-        file_df = pandas.read_csv(file_path, sep='\t')
+        file_df = pandas.read_csv(file_path, sep='\t', header=None)
+
+        if file_df.iloc[0][0] != "contig":
+            file_df = pandas.read_csv(file_path, sep='\t', header=None)
+            file_df.columns = GENERIC_BED_HEADER_BASE
+        else:
+            file_df = pandas.read_csv(file_path, sep='\t')
+
+
         file_df['contig'] = file_df['contig'].astype('category')
         file_df['strand'] = file_df['strand'].astype('category')
 

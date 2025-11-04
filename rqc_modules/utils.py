@@ -8,6 +8,8 @@ import gffpandas.gffpandas as gffpandas
 import ast
 import time
 
+from rqc_modules.constants import MODKIT_BEDMETHYL_HEADER, PYSAM_MOD_TUPLES
+
 d_phred = {}
 d_mapq = {}
 d_tlen = {}
@@ -332,9 +334,9 @@ def get_plot_color(l):
     this_color = "black"
 
     if 'read_depth' in l:
-        this_color = 'skyblue'
+        this_color = '#cbcbcb'
     elif 'm6A' in l:
-        this_color = 'indigo'
+        this_color = '#2e0064' # purple
     elif 'm5C' in l:
         this_color = 'red'
     elif 'pseudouridine' in l:
@@ -348,7 +350,7 @@ def get_plot_color(l):
 
     return this_color
 
-def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_type):
+def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_type, log_scale_y, alpha, step, plot_type):    
     sample_labels = {}
     ymax = 0
     for label, cov in coverages['coverages'].items():
@@ -403,16 +405,26 @@ def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_ty
             cov_2 = coverages['coverages'][cov_2_label]
             cov_2_color = get_plot_color(cov_2_label)
 
-            this_axes.plot(cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color, linewidth=line_width)
-            this_axes.fill_between(x_ticks, cov_1, alpha=0.2, color=cov_1_color)
+            if plot_type == "line":
+                this_axes.plot(x_ticks, cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color, linewidth=line_width)
+                this_axes.fill_between(x_ticks, cov_1, alpha=alpha, color=cov_1_color)
+            else:
+                this_axes.step(x_ticks, cov_1, label= ' '.join(cov_1_label.split("_")[1:]), color=cov_1_color, where=step, linewidth=line_width)
+                this_axes.fill_between(x_ticks, cov_1, alpha=alpha, step=step, color=cov_1_color)
             this_axes.tick_params(axis='y', labelcolor=cov_1_color)
             this_axes.set_ylim(ymin=0)
             this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
             this_axes.set_ylabel(' '.join(cov_1_label.split("_")[1:]), color=cov_1_color)
 
             this_axes_2 = this_axes.twinx()
-            this_axes_2.plot(cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color, linewidth=line_width)
-            this_axes_2.fill_between(x_ticks, cov_2, alpha=0.2, color=cov_2_color)
+
+            if plot_type == "line":
+                this_axes_2.plot(x_ticks, cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color, linewidth=line_width)
+                this_axes_2.fill_between(x_ticks, cov_2, alpha=alpha, color=cov_2_color)
+            else:
+                this_axes_2.step(x_ticks, cov_2, label= ' '.join(cov_2_label.split("_")[1:]), color=cov_2_color, where=step, linewidth=line_width)
+                this_axes_2.fill_between(x_ticks, cov_2, alpha=alpha, step=step, color=cov_2_color)
+
             this_axes_2.tick_params(axis='y', labelcolor=cov_2_color)
             this_axes_2.set_ylim(ymin=0)
             this_axes_2.set_ylabel(' '.join(cov_2_label.split("_")[1:]), color=cov_2_color)
@@ -422,8 +434,12 @@ def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_ty
                 cov = coverages['coverages'][label]
                 this_color = get_plot_color(label)
 
-                this_axes.plot(cov, label= ' '.join(label.split("_")[1:]), color=this_color, linewidth=line_width)
-                this_axes.fill_between(x_ticks, cov, alpha=0.2, color=this_color)
+                if plot_type == "line":
+                    this_axes.plot(x_ticks, cov, label= ' '.join(label.split("_")[1:]), color=this_color, linewidth=line_width)
+                    this_axes.fill_between(x_ticks, cov, alpha=alpha, color=this_color)
+                else:
+                    this_axes.step(x_ticks, cov, label= ' '.join(label.split("_")[1:]), color=this_color, where=step, linewidth=line_width)
+                    this_axes.fill_between(x_ticks, cov, alpha=alpha, step=step, color=this_color)
 
             # this_axes.legend(loc="upper left", title=k)
             this_axes.set_ylabel(coverages['y_label'], color="black")
@@ -469,6 +485,20 @@ def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_ty
             curr_pos += subfeature_width
 
         plt_index += 1
+
+    # set logscale if required
+    if log_scale_y:
+        plt_index = 0
+        for _, v in sample_labels.items():
+            if num_samples > 1:
+                this_axes = axes[plt_index]
+            else:
+                this_axes = axes
+
+            this_axes.set_yscale("log")
+            this_axes.set_ylim(None, None)
+
+            plt_index += 1
 
 def getSubfeatures(annotation, id, coverage_type, coverage_padding):
 
@@ -668,10 +698,6 @@ def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_thresh
         prefix = label.split("_")[0]
         mod_label = "{}_m6A_0.95".format(prefix)
 
-        if DEBUG:
-            print("mod_prop_threshold: {}".format(mod_prop_threshold))
-            print("read_depth_threshold: {}".format(read_depth_threshold))
-
         mods_file_df = pandas.read_csv(input_files[mod_label]['path'], sep='\t', names=MODKIT_BEDMETHYL_HEADER)
         mods_file_df['strand'] = mods_file_df['strand'].astype('category')
         mods_file_df['contig'] = mods_file_df['contig'].astype('category')
@@ -694,15 +720,9 @@ def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_thresh
                 (mods_file_df.contig == row['seq_id'])
             ]
 
-            if DEBUG:
-                print(row_mods)
-
             for mod_index, mod in row_mods.iterrows():
                 if mod['start'] not in cannonical_mods_start_pos[row['ID']]:
                     cannonical_mods_start_pos[row['ID']].append(mod['start'])
-
-    if DEBUG:
-        print("cannonical_mods_start_pos: {}".format(cannonical_mods_start_pos[row['ID']]))
 
     return cannonical_mods_start_pos
 
@@ -886,12 +906,6 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
     for label in bam_labels:
         samfile = pysam.AlignmentFile(input_files[label]['path'], 'rb')
         
-        # attempt to find the relevent featureCounts file in input_files
-        if FILTER_FOR_FEATURE_COUNTS:
-            feature_counts_sample_label = label.split("_")[0] + "_featureCounts"
-            feature_counts_df = pandas.read_csv(input_files[feature_counts_sample_label]['path'], sep='\t', names=FEATURECOUNTS_HEADER)
-            feature_counts_df['targets'] = feature_counts_df['targets'].astype('category')
-
         d_sample_filtered_read_ids[label] = {}
 
         # generate coverage for all matches in this bam file
@@ -922,10 +936,6 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                 d_filtered_read_ids['mods'][mod] = []
                 d_filtered_read_ids['tx_end_sites'][mod] = []
 
-            if FILTER_FOR_FEATURE_COUNTS:
-                gene_reads = feature_counts_df[feature_counts_df.targets == row['ID'].split(".")[0]]
-                gene_read_ids_fc = set(gene_reads['read_id'])
-
             if approximated_tes:
                 gene_3p_end = approximated_tes[row.ID]
                 print("LOG - using approximated tes {}".format(gene_3p_end))
@@ -948,35 +958,32 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                     or (row.strand == "-" and r.reference_start >= gene_3p_end and r.reference_end <= gene_5p_end) \
                     or (row.strand == "+" and r.reference_end <= gene_3p_end and r.reference_start >= gene_5p_end):
                         # get mod sites for this read. this is [(read index, 256 * mod_prob)...]
-                        if FILTER_FOR_FEATURE_COUNTS and (r.qname not in gene_read_ids_fc):
-                            d_filtered_read_ids['featureCounts'].append(i)
+                        d_filtered_read_ids['filtered_reads'].append(i)
+
+                        if row.strand == "-":
+                            mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev'])
+                            tx_end_site = r.reference_start
                         else:
-                            d_filtered_read_ids['filtered_reads'].append(i)
+                            mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_for'])
+                            tx_end_site = r.reference_end
 
-                            if row.strand == "-":
-                                mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev'])
-                                tx_end_site = r.reference_start
+                        d_filtered_read_ids['tx_end_sites']['all'].append(tx_end_site)
+
+                        if mods_probs:
+                            # keep only mod positions which are above mod prob threshold
+                            ref_pos = numpy.array(r.get_reference_positions(full_length=True))
+                            read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
+                            
+                            # read mod positions is the position from the start of the read
+                            # aligned reads may contain indels, so we need to get reference index from get_reference_positions
+                            canonical_mods_in_read = set(cannonical_mods_start_pos[row.ID]).intersection(ref_pos[read_mod_positions])
+                            if len(canonical_mods_in_read) == 0:
+                                d_filtered_read_ids['mods']['None'].append(i)
+                                d_filtered_read_ids['tx_end_sites']['None'].append(tx_end_site)
                             else:
-                                mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_for'])
-                                tx_end_site = r.reference_end
-
-                            d_filtered_read_ids['tx_end_sites']['all'].append(tx_end_site)
-
-                            if mods_probs:
-                                # keep only mod positions which are above mod prob threshold
-                                ref_pos = numpy.array(r.get_reference_positions(full_length=True))
-                                read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
-                                
-                                # read mod positions is the position from the start of the read
-                                # aligned reads may contain indels, so we need to get reference index from get_reference_positions
-                                canonical_mods_in_read = set(cannonical_mods_start_pos[row.ID]).intersection(ref_pos[read_mod_positions])
-                                if len(canonical_mods_in_read) == 0:
-                                    d_filtered_read_ids['mods']['None'].append(i)
-                                    d_filtered_read_ids['tx_end_sites']['None'].append(tx_end_site)
-                                else:
-                                    for mod in canonical_mods_in_read:
-                                        d_filtered_read_ids['mods'][mod].append(i)
-                                        d_filtered_read_ids['tx_end_sites'][mod].append(tx_end_site)
+                                for mod in canonical_mods_in_read:
+                                    d_filtered_read_ids['mods'][mod].append(i)
+                                    d_filtered_read_ids['tx_end_sites'][mod].append(tx_end_site)
                     else:
                         d_filtered_read_ids['3p'].append(i)
                 else:

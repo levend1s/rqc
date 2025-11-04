@@ -29,6 +29,12 @@ def plot_coverage(args):
     OUTPUT = args.output
     SKIP_MALANNOTATIONS = args.skip_malannotations
     IGNORE_STRAND = args.ignore_strand
+    LOG_SCALE = args.log_scale
+    STEP = args.step
+    ALPHA = args.alpha
+    PLOT_TYPE = args.plot_type
+    SCALE_DENSITY_BY_TOTAL_COVERAGE = args.scale_density_by_total_coverage
+
     print("SKIP MALANNOTATIONS: {}".format(SKIP_MALANNOTATIONS))
 
     OUTPUT = args.output
@@ -478,8 +484,12 @@ def plot_coverage(args):
                 # HACK PAM
                 # this is not a true KDE anymore now that we're multiplying it by total coverage
                 # it does however allow us to plot and compare multiple KDEs on the same plot
-                smoothed_tts_hist = kernel(x_ticks) * sum(total_coverage)
-                density_coverages[label] = smoothed_tts_hist
+
+                if SCALE_DENSITY_BY_TOTAL_COVERAGE:
+                    smoothed_tts_hist = kernel(x_ticks) * sum(total_coverage)
+                    density_coverages[label] = smoothed_tts_hist
+                else:
+                    density_coverages[label] = kernel(x_ticks)
 
             # cdf = numpy.cumsum(smoothed_tts_hist)
 
@@ -515,7 +525,7 @@ def plot_coverage(args):
         "additional_text": additional_text
     }
 
-    plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
+    plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE)
 
     if OUTPUT:
         plt.savefig("plot_coverage_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
@@ -523,7 +533,7 @@ def plot_coverage(args):
     coverage_dict['coverages'] = normalised_coverages
     coverage_dict['y_label'] = "normalised coverage (au)"
 
-    plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
+    plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE)
 
     if OUTPUT:
         plt.savefig("plot_coverage_normalised_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
@@ -532,7 +542,7 @@ def plot_coverage(args):
         coverage_dict['coverages'] = density_coverages
         coverage_dict['y_label'] = "density (au)"
 
-        plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE)
+        plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE)
 
         if OUTPUT:
             plt.savefig("plot_coverage_density_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)

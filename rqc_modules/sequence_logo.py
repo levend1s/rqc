@@ -1,6 +1,7 @@
 import logomaker
 import pandas
 import matplotlib.pyplot as plt
+import numpy
 
 
 from rqc_modules.utils import process_annotation_file, process_genome_file, reverse_complement
@@ -65,8 +66,35 @@ def sequence_logo(args):
                 
     print("NUM MAL SEQS: {}".format(len(mal_seqs)))
     print(mal_seqs)
-    counts_matrix = logomaker.alignment_to_matrix(seqs)
-    print(counts_matrix)
+
+    plasmo_bg = {"A":0.4, "C":0.1, "G":0.1, "T":0.4}
+    plasmo_bg_values = numpy.array([plasmo_bg[nt] for nt in 'ACGT'])
+    print(plasmo_bg_values)
+    counts_matrix = logomaker.alignment_to_matrix(seqs, to_type='probability')
+
+    # CHATGPT START
+    H_max = -(plasmo_bg_values * numpy.log2(plasmo_bg_values)).sum()
+    # Observed entropy per position
+    entropy = -(counts_matrix * numpy.log2(counts_matrix + 1e-9)).sum(axis=1)
+    # Information content per position (bits)
+    R = H_max - entropy
+
+
+    bits_mat = counts_matrix.multiply(R, axis=0)
+
+    # Make the logo
+    logo = logomaker.Logo(bits_mat)
+    logo.ax.set_ylabel("Bits")
+
+    # CHATGPT END
+
+    OUTPUT_FORMAT = OUTPUT.split(".")[-1] if OUTPUT else "png"
+
+    if OUTPUT:
+        plt.savefig("logo_bits_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+
+    counts_matrix = logomaker.alignment_to_matrix(seqs, to_type='counts')
+
     l = logomaker.Logo(counts_matrix)
     labels = ["-{}".format(x) for x in range(-PADDING_DISTANCE, 0)] + (["0"] * LENGTH) + ["+{}".format(x) for x in range(1, PADDING_DISTANCE+1)]
 
@@ -75,6 +103,7 @@ def sequence_logo(args):
     l.ax.set_ylabel('count')
 
     if OUTPUT:
-        plt.savefig("logo_{}".format(OUTPUT), transparent=True, dpi=300)
+        plt.savefig("logo_counts_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+
 
     plt.show()
