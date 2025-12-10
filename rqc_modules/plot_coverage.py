@@ -1,5 +1,6 @@
 import ast
 import math
+import os
 import numpy
 import pandas
 import pysam
@@ -528,7 +529,17 @@ def plot_coverage(args):
     plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE)
 
     if OUTPUT:
-        plt.savefig("plot_coverage_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+        output_path = os.path.abspath(OUTPUT)
+
+        # Split into directory + basename
+        outdir, base = os.path.split(output_path)
+        # Prepend prefix to the filename
+        new_base_coverage = f"plot_coverage_{base}"
+        new_base_normalised = f"plot_coverage_normalised_{base}"
+        new_base_density = f"plot_coverage_density_{base}"
+
+
+        plt.savefig(os.path.join(outdir, new_base_coverage), transparent=True, dpi=300, format=OUTPUT_FORMAT)
 
     coverage_dict['coverages'] = normalised_coverages
     coverage_dict['y_label'] = "normalised coverage (au)"
@@ -536,7 +547,7 @@ def plot_coverage(args):
     plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE)
 
     if OUTPUT:
-        plt.savefig("plot_coverage_normalised_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+        plt.savefig(os.path.join(outdir, new_base_normalised), transparent=True, dpi=300, format=OUTPUT_FORMAT)
 
     if PLOT_DENSITY:
         coverage_dict['coverages'] = density_coverages
@@ -545,7 +556,7 @@ def plot_coverage(args):
         plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE)
 
         if OUTPUT:
-            plt.savefig("plot_coverage_density_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+            plt.savefig(os.path.join(outdir, new_base_density), transparent=True, dpi=300, format=OUTPUT_FORMAT)
 
     plt.tight_layout()
     plt.show()

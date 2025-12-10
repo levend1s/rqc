@@ -51,32 +51,25 @@ DIR=/home/ubuntu/mediaflux_mnt/rnaseq/nanopore/METTL3_KS_TIME_SERIES_DORADO_8.3/
 python rqc.py approximate_tes -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --poly_a_filter 10 -i laptop_samples.txt --type mRNA -d 10 --compare_apa_between_treatments 36C 36K -p 500 -o mrna_tes_analysis_36hpi.tsv --exclude_contigs Pf3D7_API_v3 Pf3D7_MIT_v3
 python rqc.py gene_methylation_analysis -a $ANNOTATION -i laptop_samples.txt --type mRNA -d 10 -r 0.5 --compare_methylation_between_treatments 36C 36K -p 500 --poly_a_filter 10 -o output/mRNA_methylation_analysis_36hpi.tsv --exclude_contigs Pf3D7_API_v3 Pf3D7_MIT_v3
 
-# Generating motif files:
-
-
-
-
-
-
 # ------------ Fig 2 ------------ #
 
-# A: PCA (transcript count)
-# B: PCA top 50 loadings (transcript count)
-
-wam_pca.R
-
-# C: Differential abundance (transcript count)
-
-differential_abundance.R
-
-# D: Mod coverage
+# A: Mod coverage
 python rqc.py plot_coverage -m subfeature -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --ids PF3D7_1123900.1 -i ./samples/laptop_samples_all_mods_coverage.txt --separate_y_axes -o PF3D7_1123900_mod_compare.eps  --plot_type bar
 
-# IGV screenshot
-# jbrowse, edit code, 17082 -> 17802
+# generate file of nuclear mRNA regions only
+awk '($3 == "mRNA" && $1 != "Pf3D7_MIT_v3" && $1 != "Pf3D7_API_v3") {print $1"\t"$4-1"\t"$5"\t"$9"\t.\t"$7}' ${ANNOTATION} > nuclear_mRNA_regions.bed 
+modkit summary --filter-threshold 0.95 --include-bed nuclear_mRNA_regions.bed --no-sampling ~/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam
+modkit summary --filter-threshold 0.65 --sampling-frac 0.1 --include-bed nuclear_mRNA_regions.bed --interval-size 100000 ~/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam
 
-# E: RNA-seq library sizes (steve)
-# F: Read length distributions (steve)
+
+# B: IGV screenshot of PF3D7_1123900.1
+
+# C: PCA (transcript count)
+# D: PCA top 50 loadings (transcript count)
+wam_pca.R
+
+# E: Differential abundance (transcript count)
+differential_abundance.R
 
 # ------------ Fig 3 ------------ #
 
@@ -84,8 +77,12 @@ python rqc.py plot_coverage -m subfeature -a ~/Documents/RNA/honours/Pfalciparum
 python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 0 --padding_ratio 0.1 --ids PF3D7_1123900.1 -i ./samples/laptop_samples.txt -o PF3D7_1338200.1.eps --mod_normalisation other
 # IGV screenshot, hide small indels (<100bp), show m6A > 0.95p
 
-# B: WAM change
-wam_change_t_test.R
+# B: coverage (top PC1 contributors)
+# the trick for padding here is padding_ratio = padding / (gene length + padding)
+
+python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 0 --padding_ratio 0.1 --ids PF3D7_1237700.1 -i ./samples/laptop_samples.txt -o PF3D7_1237700.1.eps --mod_normalisation other
+python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 300 --padding_ratio 0.12 --ids PF3D7_0309600.1 -i ./samples/laptop_samples_coverage_plot.txt --mod_normalisation other -o PF3D7_0309600.1.eps
+python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 300 --padding_ratio 0.18 --ids PF3D7_1128200.1 -i ./samples/laptop_samples_coverage_plot.txt --mod_normalisation other -o PF3D7_1128200.1.eps
 
 # C: Differential methylation of individual sites
 diff_meth_site_advanced.R
@@ -97,28 +94,23 @@ diff_meth_site_advanced.R
 # DM EDGER GROUP * METH_STATUS (NB GLM)
 # FDR SIGNIFICANCY CUTOFF 0.2
 
+# D: WAM change
+wam_change_t_test.R
 
-# D: PCA (canonical wam %)
-# E: Heatmap (canonical wam %)
-wam_pca.R
-
-# F: coverage (top PC1 contributors)
-# the trick for padding here is padding_ratio = padding / (gene length + padding)
-
-python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 0 --padding_ratio 0.1 --ids PF3D7_1237700.1 -i ./samples/laptop_samples.txt -o PF3D7_1237700.1.eps --mod_normalisation other
-python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 300 --padding_ratio 0.12 --ids PF3D7_0309600.1 -i ./samples/laptop_samples_coverage_plot.txt --mod_normalisation other -o PF3D7_0309600.1.eps
-python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 300 --padding_ratio 0.18 --ids PF3D7_1128200.1 -i ./samples/laptop_samples_coverage_plot.txt --mod_normalisation other -o PF3D7_1128200.1.eps
 # ------------ Fig 4 ------------ #
+# A: cartoon
 
 # FINDING m6A COUNTS
 bash glori_x_nanopore_analysis.sh
 
-#B: venn diagrams
+# B: venn diagrams
 # glori_nanopore_venn.R
 
 # C: sequence logos
 python rqc.py sequence_logo -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -g ~/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta -l 1 -p 2 -i glori_x_nanopore_analysis/nanopore_28u32u36.bed -o ont_union_15d25p.eps
 python rqc.py sequence_logo -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff -g ~/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta -l 1 -p 2 -i glori_x_nanopore_analysis/glori_12u24u48.bed -o glori_union_15d25p.eps
+
+# D: IGV screenshot of PF3D7_0102300, loaded 28C1, glori_12i24i48.bed, nanopore_28u32u36.bed and DRACH.bed
 
 # E: metagene coverage
 
@@ -137,6 +129,53 @@ python rqc.py plot_relative_distance -l "canonical PA" -d 1000 -i 3p_m6a_offsets
 
 # G: m6A specific analysis
 python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 100 --padding_ratio 0.1 --ids PF3D7_0402000.1 -i ./samples/laptop_samples_coverage_plot.txt -o PF3D7_0402000.1.eps --mod_normalisation other --plot_type bar --alpha 1
-python rqc.py m6A_specvific_tes_analysis -a $ANNOTATION -i samples/laptop_samples.txt --ids PF3D7_0402000.1 --poly_a_filter 10 -d 10 --separate_mod_tracks --offset_padding 1000 --offset 114415 
+python rqc.py m6A_specific_tes_analysis -a $ANNOTATION -i samples/laptop_samples.txt --ids PF3D7_0402000.1 --poly_a_filter 10 -d 10 --separate_mod_tracks --offset_padding 1000 --offset 114415
 
 # ------------ Fig 5 ------------ #
+# A:
+# IGV 28C1, 28K1 UBC E2 (PF3D7_1203900)
+
+# B: cartoon
+
+# C: 
+differential_abundance.R
+
+# D:
+run_on_t_test.R
+
+# E:
+wam_pca.R
+
+# F: 
+wam_pca.R
+
+# G: neighbour gene coverage
+python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 1823 --padding_ratio 0.25 --ids PF3D7_1439700 -i ./samples/laptop_samples_coverage_plot.txt -o PF3D7_1439700.1.eps --mod_normalisation other --plot_type bar --alpha 1
+python rqc.py plot_coverage -m gene -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --bins 1000 --read_depth 0 --padding 2106 --padding_ratio 0.33 --ids PF3D7_0518300 -i ./samples/laptop_samples_coverage_plot.txt -o PF3D7_0518300.1.eps --mod_normalisation other --plot_type bar --alpha 1
+
+# ------------ Supplementary figure 1 ------------ #
+
+# RNA-seq library sizes (steve)
+# Read length distributions (steve)
+
+
+# PCA (canonical wam %)
+# Heatmap (canonical wam %)
+wam_pca.R
+
+# ------------ Fig 6 ------------ #
+
+# From each featureCounts file the third column is number of assignments. We can filter for just entries with multiple assignments (>1) and get a list of gene ids that are involved in overlapping assignments. The below gives us a list of genes with the number of overlapping read counts:
+
+SAMPLE=28C1; awk '$3 > 1 {print $4}'  ~/Downloads/featureCountsStrandedOverlapMAPQFilter/${SAMPLE}_to_pfal.50MAPQ.sorted.bam.featureCounts | tr ',' '\n' > ${SAMPLE}_overlaps.txt
+SAMPLE=28C1; sort ${SAMPLE}_overlaps.txt | uniq -c > ${SAMPLE}_overlaps_counts.txt
+# There are 3 parent types of features in the Plasmodium off file: protein_coding_gene, ncRNA_gene, pseudogene. I'll create a list of all gene IDs with the following commands:
+
+cat ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff | awk '$3=="protein_coding_gene" {split ($9,x,/[=;]/); print x[2]}' > pcg_pseudogene_ncRNA_list.tsv
+cat ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff | awk '$3=="ncRNA_gene" {split ($9,x,/[=;]/); print x[2]}' >> pcg_pseudogene_ncRNA_list.tsv
+cat ~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff | awk '$3=="pseudogene" {split ($9,x,/[=;]/); print x[2]}' >> pcg_pseudogene_ncRNA_list.tsv
+wc -l pcg_pseudogene_ncRNA_list.tsv (=5720)
+# Now I'll combine my overlap count files into a single file:
+
+awk 'NR==FNR{a[$2]=$1;next} {if ($1 in a) {print $1"\t" a[$1]} else {print $1"\t"0}}' 28C1_overlaps_counts.txt pcg_pseudogene_ncRNA_list.tsv > 28hpi_overlap_counts.txt
+SAMPLE=28KC2; awk 'NR==FNR{a[$2]=$1;next} {if ($1 in a) {print $0"\t" a[$1]} else {print $0"\t"0}}' ${SAMPLE}_overlaps_counts.txt 28hpi_overlap_counts.txt > temp.txt && mv temp.txt 28hpi_overlap_counts.txt

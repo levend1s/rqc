@@ -2,6 +2,7 @@ import logomaker
 import pandas
 import matplotlib.pyplot as plt
 import numpy
+import os
 
 
 from rqc_modules.utils import process_annotation_file, process_genome_file, reverse_complement
@@ -91,7 +92,16 @@ def sequence_logo(args):
     OUTPUT_FORMAT = OUTPUT.split(".")[-1] if OUTPUT else "png"
 
     if OUTPUT:
-        plt.savefig("logo_bits_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+        output_path = os.path.abspath(OUTPUT)
+
+        # Split into directory + basename
+        outdir, base = os.path.split(output_path)
+        # Prepend prefix to the filename
+        new_base_bits = f"logo_bits_{base}"
+        new_base_counts = f"logo_counts_{base}"
+
+        # Build final path
+        plt.savefig(os.path.join(outdir, new_base_bits), transparent=True, dpi=300, format=OUTPUT_FORMAT)
 
     counts_matrix = logomaker.alignment_to_matrix(seqs, to_type='counts')
 
@@ -103,7 +113,7 @@ def sequence_logo(args):
     l.ax.set_ylabel('count')
 
     if OUTPUT:
-        plt.savefig("logo_counts_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
+        plt.savefig(os.path.join(outdir, new_base_counts), transparent=True, dpi=300, format=OUTPUT_FORMAT)
 
 
     plt.show()
