@@ -183,7 +183,10 @@ def process_row(row, label, samfile_path, coverage_padding, pysam_mod_threshold,
 
     for r in filtered_reads_in_region:
         ref_pos = r.get_reference_positions(full_length=True)
-        mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES[pysam_mod_tuple_code])
+        mods_probs = None
+
+        if r.modified_bases is not None:
+            mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES[pysam_mod_tuple_code])
 
         if mods_probs:
             # keep only mod positions which are above mod prob threshold
