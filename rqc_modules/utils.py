@@ -1013,7 +1013,9 @@ BASE_COMPLEMENTS = {
     '^': '$',
     '$': '^',
     '(': ')',
-    ')': '('
+    ')': '(',
+    'M': 'K',
+    'K': 'M'
 }
 
 def reverse_complement(s):
