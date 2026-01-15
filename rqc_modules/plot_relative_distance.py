@@ -33,7 +33,12 @@ def plot_relative_distance(args):
     df = df.set_index('gene_id')
     keys = [x for x in df.columns if x not in ['gene_id', 'position'] and "count" not in x]
     for k in keys:
-        df[k] = df[k].apply(lambda s: list(ast.literal_eval(s)))
+        print(df[k])
+        def safe_eval(s):
+            if pandas.isna(s):  # handles NaN safely
+                return []
+            return list(ast.literal_eval(s))
+        df[k] = df[k].apply(lambda s: safe_eval(s))
 
     d_coverages = df.to_dict(orient='index')
 
@@ -86,6 +91,19 @@ def plot_relative_distance(args):
         'annotation_three_p_count': 'green'
     }
 
+    import hashlib
+
+    # Predefined palette of colors
+    palette = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+            "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe"]
+
+    def get_color(label):
+        if label not in d_colors:
+            # Use a hash of the label to get a deterministic index in the palette
+            idx = int(hashlib.md5(label.encode()).hexdigest(), 16) % len(palette)
+            d_colors[label] = palette[idx]
+        return d_colors[label]
+
     fig, axes = plt.subplots()
 
     d_labels = {
@@ -95,6 +113,11 @@ def plot_relative_distance(args):
         "TTTN": 'TTTN'
     }
 
+    def get_label(label):
+        if label not in d_labels:
+            # Use a hash of the label to get a deterministic index in the palette
+            return label
+        return d_labels[label]
 
     for k, v in d_offset_hists.items():
         if PLOT_COUNTS:
@@ -102,8 +125,8 @@ def plot_relative_distance(args):
         else:
             normalised_v_by_reference_count = [x / len(df) * 100 for x in v]
         # axes.plot(x_ticks, v, label=k, color=d_colors[k])
-        axes.plot(x_ticks, normalised_v_by_reference_count, label=k, color=d_colors[k])
-        axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=d_colors[k])
+        axes.plot(x_ticks, normalised_v_by_reference_count, label=k, color=get_color(k))
+        axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=get_color(k))
 
     # TODO HACK
     CUSTOM_Y_MAX = None
@@ -129,8 +152,8 @@ def plot_relative_distance(args):
     fig, axes = plt.subplots()
 
     for k, v in d_offset_kdes.items():
-        axes.plot(x_ticks, v, label=d_labels[k], color=d_colors[k])
-        axes.fill_between(x_ticks, v, alpha=0.2, color=d_colors[k])
+        axes.plot(x_ticks, v, label=get_label(k), color=get_color(k))
+        axes.fill_between(x_ticks, v, alpha=0.2, color=get_color(k))
 
     axes.axvline(x=0, color='grey', ls="--", linewidth=1.0)
     axes.set_ylabel('count')
@@ -165,9 +188,9 @@ def plot_relative_distance(args):
         max_pam_sites_range = int(max_pam_count * 1.1)
         max_pam_sites_range = 100
         num_gene_x_ticks = list(range(max_pam_sites_range))
-        axes.plot(num_gene_x_ticks, v[:max_pam_sites_range], label=k, color=d_colors[k])
+        axes.plot(num_gene_x_ticks, v[:max_pam_sites_range], label=k, color=get_color(k))
         print(v[:max_pam_sites_range])
-        axes.fill_between(num_gene_x_ticks, v[:max_pam_sites_range], alpha=0.2, color=d_colors[k])
+        axes.fill_between(num_gene_x_ticks, v[:max_pam_sites_range], alpha=0.2, color=get_color(k))
 
     axes.set_ylabel('count (genes)')
     axes.set_xlabel('number of PAM sites')
