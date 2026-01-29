@@ -36,6 +36,7 @@ def build_parser():
     motif_finder_parser.add_argument("-o", "--output", required=True, help="output file (tsv)")
     motif_finder_parser.add_argument("-m", "--motif", required=True, help="motif to search for")
     motif_finder_parser.add_argument("-f", "--feature_filter", required=False, help="If provided, filter the annotation by feature type (e.g., 'exon', 'CDS', 'gene'). If not provided, no filtering is applied.")
+    motif_finder_parser.add_argument("--disable_lookahead", action="store_true", help="If provided, use lookahead regex to find overlapping motifs.")
 
     motif_finder_parser.set_defaults(func=motif_finder.motif_finder)
 

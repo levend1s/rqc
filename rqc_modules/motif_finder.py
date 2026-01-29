@@ -11,6 +11,7 @@ def motif_finder(args):
     ANNOTATION_FILE = args.annotation
     GENOME_FILE = args.genome
     FEATURE_FILTER = None
+    DISABLE_LOOKAHEAD = args.disable_lookahead
 
     if args.feature_filter:
         FEATURE_FILTER = args.feature_filter
@@ -50,8 +51,13 @@ def motif_finder(args):
 
     MOTIF_RC = reverse_complement(args.motif)
     print("LOG - looking for motif: {} (rc={})".format(MOTIF, MOTIF_RC))
-    forward_lookahead_regex = re.compile("(?=({}))".format(MOTIF), re.IGNORECASE)
-    reverse_lookahead_regex = re.compile("(?=({}))".format(MOTIF_RC), re.IGNORECASE)
+    if DISABLE_LOOKAHEAD:
+        forward_lookahead_regex = re.compile("({})".format(MOTIF), re.IGNORECASE)
+        reverse_lookahead_regex = re.compile("({})".format(MOTIF_RC), re.IGNORECASE)
+    else:
+        forward_lookahead_regex = re.compile("(?=({}))".format(MOTIF), re.IGNORECASE)
+        reverse_lookahead_regex = re.compile("(?=({}))".format(MOTIF_RC), re.IGNORECASE)
+        
 
     # create output file
     rows = []
