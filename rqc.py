@@ -47,6 +47,8 @@ def build_parser():
 
     calculate_offsets_parser.add_argument("-i", "--inputs", required=True, nargs="*", help="input name and files (e.g., 'input1 file1.bed input2 file2.bed')")
     calculate_offsets_parser.add_argument("-s", "--same_strand", action="store_true", help="If provided, consider motifs on the same strands. If not provided, consider motifs on both strands.")
+    calculate_offsets_parser.add_argument("-b", "--bed_reference", action="store_true", help="If provided, treat the reference file as a bed file with an ID column.")
+
 
     calculate_offsets_parser.set_defaults(func=calculate_offsets.calculate_offsets)
 

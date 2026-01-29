@@ -7,6 +7,7 @@ def calculate_offsets(args):
     OUTFILE = args.output
     SAME_STRAND = args.same_strand
     INPUTS = args.inputs
+    BED_REFERENCE = args.bed_reference
 
     if len(INPUTS) % 2 != 0:
         raise ValueError("Inputs must be provided in pairs: name and file path.")
@@ -64,6 +65,12 @@ def calculate_offsets(args):
     else:
         reference_df = pandas.read_csv(REFERENCE_BED, sep='\t')
     
+    if BED_REFERENCE:
+        reference_df = pandas.read_csv(REFERENCE_BED, sep='\t', names=GENERIC_BED_HEADER_BASE, header=None)
+        reference_df["ID"] = reference_df[["contig", "strand", "start"]].astype(str).agg("_".join, axis=1)
+
+
+
     reference_df['contig'] = reference_df['contig'].astype('category')
     reference_df['strand'] = reference_df['strand'].astype('category')
 
