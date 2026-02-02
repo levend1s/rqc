@@ -164,7 +164,7 @@ def m6A_tes_predictor_analysis(args):
         # d_tes_hist[label].pop('all', None)
         # d_kdes[label].pop('all', None)
 
-    plt.hist(probability, bins=100, color='skyblue', edgecolor='black', density=False)
+    plt.hist(probability, bins=100, color='skyblue', edgecolor='black', density=True)
     plt.xlabel('Probability')
     plt.ylabel('Density')
     plt.title('Distribution of Probabilities')
