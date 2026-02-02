@@ -16,6 +16,7 @@ from rqc_modules import approximate_tes
 from rqc_modules import gene_methylation_analysis
 from rqc_modules import filter_bam_by_mod
 from rqc_modules import m6A_specific_tes_analysis
+from rqc_modules import m6A_tes_predictor_analysis
 
 
 def build_parser():
@@ -177,12 +178,28 @@ def build_parser():
     m6A_specific_tes_analysis_parser.add_argument("--separate_mod_tracks", action="store_true", help="if provided filter reads which featureCounts has mapped to a gene")
     m6A_specific_tes_analysis_parser.add_argument("--offset_padding", required=False, type=int, default=500, help="input file listing coverage data")
 
-
-
-
-
     m6A_specific_tes_analysis_parser.set_defaults(func=m6A_specific_tes_analysis.m6A_specific_tes_analysis)
 
+    # ---- m6A_tes_predictor_analysis command ----
+
+    m6A_tes_predictor_analysis_parser = subparsers.add_parser("m6A_tes_predictor_analysis", help="Analyze m6A-specific transcript end sites")
+    m6A_tes_predictor_analysis_parser.add_argument("-i", "--input", required=True, help="input file listing coverage data")
+    m6A_tes_predictor_analysis_parser.add_argument("-a", "--annotation", required=True, help="annotation file (GFF)")
+    m6A_tes_predictor_analysis_parser.add_argument("-p", "--coverage_padding", required=False, type=int, default=100, help="coverage padding")
+    m6A_tes_predictor_analysis_parser.add_argument("-o", "--output", required=False, help="output file")
+    m6A_tes_predictor_analysis_parser.add_argument("-r", "--mod_ratio", required=False, type=float, default=0.5, help="input file listing coverage data")
+    m6A_tes_predictor_analysis_parser.add_argument("-c", "--mod_prob_threshold", required=False, type=float, default=0.95, help="input file listing coverage data")
+    
+    m6A_tes_predictor_analysis_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data.")
+    m6A_tes_predictor_analysis_parser.add_argument("--type", required=False, help="input file listing coverage data")
+
+    m6A_tes_predictor_analysis_parser.add_argument("--poly_a_filter", required=False, type=int, default=0, help="input file listing coverage data")
+    m6A_tes_predictor_analysis_parser.add_argument("-d", "--read_depth", required=False, type=int, default=20, help="input file listing coverage data")
+    m6A_tes_predictor_analysis_parser.add_argument("--offset_padding", required=False, type=int, default=500, help="input file listing coverage data")
+    m6A_tes_predictor_analysis_parser.add_argument("--tes_distance_threshold", required=False, type=int, default=100, help="maximum distance between m6A site and TES to consider for TES prediction")
+    m6A_tes_predictor_analysis_parser.add_argument("--exclude_contigs", required=False, nargs="*", help="input file listing coverage data.")
+
+    m6A_tes_predictor_analysis_parser.set_defaults(func=m6A_tes_predictor_analysis.m6A_tes_predictor_analysis)
 
     # ---- logo command ----
 

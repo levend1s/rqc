@@ -691,7 +691,7 @@ def filter_gff_for_target_features(annotation_file):
 
     return matches
 
-def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_threshold, read_depth_threshold, padding):
+def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_threshold, read_depth_threshold, padding, return_percent=False):
     print("LOG - finding canonical mods...")
     cannonical_mods_start_pos = {}
     for label in bam_labels:
@@ -703,15 +703,17 @@ def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_thresh
         mods_file_df['contig'] = mods_file_df['contig'].astype('category')
         
         # TODO maybe don't need to filter this for read depth, just filter the gene for read depth
+        # mods_file_df = mods_file_df[
+        #     (mods_file_df.percent_mod >= (mod_prop_threshold * 100)) & 
+        #     (mods_file_df.valid_cov >= read_depth_threshold)
+        # ]
+
         mods_file_df = mods_file_df[
-            (mods_file_df.percent_mod >= (mod_prop_threshold * 100)) & 
+            (mods_file_df.num_mod / (mods_file_df.valid_cov + mods_file_df.num_diff) >= (mod_prop_threshold)) & 
             (mods_file_df.valid_cov >= read_depth_threshold)
         ]
 
         for _, row in gff_panda_rows.iterrows():
-
-            if row['ID'] not in cannonical_mods_start_pos:
-                cannonical_mods_start_pos[row['ID']] = []
 
             row_mods = mods_file_df[
                 (mods_file_df.start >= (row['start'] - padding)) &
@@ -720,9 +722,20 @@ def find_canonical_mods(gff_panda_rows, input_files, bam_labels, mod_prop_thresh
                 (mods_file_df.contig == row['seq_id'])
             ]
 
-            for mod_index, mod in row_mods.iterrows():
-                if mod['start'] not in cannonical_mods_start_pos[row['ID']]:
-                    cannonical_mods_start_pos[row['ID']].append(mod['start'])
+            if return_percent:
+                if row['ID'] not in cannonical_mods_start_pos:
+                    cannonical_mods_start_pos[row['ID']] = {}
+
+                for mod_index, mod in row_mods.iterrows():
+                    if mod['start'] not in cannonical_mods_start_pos[row['ID']]:
+                        cannonical_mods_start_pos[row['ID']][mod['start']] = mod['percent_mod']
+            else:
+                if row['ID'] not in cannonical_mods_start_pos:
+                    cannonical_mods_start_pos[row['ID']] = []
+
+                for mod_index, mod in row_mods.iterrows():
+                    if mod['start'] not in cannonical_mods_start_pos[row['ID']]:
+                        cannonical_mods_start_pos[row['ID']].append(mod['start'])
 
     return cannonical_mods_start_pos
 
@@ -917,8 +930,6 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
             )
             reads_in_region = list(reads_in_region)
 
-            samfile.close()
-
             d_filtered_read_ids = {}
             d_filtered_read_ids['different_strand'] = []
             d_filtered_read_ids['3p'] = []
@@ -961,10 +972,10 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                         d_filtered_read_ids['filtered_reads'].append(i)
 
                         if row.strand == "-":
-                            mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev'])
+                            mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_rev']) if r.modified_bases else None
                             tx_end_site = r.reference_start
                         else:
-                            mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_for'])
+                            mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES['m6A_for']) if r.modified_bases else None
                             tx_end_site = r.reference_end
 
                         d_filtered_read_ids['tx_end_sites']['all'].append(tx_end_site)
@@ -1000,6 +1011,8 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                 ))
             
             d_sample_filtered_read_ids[label][row.ID] = d_filtered_read_ids
+
+        samfile.close()
 
     return d_sample_filtered_read_ids
 
