@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
+import matplotlib.colors
 import scipy.stats
 import os
 import numpy
+import pandas
 
 from rqc_modules.utils import process_input_files, process_annotation_file, filter_gff_for_target_features, find_canonical_mods, get_filtered_reads_ids
 
@@ -110,72 +112,37 @@ def m6A_tes_predictor_analysis(args):
                     tx_within = [x for x in tx_end_sites if (x >= m6A_specific_tes_threshold if row.strand == "-" else x <= m6A_specific_tes_threshold)]
                     num_tx_within = len(tx_within)
 
-                    if len(tx_end_sites) == 0:
-                        prob = 0
-                    else:
+                    # remove those sites with tx_end_sites but the caonical m6A is present,
+                    # this likely means the transcripts related to that mod are related to a different gene 
+
+                    # HACK
+                    if len(tx_end_sites) > READ_DEPTH_THRESHOLD:
                         prob = num_tx_within / len(tx_end_sites)
+                        # if len(tx_end_sites) == 0 and canonical_mods[row.ID][key] > 0:
+                        #     continue
+                        d_mod_tes_probs[row.ID][label][key] = {
+                            'probability': prob,
+                            'percent_mod': canonical_mods[row.ID][key] / 100,
+                            'num_tx_within': num_tx_within,
+                            'total_tx': len(tx_end_sites)
+                        }
 
-                    d_mod_tes_probs[row.ID][label][key] = {
-                        'probability': prob,
-                        'percent_mod': canonical_mods[row.ID][key] / 100,
-                        'num_tx_within': num_tx_within,
-                        'total_tx': len(tx_end_sites)
-                    }
+    # ID, mod start, percent_mod, probability, num tx within total tx
+    rows = []
 
+    for gene_id, samples in d_mod_tes_probs.items():
+        for sample, positions in samples.items():
+            for mod_start, metrics in positions.items():
+                rows.append({
+                    "ID": gene_id,
+                    "mod_start": mod_start,
+                    "percent_mod": metrics["percent_mod"],
+                    "probability": metrics["probability"],
+                    "num_tx_within": metrics["num_tx_within"],
+                    "total_tx": metrics["total_tx"],
+                })
 
-    from pprint import pprint
-    pprint(d_mod_tes_probs)
-
-    result = [
-        (inner['percent_mod'], inner['probability'])
-        for gene in d_mod_tes_probs.values()
-        for depth in gene.values()
-        for inner in depth.values()
-    ]
-
-    print(result)
-
-    percent_mod, probability = zip(*result)
-
-
-    epsilon = 1e-9
-
-    x = numpy.clip(percent_mod, epsilon, 1 - epsilon)
-    y = numpy.clip(probability, epsilon, 1 - epsilon)
-
-    print(min(x), max(x))
-    print(min(y), max(y))
-
-    x_logit = numpy.log(x / (1 - x))
-    y_logit = numpy.log(y / (1 - y))
-
-    # Create scatter plot
-    plt.figure(figsize=(6, 4))
-    plt.scatter(x_logit, y, alpha=0.7)
-
-    # Labels and title
-    plt.xlabel('Percent Modified')
-    plt.ylabel('Probability')
-    plt.title('Percent Modified vs Probability')
-
-    plt.show()
-
-        # HACK manually remove total coverage for all mods
-        # d_tes_hist[label].pop('all', None)
-        # d_kdes[label].pop('all', None)
-
-    plt.hist(probability, bins=100, color='skyblue', edgecolor='black', density=True)
-    plt.xlabel('Probability')
-    plt.ylabel('Density')
-    plt.title('Distribution of Probabilities')
-    plt.show()
+    summary_df = pandas.DataFrame(rows)
 
     if OUTPUT:
-        OUTPUT_FORMAT = OUTPUT.split(".")[-1] if OUTPUT else "png"
-
-        if OUTPUT_FORMAT not in ["png", "eps", "pdf"]:
-            raise ValueError("Output format must be one of: png, eps, pdf")
-        
-        plt.savefig("m6A_specific_tes_analysis_{}".format(OUTPUT), transparent=True, dpi=300, format=OUTPUT_FORMAT)
-
-    plt.show()
+        summary_df.to_csv(OUTPUT, sep='\t', index=False)
