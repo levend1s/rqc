@@ -156,10 +156,11 @@ def build_parser():
     filter_bam_by_mod_parser = subparsers.add_parser("filter_bam_by_mod", help="filter a bam file by modification status in a region")
     filter_bam_by_mod_parser.add_argument("-i", "--input",              required=True,  help="input file listing coverage data.")
     filter_bam_by_mod_parser.add_argument("-t", "--mod_prob_threshold", required=False, type=float, default=0.95, help="input file listing coverage data")
-    filter_bam_by_mod_parser.add_argument("--include",  required=True,  type=int, nargs="*", help="filter for only reads without m6A modification at these positions")
+    filter_bam_by_mod_parser.add_argument("--include",  required=True,  type=int, help="filter for only reads without m6A modification at these positions")
     filter_bam_by_mod_parser.add_argument("-c", "--contig",             required=True,  help="output filtered bam file.")
     filter_bam_by_mod_parser.add_argument("-s", "--strand",             required=True,  help="output filtered bam file.")
     filter_bam_by_mod_parser.add_argument("-m", "--mod",                required=False,  default="m6A", help="output filtered bam file.")
+    filter_bam_by_mod_parser.add_argument("--exclude_tol",  required=False,  type=int, default=0, help="filter for only reads without m6A modification at these positions")
 
     filter_bam_by_mod_parser.set_defaults(func=filter_bam_by_mod.filter_bam_by_mod)
 

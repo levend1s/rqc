@@ -912,6 +912,12 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
     "filtered (fc)\t" \
     "filtered (3p)\t")
     
+    def no_values_within(s, x, tol=100):
+        for v in s:
+            if abs(v - x) <= tol:
+                return False
+        return True
+
     PYSAM_MOD_THRESHOLD = int(256 * mod_prop_threshold) 
 
     d_sample_filtered_read_ids = {}
@@ -936,17 +942,21 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
             d_filtered_read_ids['featureCounts'] = []
             d_filtered_read_ids['filtered_reads'] = []
             d_filtered_read_ids['tx_end_sites'] = {}
+            d_filtered_read_ids['tx_end_sites_without_mod'] = {}
+
 
             d_filtered_read_ids['mods'] = {}
 
             d_filtered_read_ids['mods']['None'] = []
             d_filtered_read_ids['tx_end_sites']['all'] = []
             d_filtered_read_ids['tx_end_sites']['None'] = []
+            d_filtered_read_ids['tx_end_sites_without_mod']['all'] = []
+            d_filtered_read_ids['tx_end_sites_without_mod']['None'] = []
 
             for mod in cannonical_mods_start_pos[row.ID]:
                 d_filtered_read_ids['mods'][mod] = []
                 d_filtered_read_ids['tx_end_sites'][mod] = []
-
+                d_filtered_read_ids['tx_end_sites_without_mod'][mod] = []
             if approximated_tes:
                 gene_3p_end = approximated_tes[row.ID]
                 print("LOG - using approximated tes {}".format(gene_3p_end))
@@ -987,7 +997,17 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                             
                             # read mod positions is the position from the start of the read
                             # aligned reads may contain indels, so we need to get reference index from get_reference_positions
+                            genomic_mod_positions = [ref_pos[mod] for mod in read_mod_positions if ref_pos[mod] is not None]
                             canonical_mods_in_read = set(cannonical_mods_start_pos[row.ID]).intersection(ref_pos[read_mod_positions])
+                            
+                            # put reads which do not have a given m6A into their own category
+                            # OR an m6a within the padding threshold
+                            for mod in cannonical_mods_start_pos[row.ID]:
+                                # if (mod <= r.reference_end and mod >= r.reference_start) and mod not in canonical_mods_in_read:
+                                if (mod <= r.reference_end and mod >= r.reference_start) and no_values_within(genomic_mod_positions, mod, tol=100):
+                                    d_filtered_read_ids['tx_end_sites_without_mod'][mod].append(tx_end_site)
+                            # if ref_pos contains mod and mod not in canonical_mods_in_read, add it to this mods missing category
+
                             if len(canonical_mods_in_read) == 0:
                                 d_filtered_read_ids['mods']['None'].append(i)
                                 d_filtered_read_ids['tx_end_sites']['None'].append(tx_end_site)
@@ -995,8 +1015,14 @@ def get_filtered_reads_ids(gff_panda_rows, input_files, bam_labels, mod_prop_thr
                                 for mod in canonical_mods_in_read:
                                     d_filtered_read_ids['mods'][mod].append(i)
                                     d_filtered_read_ids['tx_end_sites'][mod].append(tx_end_site)
+                        else:
+                            for mod in cannonical_mods_start_pos[row.ID]:
+                                if (mod <= r.reference_end and mod >= r.reference_start):
+                                    d_filtered_read_ids['tx_end_sites_without_mod'][mod].append(tx_end_site)
+
                     else:
                         d_filtered_read_ids['3p'].append(i)
+                        
                 else:
                     d_filtered_read_ids['different_strand'].append(i)
 

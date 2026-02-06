@@ -99,9 +99,13 @@ def m6A_tes_predictor_analysis(args):
         # create hist / kde for all tes, and separate ones for reads containing each mod
         d_mod_tes_probs[row.ID] = {}
 
+        print("PROCESSING GENE: {}".format(row.ID))
+        
         for label in bam_labels:
             d_mod_tes_probs[row.ID][label] = {}
+        
             for key, tx_end_sites in filtered_read_ids[label][row.ID]['tx_end_sites'].items():
+                # !!!! DO THE SAME FOR # tx_end_sites_without_mod
 
                 if key != 'all':
                     if row.strand == "-":
@@ -114,35 +118,50 @@ def m6A_tes_predictor_analysis(args):
 
                     # remove those sites with tx_end_sites but the caonical m6A is present,
                     # this likely means the transcripts related to that mod are related to a different gene 
+                    tx_end_sites_without_mod = filtered_read_ids[label][row.ID]['tx_end_sites_without_mod'][key]
+                    tx_within_without_mods = [x for x in tx_end_sites_without_mod if (x >= m6A_specific_tes_threshold if row.strand == "-" else x <= m6A_specific_tes_threshold)]
+                    num_tx_within_without_mods = len(tx_within_without_mods)
 
                     # HACK
                     if len(tx_end_sites) > READ_DEPTH_THRESHOLD:
                         prob = num_tx_within / len(tx_end_sites)
+                        prob_without_mods = num_tx_within_without_mods / len(tx_end_sites_without_mod) if len(tx_end_sites_without_mod) > 0 else 0
                         # if len(tx_end_sites) == 0 and canonical_mods[row.ID][key] > 0:
                         #     continue
                         d_mod_tes_probs[row.ID][label][key] = {
-                            'probability': prob,
                             'percent_mod': canonical_mods[row.ID][key] / 100,
-                            'num_tx_within': num_tx_within,
-                            'total_tx': len(tx_end_sites)
+                            'probability_with_mods': prob,
+                            'probability_without_mods': prob_without_mods,
+                            'num_tx_within_with_mod': num_tx_within,
+                            'total_tx_with_mod': len(tx_end_sites),
+                            'num_tx_within_without_mod': num_tx_within_without_mods,
+                            'total_tx_without_mod': len(tx_end_sites_without_mod)
                         }
 
     # ID, mod start, percent_mod, probability, num tx within total tx
     rows = []
+
+    print("GENERATING SUMMARY DF...")
 
     for gene_id, samples in d_mod_tes_probs.items():
         for sample, positions in samples.items():
             for mod_start, metrics in positions.items():
                 rows.append({
                     "ID": gene_id,
+                    "sample": sample,
                     "mod_start": mod_start,
                     "percent_mod": metrics["percent_mod"],
-                    "probability": metrics["probability"],
-                    "num_tx_within": metrics["num_tx_within"],
-                    "total_tx": metrics["total_tx"],
+                    "probability_with_mods": metrics["probability_with_mods"],
+                    "probability_without_mods": metrics["probability_without_mods"],
+                    "num_tx_within_with_mod": metrics["num_tx_within_with_mod"],
+                    "total_tx_with_mod": metrics["total_tx_with_mod"],
+                    "num_tx_within_without_mod": metrics["num_tx_within_without_mod"],
+                    "total_tx_without_mod": metrics["total_tx_without_mod"]
                 })
 
     summary_df = pandas.DataFrame(rows)
+
+    print("writing summary df to: {}".format(OUTPUT))
 
     if OUTPUT:
         summary_df.to_csv(OUTPUT, sep='\t', index=False)
