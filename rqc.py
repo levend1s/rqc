@@ -17,6 +17,7 @@ from rqc_modules import gene_methylation_analysis
 from rqc_modules import filter_bam_by_mod
 from rqc_modules import m6A_specific_tes_analysis
 from rqc_modules import m6A_tes_predictor_analysis
+from rqc_modules import cluster_transcripts
 
 
 def build_parser():
@@ -163,6 +164,21 @@ def build_parser():
     filter_bam_by_mod_parser.add_argument("--exclude_tol",  required=False,  type=int, default=0, help="filter for only reads without m6A modification at these positions")
 
     filter_bam_by_mod_parser.set_defaults(func=filter_bam_by_mod.filter_bam_by_mod)
+
+    # ---- cluster_transcripts command ----
+    cluster_transcripts_parser = subparsers.add_parser("cluster_transcripts", help="cluster transcripts based on modification status")
+    cluster_transcripts_parser.add_argument("-t", "--mod_prob_threshold", required=False, type=float, default=0.95, help="input file listing coverage data")
+    cluster_transcripts_parser.add_argument("-s", "--strand",             required=False,  help="output filtered bam file.")
+    cluster_transcripts_parser.add_argument("-m", "--mod",                required=False,  default="m6A", help="output filtered bam file.")
+    cluster_transcripts_parser.add_argument("--exclude_tol",  required=False,  type=int, default=0, help="filter for only reads without m6A modification at these positions")
+    cluster_transcripts_parser.add_argument("-a", "--annotation",         required=False,  help="annotation file (GFF)")
+    cluster_transcripts_parser.add_argument("--ids", required=True, nargs="*", help="input file listing coverage data.")
+    cluster_transcripts_parser.add_argument("-p", "--padding", required=False, type=int, default=100, help="coverage padding")
+    cluster_transcripts_parser.add_argument("-o", "--outfile", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
+    cluster_transcripts_parser.add_argument("-b", "--bamfile", required=True, help="input bam file with reads to cluster")
+
+    cluster_transcripts_parser.set_defaults(func=cluster_transcripts.cluster_transcripts)
+
 
     # ---- m6A_specific_tes_analysis command ----
     m6A_specific_tes_analysis_parser = subparsers.add_parser("m6A_specific_tes_analysis", help="Analyze m6A-specific transcript end sites")
