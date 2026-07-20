@@ -14,6 +14,7 @@ library(proxy)
 
 all_continuous_cols <- c("read_start", "read_end", "read_length", "poly_a_length", "num_mods")
 MIN_PTS_PCT <- 0.05
+MINPTS_CLUSTER <- 10
 
 set.seed(42)
 
@@ -111,9 +112,9 @@ combined_dist <- w_mod * cosine_dist_norm + w_cont * euclidean_dist_norm
 # -------------------------------------------------------------------
 custom_config <- umap.defaults
 custom_config$input <- "dist"
-custom_config$n_neighbors <- 30
-custom_config$min_dist <- 0.3
-custom_config$spread <- 1.5
+# custom_config$n_neighbors <- 30
+# custom_config$min_dist <- 0.3
+# custom_config$spread <- 1.5
 umap_result <- umap(combined_dist, config = custom_config)
 
 df$umap_x <- umap_result$layout[, 1]
@@ -123,7 +124,7 @@ df$umap_y <- umap_result$layout[, 2]
 # 6. Cluster ONCE on the combined distance matrix -> shared cluster IDs
 # -------------------------------------------------------------------
 min_pts <- max(2, round(nrow(df) / length(unique(df$source_file)) * MIN_PTS_PCT))
-clust <- hdbscan(as.dist(combined_dist), minPts = min_pts)
+clust <- hdbscan(as.dist(combined_dist), minPts = MINPTS_CLUSTER)
 df$cluster <- as.factor(clust$cluster)
 
 table(df$cluster, df$source_file)  # check cluster x file distribution -- see batch-effect note below
@@ -318,7 +319,7 @@ df_plot <- df %>%
   slice_sample(n = min_reads) %>%
   ungroup()
 
-df_plot %>%
+df %>%
   filter(cluster %in% cluster_to_show) %>%
   ggplot(aes(x = umap_x, y = umap_y, color = cluster)) +
   geom_point(size = 1, alpha = 0.6) +
