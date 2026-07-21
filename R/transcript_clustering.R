@@ -5,10 +5,12 @@ library(dbscan)
 library(ggrepel)
 library(proxy)
 library(processx)
+library(edgeR)
 
 all_continuous_cols <- c("read_start", "read_end", "read_length", "poly_a_length", "num_mods")
 CLUSTER_PERC <- 0.01 # percentage of total reads to consider a cluster
 UMAP_MIN_DIST <- 0.3
+manual_lib_sizes <- c(2448848, 1350852, 1790844, 2283056)  # example values
 
 set.seed(42)
 
@@ -351,4 +353,68 @@ df %>%
   theme_classic() +
   theme(legend.position = "none")
 
+# -------------------------------------------------------------------
+# 10. Differential abundance of clusters across samples (edgeR)
+# -------------------------------------------------------------------
+
+# clusters x samples count matrix
+cluster_counts <- table(df$cluster, df$source_file)
+cluster_counts <- as.matrix(cluster_counts)
+
+# drop the noise cluster ("0" from HDBSCAN) before testing
+cluster_counts <- cluster_counts[rownames(cluster_counts) != "0", ]
+
+# metadata: map source_file -> condition/group
+# (edit this to reflect your actual experimental design)
+sample_info <- data.frame(
+  source_file = colnames(cluster_counts),
+  group = c("control", "control", "treatment", "treatment") # <- your groups
+)
+
+y <- DGEList(counts = cluster_counts, group = sample_info$group, lib.size = manual_lib_sizes)
+
+# library size = total reads per sample, TMM normalizes for
+# compositional differences (accounts for the fact that if one
+# cluster balloons in a sample, it mechanically shrinks others)
+y <- calcNormFactors(y, method = "TMM")
+
+design <- model.matrix(~ group, data = sample_info)
+y <- estimateDisp(y, design)
+
+fit <- glmQLFit(y, design)
+qlf <- glmQLFTest(fit, coef = 2)  # tests conditionB vs conditionA
+
+topTags(qlf, n = Inf)
+
+volcano_df <- topTags(qlf, n = Inf)$table %>%
+  as_tibble(rownames = "cluster") %>%
+  mutate(
+    sig = case_when(
+      FDR < 0.05 & logFC >  1 ~ "Up",
+      FDR < 0.05 & logFC < -1 ~ "Down",
+      TRUE                    ~ "NS"
+    )
+  )
+
+ggplot(volcano_df, aes(x = logFC, y = -log10(PValue), color = sig)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50") +
+  geom_label_repel(
+    data = volcano_df %>% filter(sig != "NS"),
+    aes(label = paste0("Cluster ", cluster)),
+    size = 3,
+    fontface = "bold",
+    max.overlaps = Inf,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = c("Up" = "firebrick", "Down" = "steelblue", "NS" = "grey70")) +
+  labs(
+    title = "Differential cluster abundance",
+    subtitle = "logFC and significance from edgeR QLF test",
+    x = "log2 fold change (treatment / control)",
+    y = expression(-log[10](p-value)),
+    color = "Significance"
+  ) +
+  theme_classic()
 
