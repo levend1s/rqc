@@ -5,22 +5,14 @@ library(dbscan)
 library(ggrepel)
 library(proxy)
 
-
-# SAMPLE=28C1; python rqc.py cluster_transcripts -a ~/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff --padding 100 --ids PF3D7_1442300.1 -b /Users/joshualevendis/Downloads/bams/${SAMPLE}_to_pfal.50MAPQ.sorted.bam -o ~/Downloads/umap_results_${SAMPLE}.tsv
-
-# =====================================================================
-# CONFIG
-# =====================================================================
-
 all_continuous_cols <- c("read_start", "read_end", "read_length", "poly_a_length", "num_mods")
-MIN_PTS_PCT <- 0.05
-MINPTS_CLUSTER <- 10
+NUM_SAMPLES <- 4
+READ_THRESHOLD <- 10
+MINPTS_CLUSTER <- NUM_SAMPLES * READ_THRESHOLD
 
 set.seed(42)
 
-
 file <- c("~/rqc/cluster_transcripts_results.tsv")
-
 df <- read.delim(file)
 
 df <- df %>%
@@ -31,7 +23,9 @@ df <- df %>%
   )
 
 # -------------------------------------------------------------------
-# 2. Build the binary mod_matrix (presence/absence per position)
+# 2. Build the mod_matrix (counts per position; presence/absence if a
+#    position never repeats within a read's own list, which is the
+#    typical case here)
 # -------------------------------------------------------------------
 df_long <- df %>%
   select(read_id, mod_positions) %>%
@@ -39,20 +33,19 @@ df_long <- df %>%
   filter(!is.na(mod_positions),
          mod_positions != "") %>%
   rename(mod_position = mod_positions) %>%
-  mutate(present = 1)
+  count(read_id, mod_position, name = "count")
 
 mod_matrix <- df_long %>%
-  select(read_id, mod_position, present) %>%
   pivot_wider(
     names_from = mod_position,
-    values_from = present,
+    values_from = count,
     values_fill = 0,
     names_prefix = "mod_pos_"
   )
 
 mod_matrix <- df %>%
   select(read_id) %>%
-  left_join(mod_matrix, by="read_id") %>%
+  left_join(mod_matrix, by = "read_id") %>%
   replace(is.na(.), 0)
 
 mod_matrix <- mod_matrix %>%
@@ -61,79 +54,100 @@ mod_matrix <- mod_matrix %>%
       rowSums(across(starts_with("mod_pos_"))) == 0
     )
   )
-# all_mod_pos_cols <- c(
-#   grep("^mod_pos_", names(mod_matrix), value = TRUE),
-#   "no_mod_reads"
-# )
 
 # DONT INCLUDE NO_MOD_READS
 all_mod_pos_cols <- c(
   grep("^mod_pos_", names(mod_matrix), value = TRUE)
 )
-
 mod_pos_cols <- all_mod_pos_cols
 
 mod_X <- mod_matrix %>% select(all_of(mod_pos_cols)) %>% as.matrix()
 
 # -------------------------------------------------------------------
-# 3. Continuous features -> scale, then Euclidean distance
+# 3. TF x frequency-weighting of the modification-position matrix
+#    TF = relative frequency of a position within a read's own list
+#    FW = "frequency weight" -- deliberately the INVERSE of classic
+#         IDF. Positions present across many/most reads are treated
+#         as the informative, consistent signal here (e.g. core
+#         modification sites), so they get UP-weighted rather than
+#         down-weighted. FW = log(1 + doc_freq), so a position in
+#         every read gets close to log(1 + N) (max weight), and a
+#         position seen in only 1-2 reads gets close to log(2)
+#         (near-minimum weight).
+# -------------------------------------------------------------------
+compute_freq_weighted <- function(count_matrix) {
+  row_sums <- rowSums(count_matrix)
+  row_sums[row_sums == 0] <- 1  # reads with no mods: avoid div by 0
+  tf <- count_matrix / row_sums
+  
+  doc_freq <- colSums(count_matrix > 0)
+  freq_weight <- log(1 + doc_freq)  # higher for MORE common positions
+  
+  sweep(tf, 2, freq_weight, `*`)
+}
+
+mod_X_tfidf <- compute_freq_weighted(mod_X)
+
+# -------------------------------------------------------------------
+# 4. Continuous features -> scale, then Euclidean distance
 # -------------------------------------------------------------------
 continuous_cols <- all_continuous_cols
-
 cont_X <- df %>%
   select(all_of(continuous_cols)) %>%
   mutate(across(everything(), ~ as.numeric(scale(.x)))) %>%
   as.matrix()
 
 # -------------------------------------------------------------------
-# 4. Distance matrices, normalized, combined
+# 5. Distance matrices, normalized, combined
 # -------------------------------------------------------------------
+# cosine distance on frequency-weighted modification profiles
+# (replaces the earlier binary/Jaccard distance on raw presence;
+#  common positions are up-weighted, not down-weighted -- see step 3)
+tfidf_cosine_dist <- as.matrix(proxy::dist(mod_X_tfidf, method = "cosine"))
+tfidf_cosine_dist[is.na(tfidf_cosine_dist)] <- 1
+
+# kept for reference / comparison against the TF-IDF version
 # jaccard_dist <- as.matrix(dist(mod_X, method = "binary"))
 # jaccard_dist[is.na(jaccard_dist)] <- 1
-
-# cosine distance for modification profiles
-cosine_dist <- as.matrix(proxy::dist(mod_X, method = "cosine"))
-cosine_dist[is.na(cosine_dist)] <- 1
 
 euclidean_dist <- as.matrix(dist(cont_X, method = "euclidean"))
 
 normalize01 <- function(m) (m - min(m)) / (max(m) - min(m))
-# jaccard_dist_norm <- normalize01(jaccard_dist)
-cosine_dist_norm <- normalize01(cosine_dist)
+
+tfidf_cosine_dist_norm <- normalize01(tfidf_cosine_dist)
 euclidean_dist_norm <- normalize01(euclidean_dist)
 
 w_mod <- 0.2
 w_cont <- 0.8
-# combined_dist <- w_mod * jaccard_dist_norm + w_cont * euclidean_dist_norm
-combined_dist <- w_mod * cosine_dist_norm + w_cont * euclidean_dist_norm
+
+combined_dist <- w_mod * tfidf_cosine_dist_norm + w_cont * euclidean_dist_norm
 
 # -------------------------------------------------------------------
-# 5. Run UMAP ONCE on the combined data -> shared coordinate space
+# 6. Run UMAP ONCE on the combined data -> shared coordinate space
 # -------------------------------------------------------------------
 custom_config <- umap.defaults
 custom_config$input <- "dist"
-# custom_config$n_neighbors <- 30
-# custom_config$min_dist <- 0.3
-# custom_config$spread <- 1.5
 umap_result <- umap(combined_dist, config = custom_config)
 
 df$umap_x <- umap_result$layout[, 1]
 df$umap_y <- umap_result$layout[, 2]
 
 # -------------------------------------------------------------------
-# 6. Cluster ONCE on the combined distance matrix -> shared cluster IDs
+# 7. Cluster ONCE on the combined distance matrix -> shared cluster IDs
 # -------------------------------------------------------------------
-min_pts <- max(2, round(nrow(df) / length(unique(df$source_file)) * MIN_PTS_PCT))
-clust <- hdbscan(as.dist(combined_dist), minPts = MINPTS_CLUSTER)
-df$cluster <- as.factor(clust$cluster)
+# clust <- hdbscan(as.dist(combined_dist), minPts = MINPTS_CLUSTER)
+clust <- hdbscan(umap_result$layout, minPts = MINPTS_CLUSTER)
 
+df$cluster <- as.factor(clust$cluster)
 table(df$cluster, df$source_file)  # check cluster x file distribution -- see batch-effect note below
 
-
 # -------------------------------------------------------------------
-# 9. Cluster labels (top 5 distinguishing features per cluster)
+# 8. Cluster labels (top 5 distinguishing features per cluster)
+#    NOTE: labels still use the raw count/presence mod_matrix (not the
+#    TF-IDF matrix) so the text stays human-readable as "% of reads
+#    with this modification" rather than an abstract TF-IDF weight.
+#    TF-IDF only drives the distance/clustering step above.
 # -------------------------------------------------------------------
-
 build_cluster_labels <- function(df, mod_matrix,
                                  continuous_cols = c("read_end",
                                                      "read_length",
@@ -169,14 +183,11 @@ build_cluster_labels <- function(df, mod_matrix,
   
   overall_all <- bind_rows(overall_mod, overall_cont)
   
-  
   # Format labels
   format_line <- function(feature, value, is_mod) {
     
     if (is_mod) {
-      
       feature_name <- sub("^mod_pos_", "", feature)
-      
       return(
         paste0(feature_name,
                ": ",
@@ -185,27 +196,21 @@ build_cluster_labels <- function(df, mod_matrix,
       )
       
     } else if (feature == "read_end") {
-      
       return(paste0(feature, ": ", round(value), " bp"))
       
     } else if (feature == "read_start") {
-      
       return(paste0(feature, ": ", round(value), " bp"))
       
     } else if (feature == "read_length") {
-      
       return(paste0(feature, ": ", round(value), " bp"))
       
     } else if (feature == "poly_a_length") {
-      
       return(paste0(feature, ": ", round(value, 1), " nt"))
       
     } else {
-      
       return(paste0(feature, ": ", round(value, 2)))
     }
   }
-  
   
   map_dfr(clusters, function(cl) {
     
@@ -213,10 +218,8 @@ build_cluster_labels <- function(df, mod_matrix,
       filter(cluster == cl) %>%
       pull(read_id)
     
-    
     centroid_x <- median(df$umap_x[df$cluster == cl])
     centroid_y <- median(df$umap_y[df$cluster == cl])
-    
     
     # Cluster feature values
     this_mod <- mod_matrix %>%
@@ -229,7 +232,6 @@ build_cluster_labels <- function(df, mod_matrix,
         values_to = "cluster_value"
       )
     
-    
     this_cont <- df %>%
       filter(cluster == cl) %>%
       summarise(across(all_of(continuous_cols),
@@ -240,23 +242,19 @@ build_cluster_labels <- function(df, mod_matrix,
         values_to = "cluster_value"
       )
     
-    
     # Combine all features
     this_all <- bind_rows(this_mod, this_cont) %>%
       left_join(overall_all, by = "feature") %>%
       mutate(
         is_mod = feature %in% mod_pos_cols,
-        
         # absolute difference from global average
         effect = abs(cluster_value - overall_value)
       )
-    
     
     # Select top 5 features describing this cluster
     top_features <- this_all %>%
       arrange(desc(effect)) %>%
       slice_head(n = top_n_features)
-    
     
     feature_lines <- top_features %>%
       mutate(
@@ -269,13 +267,11 @@ build_cluster_labels <- function(df, mod_matrix,
       ) %>%
       pull(line)
     
-    
     label_text <- paste0(
       "Cluster ", cl,
       " (n=", length(ids), ")\n",
       paste(feature_lines, collapse = "\n")
     )
-    
     
     tibble(
       cluster = cl,
@@ -287,7 +283,6 @@ build_cluster_labels <- function(df, mod_matrix,
   })
 }
 
-
 cluster_labels <- build_cluster_labels(
   df,
   mod_matrix,
@@ -298,12 +293,12 @@ cluster_labels <- build_cluster_labels(
   mod_pos_cols,
   top_n_features = 5
 )
+
 # -------------------------------------------------------------------
-# 10. Plot: same colors, same layout, same clusters, faceted by file
+# 9. Plot: same colors, same layout, same clusters, faceted by file
 # -------------------------------------------------------------------
 all_cluster_levels <- levels(df$cluster)
-
-cluster_to_show <- unique(df$cluster[df$cluster != "0"])
+# cluster_to_show <- unique(df$cluster[df$cluster != "0"])
 # cluster_to_show <- c("3", "4", "5", "6")
 cluster_to_show <- unique(df$cluster)
 
@@ -319,7 +314,7 @@ df_plot <- df %>%
   slice_sample(n = min_reads) %>%
   ungroup()
 
-df %>%
+df_plot %>%
   filter(cluster %in% cluster_to_show) %>%
   ggplot(aes(x = umap_x, y = umap_y, color = cluster)) +
   geom_point(size = 1, alpha = 0.6) +
@@ -352,7 +347,7 @@ df %>%
   theme(legend.position = "none")
 
 # -------------------------------------------------------------------
-# 8. Random forest importance (on combined data)
+# 10. Random forest importance (on combined data)
 # -------------------------------------------------------------------
 rf_data <- df %>%
   select(read_id, cluster, all_of(continuous_cols)) %>%
@@ -364,6 +359,7 @@ rf_data <- rf_data %>% filter(cluster != "0")
 rf_data$cluster <- droplevels(rf_data$cluster)
 
 rf <- randomForest(cluster ~ ., data = rf_data, importance = TRUE)
+
 importance(rf) %>%
   as.data.frame() %>%
   rownames_to_column("feature") %>%
