@@ -29,7 +29,6 @@ def cluster_transcripts(args):
     IDS = args.ids
     COVERAGE_PADDING = args.padding
     MOD_PROB_THRESHOLD = args.mod_prob_threshold
-    BAMFILE = args.bamfile
     OUTFILE = args.outfile
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
@@ -47,6 +46,7 @@ def cluster_transcripts(args):
     read_table_header = [
         "read_id",
         "source_file",
+        "contig",
         "read_start",
         "read_end",
         "read_strand",
@@ -109,6 +109,7 @@ def cluster_transcripts(args):
                 read_entry = [
                     r.query_name,
                     label,
+                    row['seq_id'],
                     r.reference_start,
                     r.reference_end,
                     read_strand,
