@@ -9,29 +9,27 @@ library(edgeR)
 
 all_continuous_cols <- c(
   "read_start",
-  "read_end"
-  # "read_length"
-  # "poly_a_length",
-  # "average_quality",
-  # "m6A_num_mods",
-  # "m5C_num_mods",
-  # "pseU_num_mods",
-  # "m6A_inosine_num_mods"
+  "read_end",
+  "read_length",
+  "poly_a_length"
+  # "read_strand"
+  # "average_quality"
 )
 CLUSTER_PERC <- 0.01 # percentage of total reads to consider a cluster
 UMAP_MIN_DIST <- 0.3
 MOD_DROP_THRESHOLD <- 0.0
-INTRON_DROP_THRESHOLD <- 0.000
+INTRON_DROP_THRESHOLD <- 1.0
+MIN_FEATURE_READS <- 10
 manual_lib_sizes <- c(2448848, 1350852, 1790844, 2283056)  # example values
 USE_RF <- FALSE
 
-# MOD_TYPES <- c("m6A", "m5C", "pseU", "m6A_inosine")
-MOD_TYPES <- c("m6A")
+MOD_TYPES <- c("m6A", "m5C", "pseU", "m6A_inosine")
+# MOD_TYPES <- c("m6A")
 # MOD_TYPES <- NULL
 
-w_mod <- 0.2
+w_mod <- 0.3
 w_intron <- 0.2
-w_cont <- 0.6
+w_cont <- 0.5
 
 set.seed(42)
 
@@ -160,7 +158,7 @@ build_cluster_labels <- function(df,
       l <- top_features$loading[i]
       
       if(f %in% mod_pos_cols){
-        txt <- sprintf("%s %.0f%%",sub("^[^_]+_","",f),100*v)
+        txt <- sprintf("%s %.0f%%",f,100*v)
       } else if(f %in% intron_cols){
         txt <- sprintf("Intron %s %.0f%%",sub("^intron_","",f),100*v)
       } else if(f %in% c("read_start","read_end","read_length")){
@@ -256,10 +254,6 @@ mod_X <- mod_matrix %>%
   select(all_of(all_mod_pos_cols)) %>%
   as.matrix()
 
-# # TODO: Ignore mod positions which are in less than 0.1% of reads
-mod_freq <- colMeans(mod_X > 0)
-mod_X <- mod_X[, mod_freq >= MOD_DROP_THRESHOLD]
-
 # make intron matrix
 make_intron_matrix <- function(df){
   
@@ -309,8 +303,15 @@ intron_X <- intron_matrix %>%
   select(-read_id) %>%
   as.matrix()
 
-intron_freq <- colMeans(intron_X > 0)
-intron_X <- intron_X[, intron_freq >= INTRON_DROP_THRESHOLD, drop=FALSE]
+
+# FILTERING
+# mod columns
+mod_keep <- colSums(mod_X > 0) >= MIN_FEATURE_READS
+mod_X <- mod_X[, mod_keep, drop=FALSE]
+
+# intron columns
+intron_keep <- colSums(intron_X > 0) >= MIN_FEATURE_READS
+intron_X <- intron_X[, intron_keep, drop=FALSE]
 
 # -------------------------------------------------------------------
 # 3. TF x frequency-weighting of the modification-position matrix
@@ -404,8 +405,6 @@ cluster_labels <- build_cluster_labels(
 )
 
 all_cluster_levels <- levels(df$cluster)
-# cluster_to_show <- unique(df$cluster[df$cluster != "0"])
-# cluster_to_show <- c("3", "4", "5", "6")
 cluster_to_show <- unique(df$cluster)
 
 # Number of reads in the smallest sample

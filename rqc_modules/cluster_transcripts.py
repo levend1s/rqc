@@ -20,8 +20,6 @@ def no_values_within(s, x, tol=100):
 # Perform dimensionality reduction (PCA, tSNE, UMAP) on this table and cluster reads based on their mod positions and other features
 # create cartoon representation of read type that each cluster represents (e.g. m6A at position 100, m5C at position 150, etc.)
 # TODO consider how this will work for bigger regions?
-# TODO differential analysis of clusters between conditions (wt vs kd)
-# TODO include large indels (ie introns) in the clustering analysis
 
 def cluster_transcripts(args):
     INPUT = args.input

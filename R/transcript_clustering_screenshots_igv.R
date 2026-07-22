@@ -24,6 +24,8 @@ igv_port   <- 60151
 base_dir   <- path.expand("~/rqc")
 base_dir   <- path.expand("~/rqc/test")
 
+CLUSTERS_TO_PROCESS <- "all"  # or e.g. c("1","3","5")
+# CLUSTERS_TO_PROCESS <- c("13")
 
 stopifnot(exists("df"))  # this script depends on `df` from the clustering script -
 # fail fast and loudly rather than silently using a stale df
@@ -80,7 +82,13 @@ for (bam_file in bam_files) {
   dir.create(snapshot_dir, recursive = TRUE, showWarnings = FALSE)
   
   # clusters <- df %>% filter(cluster != "0") %>% pull(cluster) %>% unique()
-  clusters <- df %>% pull(cluster) %>% unique()
+  clusters <- df %>% pull(cluster) %>% as.character() %>% unique()
+  
+  if(!identical(CLUSTERS_TO_PROCESS,"all")){
+    clusters <- intersect(clusters, as.character(CLUSTERS_TO_PROCESS))
+  }
+  
+  message("Processing clusters: ", paste(clusters, collapse=", "))
   
   for (cl in clusters) {
     ids <- df %>% filter(cluster == cl) %>% pull(read_id) %>% unique()
@@ -99,8 +107,16 @@ for (bam_file in bam_files) {
     unlink(id_file)
   }
   
-  cluster_bams <- list.files(output_dir, pattern = "\\.bam$", full.names = TRUE)
-  cluster_bams <- cluster_bams[order(as.numeric(gsub("\\D", "", basename(cluster_bams))))]
+  cluster_bams <- list.files(output_dir, pattern="\\.bam$", full.names=TRUE)
+  
+  cluster_bams <- cluster_bams[
+    basename(cluster_bams) %in% paste0("cluster_",clusters,".bam")
+  ]
+  
+  cluster_bams <- cluster_bams[
+    order(as.numeric(gsub("\\D","",basename(cluster_bams))))
+  ]
+  
   if (length(cluster_bams) == 0) {
     warning("No cluster BAMs produced for ", sample, " - skipping IGV step")
     next
@@ -146,7 +162,7 @@ for (bam_file in bam_files) {
   igv_send(con, "preference BASEMOD.THRESHOLD 0.95")
   igv_send(con, "preference SAM.HIDE_SMALL_INDEL TRUE")
   igv_send(con, "preference SAM.HIDE_SMALL_INDEL_BP_THRESHOLD 10")
-  igv_send(con, "preference SAM.SHOW_SOFT_CLIPPED TRUE")
+  # igv_send(con, "preference SAM.SHOW_SOFT_CLIPPED TRUE")
   
   # "OK" from these commands confirms IGV finished re-rendering with the
   # new display settings, so a screenshot here reflects the final state -
