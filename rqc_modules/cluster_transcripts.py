@@ -121,8 +121,8 @@ def cluster_transcripts(args):
                         if length >= MIN_DELETION_LENGTH:
                             introns.append((ref_pos, ref_pos + length))
 
-                        if op in (0, 2, 3, 7, 8):  # M, D, N, =, X consume reference
-                            ref_pos += length
+                    if op in (0, 2, 3, 7, 8):  # M, D, N, =, X consume reference
+                        ref_pos += length
 
                 # phred quality
                 avg_quality = (

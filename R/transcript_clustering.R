@@ -12,14 +12,13 @@ all_continuous_cols <- c(
   "read_end",
   "read_length",
   "poly_a_length"
-  # "read_strand"
+  # "read_strand",
   # "average_quality"
 )
-CLUSTER_PERC <- 0.01 # percentage of total reads to consider a cluster
+NUM_SAMPLES <- 2
+CLUSTER_MIN_SIZE <- 10 * NUM_SAMPLES
 UMAP_MIN_DIST <- 0.3
-MOD_DROP_THRESHOLD <- 0.0
-INTRON_DROP_THRESHOLD <- 1.0
-MIN_FEATURE_READS <- 10
+MIN_FEATURE_READS <- 10 * NUM_SAMPLES # num samples
 manual_lib_sizes <- c(2448848, 1350852, 1790844, 2283056)  # example values
 USE_RF <- FALSE
 
@@ -28,12 +27,13 @@ MOD_TYPES <- c("m6A", "m5C", "pseU", "m6A_inosine")
 # MOD_TYPES <- NULL
 
 w_mod <- 0.3
-w_intron <- 0.2
-w_cont <- 0.5
+if (is.null(MOD_TYPES)) w_mod <- 0 else 
+w_intron <- 0.1
+w_cont <- 0.6
 
 set.seed(42)
 
-file <- c("~/rqc/cluster_transcripts_results_test.tsv")
+file <- c("~/rqc/cluster_transcripts_results.tsv")
 
 # -------------------------------------------------------------------
 # 8. Cluster summaries and labels
@@ -297,8 +297,6 @@ make_intron_matrix <- function(df){
 
 intron_matrix <- make_intron_matrix(df)
 
-intron_cols <- grep("^intron_", names(intron_matrix), value=TRUE)
-
 intron_X <- intron_matrix %>%
   select(-read_id) %>%
   as.matrix()
@@ -365,18 +363,17 @@ euclidean_dist <- as.matrix(dist(cont_X, method = "euclidean"))
 normalize01 <- function(m) (m - min(m)) / (max(m) - min(m))
 
 mod_tfidf_cosine_dist_norm <- normalize01(mod_tfidf_cosine_dist)
-intron_tfidf_cosine_dist <- normalize01(intron_tfidf_cosine_dist)
+intron_tfidf_cosine_dist_norm <- normalize01(intron_tfidf_cosine_dist)
 euclidean_dist_norm <- normalize01(euclidean_dist)
 
-combined_dist <- w_mod * mod_tfidf_cosine_dist_norm + w_cont * euclidean_dist_norm + w_intron * intron_tfidf_cosine_dist
-cluster_sample_count <- nrow(df) * CLUSTER_PERC
+combined_dist <- w_mod * mod_tfidf_cosine_dist_norm + w_cont * euclidean_dist_norm + w_intron * intron_tfidf_cosine_dist_norm
 
 # -------------------------------------------------------------------
 # 6. Run UMAP ONCE on the combined data -> shared coordinate space
 # -------------------------------------------------------------------
 custom_config <- umap.defaults
 custom_config$input <- "dist"
-custom_config$n_neighbors <- cluster_sample_count
+custom_config$n_neighbors <- CLUSTER_MIN_SIZE
 custom_config$min_dist <- UMAP_MIN_DIST
 umap_result <- umap(combined_dist, config = custom_config)
 
@@ -386,7 +383,7 @@ df$umap_y <- umap_result$layout[, 2]
 # -------------------------------------------------------------------
 # 7. Cluster ONCE on the combined distance matrix -> shared cluster IDs
 # -------------------------------------------------------------------
-clust <- hdbscan(umap_result$layout, minPts = cluster_sample_count)
+clust <- hdbscan(umap_result$layout, minPts = CLUSTER_MIN_SIZE)
 
 df$cluster <- as.factor(clust$cluster)
 table(df$cluster, df$label)  # check cluster x file distribution -- see batch-effect note below
@@ -399,8 +396,8 @@ cluster_labels <- build_cluster_labels(
   mod_matrix,
   intron_matrix,
   continuous_cols,
-  all_mod_pos_cols,
-  intron_cols,
+  colnames(mod_X),
+  colnames(intron_X),
   top_n = 5
 )
 

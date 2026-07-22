@@ -2,30 +2,32 @@ library(tidyverse)
 library(processx)
 
 # --------------------- CONFIG ---------------------
-# bam_files <- c(
-#   "/Users/joshualevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam",
-#   "/Users/joshualevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam"
-# )
-
-# igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
-# genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-# annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
-
 bam_files <- c(
-  "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28C1_to_pfal.50MAPQ.sorted.bam",
-  "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28K1_to_pfal.50MAPQ.sorted.bam"
+  "/Users/joshualevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam",
+  "/Users/joshualevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam"
 )
-# bam_files <- unique(df$bamfile_path)
 
-igv_path   <- "/Applications/IGV_2.19.7.app/Contents/MacOS/IGV"
-genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
+genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+
+# bam_files <- c(
+#   "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28C1_to_pfal.50MAPQ.sorted.bam",
+#   "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28K1_to_pfal.50MAPQ.sorted.bam"
+# )
+# 
+# igv_path   <- "/Applications/IGV_2.19.7.app/Contents/MacOS/IGV"
+# genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+# annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+
+# bam_files <- unique(df$bamfile_path)
 igv_port   <- 60151
 base_dir   <- path.expand("~/rqc")
 base_dir   <- path.expand("~/rqc/test")
 
 CLUSTERS_TO_PROCESS <- "all"  # or e.g. c("1","3","5")
 # CLUSTERS_TO_PROCESS <- c("13")
+SKIP_BAM_REGENERATION <- TRUE
 
 stopifnot(exists("df"))  # this script depends on `df` from the clustering script -
 # fail fast and loudly rather than silently using a stale df
@@ -76,35 +78,50 @@ for (bam_file in bam_files) {
   
   output_dir   <- file.path(base_dir, paste0(sample, "_cluster_bams"))
   snapshot_dir <- file.path(base_dir, paste0(sample, "_igv_screenshots"))
-  if (dir.exists(output_dir))   unlink(output_dir, recursive = TRUE)
-  if (dir.exists(snapshot_dir)) unlink(snapshot_dir, recursive = TRUE)
-  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-  dir.create(snapshot_dir, recursive = TRUE, showWarnings = FALSE)
   
-  # clusters <- df %>% filter(cluster != "0") %>% pull(cluster) %>% unique()
-  clusters <- df %>% pull(cluster) %>% as.character() %>% unique()
-  
-  if(!identical(CLUSTERS_TO_PROCESS,"all")){
-    clusters <- intersect(clusters, as.character(CLUSTERS_TO_PROCESS))
-  }
-  
-  message("Processing clusters: ", paste(clusters, collapse=", "))
-  
-  for (cl in clusters) {
-    ids <- df %>% filter(cluster == cl) %>% pull(read_id) %>% unique()
-    if (length(ids) == 0) {
-      message("Skipping empty cluster ", cl)
+  if (!SKIP_BAM_REGENERATION) {
+    if (dir.exists(output_dir))   unlink(output_dir, recursive = TRUE)
+    if (dir.exists(snapshot_dir)) unlink(snapshot_dir, recursive = TRUE)
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    dir.create(snapshot_dir, recursive = TRUE, showWarnings = FALSE)
+    
+    clusters <- df %>% pull(cluster) %>% as.character() %>% unique()
+    
+    if (!identical(CLUSTERS_TO_PROCESS, "all")) {
+      clusters <- intersect(clusters, as.character(CLUSTERS_TO_PROCESS))
+    }
+    
+    message("Processing clusters: ", paste(clusters, collapse = ", "))
+    
+    for (cl in clusters) {
+      ids <- df %>% filter(cluster == cl) %>% pull(read_id) %>% unique()
+      if (length(ids) == 0) {
+        message("Skipping empty cluster ", cl)
+        next
+      }
+      message("Writing BAM for cluster ", cl, " (", length(ids), " reads)")
+      
+      id_file <- tempfile(fileext = ".txt")
+      writeLines(ids, id_file)
+      out_bam <- file.path(output_dir, paste0("cluster_", cl, ".bam"))
+      
+      run_checked("samtools view -b -N %s %s > %s", id_file, bam_file, out_bam)
+      run_checked("samtools index %s", out_bam)
+      unlink(id_file)
+    }
+  } else {
+    message("SKIP_BAM_REGENERATION = TRUE - reusing existing cluster BAMs in ", output_dir)
+    if (!dir.exists(output_dir)) {
+      warning("output_dir does not exist for ", sample, " - nothing to reuse, skipping")
       next
     }
-    message("Writing BAM for cluster ", cl, " (", length(ids), " reads)")
+    if (!dir.exists(snapshot_dir)) dir.create(snapshot_dir, recursive = TRUE, showWarnings = FALSE)
     
-    id_file <- tempfile(fileext = ".txt")
-    writeLines(ids, id_file)
-    out_bam <- file.path(output_dir, paste0("cluster_", cl, ".bam"))
-    
-    run_checked("samtools view -b -N %s %s > %s", id_file, bam_file, out_bam)
-    run_checked("samtools index %s", out_bam)
-    unlink(id_file)
+    # still respect CLUSTERS_TO_PROCESS when filtering which existing BAMs to load
+    clusters <- gsub("^cluster_|\\.bam$", "", list.files(output_dir, pattern = "\\.bam$"))
+    if (!identical(CLUSTERS_TO_PROCESS, "all")) {
+      clusters <- intersect(clusters, as.character(CLUSTERS_TO_PROCESS))
+    }
   }
   
   cluster_bams <- list.files(output_dir, pattern="\\.bam$", full.names=TRUE)
