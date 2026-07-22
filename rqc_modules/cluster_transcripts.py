@@ -30,6 +30,7 @@ def cluster_transcripts(args):
     COVERAGE_PADDING = args.padding
     MOD_PROB_THRESHOLD = args.mod_prob_threshold
     OUTFILE = args.outfile
+    MIN_DELETION_LENGTH = args.min_deletion_length
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
 
@@ -43,18 +44,26 @@ def cluster_transcripts(args):
     if matches.empty:
         print("ERROR: no matches found for ids {}".format(IDS))
 
+    MODS = ['m6A', 'm5C', 'pseU', 'm6A_inosine']
+
     read_table_header = [
         "read_id",
-        "source_file",
+        "label",
+        "bamfile_path",
         "contig",
         "read_start",
         "read_end",
         "read_strand",
         "read_length",
         "poly_a_length",
-        "mod_positions",
-        "num_mods"
+        "average_quality",
+        "introns"
     ]
+
+    for mod in MODS:
+        read_table_header.append("{}_positions".format(mod))
+        read_table_header.append("{}_num_mods".format(mod))
+
     read_table = pandas.DataFrame(columns=read_table_header)
     read_table_index = 0
 
@@ -76,30 +85,55 @@ def cluster_transcripts(args):
                 stop=row['end']+COVERAGE_PADDING
             ))
 
-            # TODO fix
-            MODS = ['m6A', 'm5C', 'pseU', 'm6A_inosine']
-            MOD = 'm6A'
-
             # filter reads
             for i in range(len(READS_IN_REGION)):
                 r = READS_IN_REGION[i]
-                if r.is_forward:
-                    pysam_mod_tuple_code = '{}_for'.format(MOD)
-                else:
-                    pysam_mod_tuple_code = '{}_rev'.format(MOD)
-                
-                ref_pos = r.get_reference_positions(full_length=True)
-                mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES[pysam_mod_tuple_code])
+                if r.is_secondary or r.is_supplementary:
+                    continue
 
-                genomic_mod_positions = []
-                num_mods = 0
+
+                mod_positions = {}
+
+                for mod in MODS:
+                    mod_positions["{}_positions".format(mod)] = []
+                    if r.is_forward:
+                        pysam_mod_tuple_code = '{}_for'.format(mod)
+                    else:
+                        pysam_mod_tuple_code = '{}_rev'.format(mod)
+
+                    if pysam_mod_tuple_code in PYSAM_MOD_TUPLES:
+
+                        ref_pos = r.get_reference_positions(full_length=True)
+                        mods_probs = r.modified_bases.get(PYSAM_MOD_TUPLES[pysam_mod_tuple_code])
+
+                        if mods_probs:
+                            # keep only mod positions which are above mod prob threshold
+                            read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
+                            genomic_mod_positions = [ref_pos[mod] for mod in read_mod_positions if ref_pos[mod] is not None]
+
+                            mod_positions["{}_positions".format(mod)] = genomic_mod_positions
+
+
+                # introns
+                introns = []
+                ref_pos = r.reference_start
+
+                for op, length in r.cigartuples:
+                    if op == 2:  # D = 
+                        if length >= MIN_DELETION_LENGTH:
+                            introns.append((ref_pos, ref_pos + length))
+
+                        if op in (0, 2, 3, 7, 8):  # M, D, N, =, X consume reference
+                            ref_pos += length
+
+                # phred quality
+                avg_quality = (
+                    sum(r.query_qualities) / len(r.query_qualities)
+                    if r.query_qualities
+                    else 0
+                )                
+
                 poly_a_length = 0
-
-                if mods_probs:
-                    # keep only mod positions which are above mod prob threshold
-                    read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
-                    genomic_mod_positions = [ref_pos[mod] for mod in read_mod_positions if ref_pos[mod] is not None]
-                    num_mods = len(genomic_mod_positions)
 
                 if r.has_tag('pt:i'):
                     poly_a_length = r.get_tag('pt:i')
@@ -109,15 +143,20 @@ def cluster_transcripts(args):
                 read_entry = [
                     r.query_name,
                     label,
+                    samfile_path,
                     row['seq_id'],
                     r.reference_start,
                     r.reference_end,
                     read_strand,
                     r.query_length,
                     poly_a_length,
-                    genomic_mod_positions,
-                    num_mods
+                    avg_quality,
+                    introns,
                 ]
+
+                for mod in MODS:
+                    read_entry.append(mod_positions["{}_positions".format(mod)])
+                    read_entry.append(len(mod_positions["{}_positions".format(mod)]))
 
                 read_table.loc[read_table_index] = read_entry
                 read_table_index += 1

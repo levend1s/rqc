@@ -2,15 +2,28 @@ library(tidyverse)
 library(processx)
 
 # --------------------- CONFIG ---------------------
+# bam_files <- c(
+#   "/Users/joshualevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam",
+#   "/Users/joshualevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam"
+# )
+
+# igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
+# genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+# annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+
 bam_files <- c(
-  "/Users/joshualevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam",
-  "/Users/joshualevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam"
+  "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28C1_to_pfal.50MAPQ.sorted.bam",
+  "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28K1_to_pfal.50MAPQ.sorted.bam"
 )
-base_dir   <- path.expand("~/rqc")
-igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
-genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+# bam_files <- unique(df$bamfile_path)
+
+igv_path   <- "/Applications/IGV_2.19.7.app/Contents/MacOS/IGV"
+genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 igv_port   <- 60151
+base_dir   <- path.expand("~/rqc")
+base_dir   <- path.expand("~/rqc/test")
+
 
 stopifnot(exists("df"))  # this script depends on `df` from the clustering script -
 # fail fast and loudly rather than silently using a stale df
@@ -66,7 +79,8 @@ for (bam_file in bam_files) {
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(snapshot_dir, recursive = TRUE, showWarnings = FALSE)
   
-  clusters <- df %>% filter(cluster != "0") %>% pull(cluster) %>% unique()
+  # clusters <- df %>% filter(cluster != "0") %>% pull(cluster) %>% unique()
+  clusters <- df %>% pull(cluster) %>% unique()
   
   for (cl in clusters) {
     ids <- df %>% filter(cluster == cl) %>% pull(read_id) %>% unique()
@@ -132,6 +146,7 @@ for (bam_file in bam_files) {
   igv_send(con, "preference BASEMOD.THRESHOLD 0.95")
   igv_send(con, "preference SAM.HIDE_SMALL_INDEL TRUE")
   igv_send(con, "preference SAM.HIDE_SMALL_INDEL_BP_THRESHOLD 10")
+  igv_send(con, "preference SAM.SHOW_SOFT_CLIPPED TRUE")
   
   # "OK" from these commands confirms IGV finished re-rendering with the
   # new display settings, so a screenshot here reflects the final state -
