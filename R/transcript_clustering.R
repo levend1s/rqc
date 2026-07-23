@@ -311,16 +311,16 @@ intron_X <- intron_matrix %>%
   as.matrix()
 
 # DEBUG
-# intron_counts <- colSums(intron_matrix[-1] > 0)
-# 
-# intron_summary <- tibble(
-#   intron = names(intron_counts),
-#   n_reads = intron_counts,
-#   pct_reads = 100 * intron_counts / nrow(intron_matrix)
-# ) %>%
-#   arrange(desc(n_reads))
-# 
-# print(intron_summary, n = 50)
+intron_counts <- colSums(intron_matrix[-1] > 0)
+
+intron_summary <- tibble(
+  intron = names(intron_counts),
+  n_reads = intron_counts,
+  pct_reads = 100 * intron_counts / nrow(intron_matrix)
+) %>%
+  arrange(desc(n_reads))
+
+print(intron_summary, n = 50)
 
 # FILTERING
 # mod columns

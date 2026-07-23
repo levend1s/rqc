@@ -47,6 +47,7 @@ def cluster_transcripts(args):
     read_table_header = [
         "read_id",
         "label",
+        "mod_prob_threshold",
         "bamfile_path",
         "contig",
         "read_start",
@@ -119,13 +120,28 @@ def cluster_transcripts(args):
                 introns = []
                 ref_pos = r.reference_start
 
+                # TODO FIX:
+                # THERE IS AN ISSUE in how these two reads cigar strings are processed:
+                # 11S54M3I31M2D103M3D15M3D100M2I89M 480D100M1D14M1D323M4D55M1D36M7D32M4D73M4D36M1I128M1D450M4D27M3I49M7D110M1D49M8D29M1I17M3I45M2D9M18S
+                # 53S81M1D16M2I12M3D159M1I9M 480D17M1D35M3I61M1D178M1I7M2D137M4D131M3D76M2I104M2D128M3I11M1I240M2D130M2D27M1I29M2D21M9D47M1I7M2I60M3D28M1D11M7D48M1I224M2D21M1I24M24S
+                # they give intron locations below, even though IGV says those introns should be aligned
+                # (463097, 463577)
+                # (462982, 463462)
+
+
                 for op, length in r.cigartuples:
                     if op == 2:  # D = 
                         if length >= MIN_DELETION_LENGTH:
                             introns.append((ref_pos, ref_pos + length))
+                            # if r.query_name in ["987417ef-b7e0-4a2b-ac1e-d1773bc78b40", "854d57e2-541e-4578-b13c-64483099fb0a"]:
+                            #     print(r.cigarstring)
+                            #     print(r.reference_start)
+                            #     print(ref_pos)
+                            #     print(length)
+                            #     print(introns)
 
-                        if op in (0, 2, 3, 7, 8):  # M, D, N, =, X consume reference
-                            ref_pos += length
+                    if op in (0, 2, 3, 7, 8):  # M, D, N, =, X consume reference
+                        ref_pos += length
 
                 # phred quality
                 avg_quality = (
@@ -144,6 +160,7 @@ def cluster_transcripts(args):
                 read_entry = [
                     r.query_name,
                     label,
+                    MOD_PROB_THRESHOLD,
                     samfile_path,
                     row['seq_id'],
                     r.reference_start,
