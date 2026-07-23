@@ -12,24 +12,33 @@ all_continuous_cols <- c(
   "read_end",
   "read_length",
   "poly_a_length"
-  # "read_strand",
   # "average_quality"
 )
-NUM_SAMPLES <- 2
-CLUSTER_MIN_SIZE <- 10 * NUM_SAMPLES
+
+# also used for dropping rare features
+NUM_SAMPLES <- 4
+MIN_CLUSTER_SIZE <- 10 * NUM_SAMPLES
+MAX_CLUSTER_SIZE <- 200 * NUM_SAMPLES
+MIN_CLUSTER_PERC <- 0.01
+
 UMAP_MIN_DIST <- 0.3
-MIN_FEATURE_READS <- 10 * NUM_SAMPLES # num samples
 manual_lib_sizes <- c(2448848, 1350852, 1790844, 2283056)  # example values
 USE_RF <- FALSE
 
 MOD_TYPES <- c("m6A", "m5C", "pseU", "m6A_inosine")
-# MOD_TYPES <- c("m6A")
+MOD_TYPES <- c("m6A")
 # MOD_TYPES <- NULL
 
+# balanced
 w_mod <- 0.3
-if (is.null(MOD_TYPES)) w_mod <- 0 else 
-w_intron <- 0.1
-w_cont <- 0.6
+if (is.null(MOD_TYPES)) w_mod <- 0 else
+w_intron <- 0.3
+w_cont <- 0.4
+
+# no cont variables
+# w_mod <- 0.5
+# w_intron <- 0.5
+# w_cont <- 0
 
 set.seed(42)
 
@@ -301,14 +310,27 @@ intron_X <- intron_matrix %>%
   select(-read_id) %>%
   as.matrix()
 
+# DEBUG
+# intron_counts <- colSums(intron_matrix[-1] > 0)
+# 
+# intron_summary <- tibble(
+#   intron = names(intron_counts),
+#   n_reads = intron_counts,
+#   pct_reads = 100 * intron_counts / nrow(intron_matrix)
+# ) %>%
+#   arrange(desc(n_reads))
+# 
+# print(intron_summary, n = 50)
 
 # FILTERING
 # mod columns
-mod_keep <- colSums(mod_X > 0) >= MIN_FEATURE_READS
+min_cluster_size <- min(MAX_CLUSTER_SIZE, max(MIN_CLUSTER_SIZE, ceiling(MIN_CLUSTER_PERC * nrow(df) / NUM_SAMPLES)))
+
+mod_keep <- colSums(mod_X > 0) >= min_cluster_size
 mod_X <- mod_X[, mod_keep, drop=FALSE]
 
 # intron columns
-intron_keep <- colSums(intron_X > 0) >= MIN_FEATURE_READS
+intron_keep <- colSums(intron_X > 0) >= min_cluster_size
 intron_X <- intron_X[, intron_keep, drop=FALSE]
 
 # -------------------------------------------------------------------
@@ -371,9 +393,11 @@ combined_dist <- w_mod * mod_tfidf_cosine_dist_norm + w_cont * euclidean_dist_no
 # -------------------------------------------------------------------
 # 6. Run UMAP ONCE on the combined data -> shared coordinate space
 # -------------------------------------------------------------------
+# TODO: this doesn't normalise by sample variation
+
 custom_config <- umap.defaults
 custom_config$input <- "dist"
-custom_config$n_neighbors <- CLUSTER_MIN_SIZE
+custom_config$n_neighbors <- min_cluster_size
 custom_config$min_dist <- UMAP_MIN_DIST
 umap_result <- umap(combined_dist, config = custom_config)
 
@@ -383,7 +407,7 @@ df$umap_y <- umap_result$layout[, 2]
 # -------------------------------------------------------------------
 # 7. Cluster ONCE on the combined distance matrix -> shared cluster IDs
 # -------------------------------------------------------------------
-clust <- hdbscan(umap_result$layout, minPts = CLUSTER_MIN_SIZE)
+clust <- hdbscan(umap_result$layout, minPts = min_cluster_size)
 
 df$cluster <- as.factor(clust$cluster)
 table(df$cluster, df$label)  # check cluster x file distribution -- see batch-effect note below
