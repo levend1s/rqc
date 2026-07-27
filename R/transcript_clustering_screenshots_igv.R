@@ -26,7 +26,6 @@ base_dir   <- path.expand("~/rqc")
 base_dir   <- path.expand("~/rqc/test")
 
 CLUSTERS_TO_PROCESS <- "all"  # or e.g. c("1","3","5")
-# CLUSTERS_TO_PROCESS <- c("12", "16")
 SKIP_BAM_REGENERATION <- FALSE
 MOD_PROB_THRESHOLD <- unique(df$mod_prob_threshold)
 stopifnot(length(MOD_PROB_THRESHOLD) == 1)

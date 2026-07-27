@@ -8,12 +8,52 @@ library(processx)
 library(edgeR)
 
 all_continuous_cols <- c(
-  "read_start",
-  "read_end",
-  "read_length",
+  # "read_start",
+  # "read_end",
+  # "read_length",
   "poly_a_length"
   # "average_quality"
 )
+
+# -------------------------------------------------------------------
+# Feature selection
+# -------------------------------------------------------------------
+USE_MOD_INFO <- TRUE
+USE_INTRON_INFO <- TRUE
+USE_CONTINUOUS_INFO <- FALSE
+
+# Modification types (ignored if USE_MOD_INFO = FALSE)
+MOD_TYPES <- c("m6A")
+# MOD_TYPES <- c("m6A", "m5C", "pseU", "m6A_inosine")
+
+if (!USE_MOD_INFO) {
+  MOD_TYPES <- NULL
+}
+
+# -------------------------------------------------------------------
+# Relative weights
+# (only enabled feature sets are used; weights are renormalized)
+# -------------------------------------------------------------------
+MOD_WEIGHT <- 0.3
+INTRON_WEIGHT <- 0.3
+CONTINUOUS_WEIGHT <- 0.4
+
+weights <- c(
+  mod = if (USE_MOD_INFO) MOD_WEIGHT else 0,
+  intron = if (USE_INTRON_INFO) INTRON_WEIGHT else 0,
+  cont = if (USE_CONTINUOUS_INFO) CONTINUOUS_WEIGHT else 0
+)
+
+if (sum(weights) == 0) {
+  stop("At least one feature type must be enabled.")
+}
+
+weights <- weights / sum(weights)
+
+w_mod <- weights["mod"]
+w_intron <- weights["intron"]
+w_cont <- weights["cont"]
+
 
 # also used for dropping rare features
 NUM_SAMPLES <- 4
@@ -23,22 +63,7 @@ MIN_CLUSTER_PERC <- 0.01
 
 UMAP_MIN_DIST <- 0.3
 manual_lib_sizes <- c(2448848, 1350852, 1790844, 2283056)  # example values
-USE_RF <- FALSE
-
-MOD_TYPES <- c("m6A", "m5C", "pseU", "m6A_inosine")
-MOD_TYPES <- c("m6A")
-# MOD_TYPES <- NULL
-
-# balanced
-w_mod <- 0.3
-if (is.null(MOD_TYPES)) w_mod <- 0 else
-w_intron <- 0.3
-w_cont <- 0.4
-
-# no cont variables
-# w_mod <- 0.5
-# w_intron <- 0.5
-# w_cont <- 0
+USE_RF <- TRUE
 
 set.seed(42)
 

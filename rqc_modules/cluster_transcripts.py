@@ -19,7 +19,22 @@ def no_values_within(s, x, tol=100):
 # other columns include read_start, read_end, read_length, read_strand, poly_A length, average_read_quality (could we cluster by individual base quality?)
 # Perform dimensionality reduction (PCA, tSNE, UMAP) on this table and cluster reads based on their mod positions and other features
 # create cartoon representation of read type that each cluster represents (e.g. m6A at position 100, m5C at position 150, etc.)
-# TODO consider how this will work for bigger regions?
+
+
+# Ok I'm considering how this will scale up. This could one day completely ignore annotations.
+# 
+# But I think the first solution
+# - will loop through all gene annotations
+# - generate tsv
+# - umap
+# - cluster (HBDBSCAN)
+# - record gene_id_cluster_id and each read id associated with it
+# output will be a featureCounts like file which can be passed to edgeR or salmon or w/e
+
+# - If analysing a single gene:
+# - segregate BAM files?
+# - IGV screenshots
+
 
 def cluster_transcripts(args):
     INPUT = args.input
