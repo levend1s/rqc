@@ -32,8 +32,8 @@ stopifnot(length(MOD_PROB_THRESHOLD) == 1)
 MOD_PROB_THRESHOLD <- MOD_PROB_THRESHOLD[[1]]
 INDEL_THRESHOLD <- 10
 
-stopifnot(exists("df"))  # this script depends on `df` from the clustering script -
-# fail fast and loudly rather than silently using a stale df
+infile <- c("~/rqc/cluster_transcripts_results.tsv")
+df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 
 # --------------------- IGV socket helpers ---------------------
 # Persistent connection + reading the response is what actually confirms
