@@ -9,7 +9,10 @@ library(ggplot2)
 # 1) Load counts table
 # File format: tab-delimited with first column = ID_cluster
 infile <- c("~/rqc/cluster_transcripts_results.tsv")
+
 counts <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+counts <- counts[!grepl("noise|NA|empty", counts$ID_cluster), ]
+
 
 rownames(counts) <- counts$ID_cluster
 counts$ID_cluster <- NULL

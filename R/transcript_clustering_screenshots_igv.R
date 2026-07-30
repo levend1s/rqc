@@ -20,7 +20,7 @@ igv_path   <- "/Applications/IGV_2.19.7.app/Contents/MacOS/IGV"
 genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
 annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 
-infile <- c("~/rqc/cluster_transcripts_results.tsv.umap")
+infile <- c("~/rqc/cluster_transcripts_results_210100.tsv.umap")
 df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 
 # bam_files <- unique(df$bamfile_path)

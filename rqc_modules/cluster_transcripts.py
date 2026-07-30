@@ -23,6 +23,37 @@ import numpy as np
 import pandas as pd
 from scipy import sparse as sp
 
+def shorten_feature(f):
+    # intron_409522_409679 -> I409522_409679
+    # m6A_positions_12345 -> m6A12345
+
+    if f.startswith("intron_"):
+        return "I" + f.replace("intron_", "")
+
+    if "_positions_" in f:
+        mod, pos = f.split("_positions_")
+        return mod + pos
+
+    return f
+
+def make_isoform_name(row, gene_id):
+    """
+    Generate an isoform-style cluster name from a binary feature vector.
+
+    Example:
+        PF3D7_0210000_I409522_409679_m6A410000_m6A410200
+    """
+
+    present = [
+        shorten_feature(f)
+        for f in row.index[row]
+    ]
+
+    if len(present) == 0:
+        return f"{gene_id}_no_features"
+
+    return f"{gene_id}_" + "_".join(present)
+
 def explain_hdbscan_clusters(
     X,                      # matrix used for clustering (sparse or dense), shape (n_reads, n_features)
     labels,                 # cluster labels from HDBSCAN, shape (n_reads,)
@@ -299,6 +330,34 @@ def build_introns_matrix(df, intron_col="introns_binary"):
     return Xi, numpy.array(vec.get_feature_names_out(), dtype=object)
 
 
+def compute_freq_weighted(X):
+    """
+    Equivalent to R compute_freq_weighted()
+    X: sparse or dense count matrix
+    """
+
+    if sp.issparse(X):
+        row_sums = np.asarray(X.sum(axis=1)).ravel()
+        row_sums[row_sums == 0] = 1
+
+        # row normalisation
+        TF = X.multiply(1 / row_sums[:, None])
+
+        # column frequency
+        doc_freq = np.asarray((X > 0).sum(axis=0)).ravel()
+
+    else:
+        row_sums = X.sum(axis=1)
+        row_sums[row_sums == 0] = 1
+
+        TF = X / row_sums[:, None]
+
+        doc_freq = (X > 0).sum(axis=0)
+
+    freq_weight = np.log(1 + doc_freq)
+
+    return TF.multiply(freq_weight) if sp.issparse(TF) else TF * freq_weight
+
 def run_clustering(
     df,
     min_cluster_size,
@@ -333,67 +392,126 @@ def run_clustering(
     feature_names = numpy.concatenate(feat_names) if feat_names else numpy.array([], dtype=object)
 
     # feature frequency filter
-    if min_feature_reads is None:
-        min_feature_reads = min_cluster_size  # or int(numpy.ceil(0.01 * n_reads))
+    min_feature_reads = int(numpy.ceil(0.01 * len(df)))
     feat_presence = numpy.asarray((X > 0).sum(axis=0)).ravel()
+
     keep = feat_presence >= int(min_feature_reads)
     X = X[:, keep]
-    feat_presence = feat_presence[keep]
     feature_names = feature_names[keep]
+    feat_presence = feat_presence[keep]
+
+    print(min_feature_reads)
+    print("Feature abundances:")
+    for name, count in sorted(zip(feature_names, feat_presence), key=lambda x: x[1], reverse=True):
+        print(f"{name:40s} {count:6d} reads ({100*count/X.shape[0]:5.2f}%)")
 
     if X.shape[1] == 0:
         raise ValueError(f"No features remain after filtering with min_feature_reads={min_feature_reads}")
 
+    # FIXME PF3D7_0322000 is too big
+
     # TF-IDF
-    tfidf = TfidfTransformer(
-        norm="l2",          # usually best for cosine-based clustering
-        use_idf=False,
-        smooth_idf=True,
-        sublinear_tf=False  # set True if you want 1+log(tf)
+    # tfidf = TfidfTransformer(
+    #     norm="l2",          # usually best for cosine-based clustering
+    #     use_idf=False,
+    #     smooth_idf=True,
+    #     sublinear_tf=False  # set True if you want 1+log(tf)
+    # )
+    # X = tfidf.fit_transform(X).astype(np.float64)
+    X = compute_freq_weighted(X)
+
+    n_reads, n_features = X.shape
+    n_unique = np.unique(X.toarray(), axis=0).shape[0]
+
+    print(
+        f"Reads={n_reads}, features={n_features}, unique_patterns={n_unique}"
     )
-    X = tfidf.fit_transform(X).astype(np.float64)
+    print(feature_names)
 
+    # TODO: when naming clusters, we should have this name convention
+    # PF3D7_0210000_IA_IC
+    # PF3D7_0210000_IA_IB_IC_m6AA_m6AB_m6AC
+    # and for HDBSCAN, these features should be the top features which explain the cluster (random forest?)
+    gene_id = df["ID"].iloc[0]
 
-    if X.shape[1] == 1:
-        x = X.toarray().ravel() if hasattr(X, "toarray") else numpy.asarray(X).ravel()
-        # Option A: GMM 2-way split
-        gm = GaussianMixture(n_components=2, random_state=0)
-        labels = gm.fit_predict(x.reshape(-1, 1))
+    MIN_FEATURES_CLUSTERING = 10
+    # if n_unique < MIN_FEATURES_CLUSTERING:
+    if False:
+        print("TOO FEW FEATURES FOR HDBSCAN, USING DIRECT ISOFORM SPLITTING...")
 
-        # optional: mark uncertain points as noise
-        probs = gm.predict_proba(x.reshape(-1, 1)).max(axis=1)
-        labels = numpy.where(probs < 0.6, -1, labels)
+        X_df = pd.DataFrame(
+            X.toarray(),
+            columns=feature_names
+        ).astype(bool)
+
+        df["cluster"] = X_df.apply(make_isoform_name, axis=1, gene_id=gene_id)
 
     else:
         clusterer = hdbscan.HDBSCAN(
             min_cluster_size=min_cluster_size,
-            min_samples=max(5, min_cluster_size // 2),
+            min_samples=min_cluster_size,
             metric="cosine",
             cluster_selection_method="eom",
-            allow_single_cluster=True
+            allow_single_cluster=True,
+            cluster_selection_epsilon=0.1
         )
         labels = clusterer.fit_predict(X)
 
-        feature_table, cluster_table, text_summary = explain_hdbscan_clusters(
-            X=X,
-            labels=labels,
-            feature_names=feature_names,
-            probabilities=getattr(clusterer, "probabilities_", None),
-            outlier_scores=getattr(clusterer, "outlier_scores_", None),
-            top_n=8,
-            min_prevalence_in_cluster=0.10,
-            include_noise=False
-        )
+        # print("X shape:", X.shape)
+        
+        # Xu = np.unique(X.toarray(), axis=0)
+        # print("Unique rows:", Xu.shape[0])
 
-        # FIXME PF3D7_0210000 is hallucinating clusters, which actually seem real, but how is this happening from just introns?
-        print(feature_names)
-        print(cluster_table)
-        print(feature_table.head(50))
-        for c in sorted(text_summary):
-            diagnose_cluster_geometry(X, labels, clusterer, df.reset_index(drop=True), feature_names, c=c, top_n=20)
+        # print("Clusters:", np.unique(labels))
+
+        # feature_table, cluster_table, text_summary = explain_hdbscan_clusters(
+        #     X=X,
+        #     labels=labels,
+        #     feature_names=feature_names,
+        #     probabilities=getattr(clusterer, "probabilities_", None),
+        #     outlier_scores=getattr(clusterer, "outlier_scores_", None),
+        #     top_n=8,
+        #     min_prevalence_in_cluster=0.10,
+        #     include_noise=False
+        # )
+        # df["cluster"] = labels.astype(int).astype(str)
+
+        cluster_names = {}
+
+        for c in sorted(np.unique(labels)):
+            if c == -1:
+                cluster_names[c] = f"_noise"
+                continue
+
+            # Use original binary feature matrix
+            cluster_X = X.tocsr()[labels == c]
+
+            # Feature prevalence within cluster
+            prevalence = np.asarray(cluster_X.mean(axis=0)).ravel()
+
+            # Include features seen in at least 10% of cluster reads
+            present = feature_names[prevalence >= 0.10]
+
+            short = [shorten_feature(f) for f in present]
+
+            if len(short) == 0:
+                # fallback: show the most common features even if rare
+                top = np.argsort(prevalence)[::-1][:5]
+
+                short = [
+                    shorten_feature(feature_names[i])
+                    for i in top
+                    if prevalence[i] > 0
+                ]
+
+            if len(short) == 0:
+                cluster_names[c] = f"_empty"
+            else:
+                cluster_names[c] = f"_".join(short)
+
+        df["cluster"] = [cluster_names[c] for c in labels]
 
     out = df.copy()
-    out["cluster"] = labels.astype(int).astype(str)
     return out, X, feature_names
 
 def cluster_transcripts(args):
@@ -516,8 +634,10 @@ def cluster_transcripts(args):
                                     stop=row['end']+COVERAGE_PADDING
                                 ))
                 # filter reads
+                # print(len(READS_IN_REGION))
                 for i in range(len(READS_IN_REGION)):
                     r = READS_IN_REGION[i]
+                    # print(r.query_id)
                     if r.is_secondary or r.is_supplementary:
                         continue
                     if (row["strand"] == "+" and r.is_reverse) or (row["strand"] == "-" and r.is_forward):
@@ -595,7 +715,7 @@ def cluster_transcripts(args):
                     read_table_index += 1
 
             # ------------------- CLUSTER PROCESSING (OPTIMIZED) ------------------- #
-            read_table = read_table.drop(columns=["poly_a_length", "average_quality", "read_start", "read_end", "read_length", "read_strand"])
+            # read_table = read_table.drop(columns=["poly_a_length", "average_quality", "read_start", "read_end", "read_length", "read_strand"])
 
             df = read_table.reset_index(drop=True).copy()
             num_total_reads = len(df)
@@ -613,7 +733,7 @@ def cluster_transcripts(args):
                 if CLUSTER_MODS is not None:
                     mod_col_names = ["{}_positions".format(m) for m in CLUSTER_MODS]
 
-                
+                print("running clustering...")
                 df_clustered, X_final, feat_names = run_clustering(
                     df=df,
                     min_cluster_size=min_cluster_size,
@@ -626,6 +746,7 @@ def cluster_transcripts(args):
                     mod_weight=1.0,
                     intron_weight=1.0
                 )
+                print("clustering done...")
 
                 # print(feat_names)
         
@@ -672,7 +793,7 @@ def cluster_transcripts(args):
             all_count_tables.append(ct)
 
             # HACK remove
-            if row['seq_id'] == "Pf3D7_03_v3":
+            if row['seq_id'] == "Pf3D7_08_v3":
                 break
 
             
