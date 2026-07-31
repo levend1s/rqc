@@ -1,34 +1,22 @@
 import pandas
 import pysam
 import numpy
-import matplotlib.pyplot as plt
 import umap
-import re
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import pairwise_distances
 from sklearn.feature_extraction import DictVectorizer
-import scipy.sparse as sp
 from sklearn.preprocessing import normalize
-from sklearn.cluster import MiniBatchKMeans
-from sklearn.mixture import GaussianMixture
-from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.cluster import HDBSCAN
+
+import scipy.sparse as sp
 
 from rqc_modules.constants import PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
-
-
-import numpy as np
-import pandas as pd
-from scipy import sparse as sp
 
 # scan region and pileup mods (list of genomic positions and their mod / unmod ratios)
 # create a table where read_ids are row, columns are mods (m6A, m5C, pseU, m6A_inosine) with a list of mod positions (genomic space)
 # other columns include read_start, read_end, read_length, read_strand, poly_A length, average_read_quality (could we cluster by individual base quality?)
 # Perform dimensionality reduction (PCA, tSNE, UMAP) on this table and cluster reads based on their mod positions and other features
 # create cartoon representation of read type that each cluster represents (e.g. m6A at position 100, m5C at position 150, etc.)
-
 
 # Ok I'm considering how this will scale up. This could one day completely ignore annotations.
 # 
@@ -197,65 +185,47 @@ def run_clustering(
 
     X = compute_freq_weighted(X)
 
-    gene_id = df["ID"].iloc[0]
+    X_dense = X.toarray().astype(numpy.float32)
+    X_norm = normalize(X_dense, norm="l2")
 
-    MIN_FEATURES_CLUSTERING = 10
-    # if n_unique < MIN_FEATURES_CLUSTERING:
-    if False:
-        print("TOO FEW FEATURES FOR HDBSCAN, USING DIRECT ISOFORM SPLITTING...")
+    clusterer = HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=20,
+        metric="euclidean",
+        allow_single_cluster=True
+    )
+    labels = clusterer.fit_predict(X_norm)
 
-        X_df = pd.DataFrame(
-            X.toarray(),
-            columns=feature_names
-        ).astype(bool)
+    cluster_names = {}
 
-        df["cluster"] = X_df.apply(make_isoform_name, axis=1, gene_id=gene_id)
+    for c in sorted(numpy.unique(labels)):
+        if c == -1:
+            cluster_names[c] = f"_noise"
+            continue
 
-    else:
-        # FIXME PF3D7_0322000 is too big
+        # Use original binary feature matrix
+        cluster_X = X.tocsr()[labels == c]
+        prevalence = numpy.asarray(cluster_X.mean(axis=0)).ravel()
+        # Include features seen in at least 10% of cluster reads
+        present = feature_names[prevalence >= 0.10]
+        short = [shorten_feature(f) for f in present]
 
-        X_dense = X.toarray().astype(numpy.float32)
-        X_norm = normalize(X_dense, norm="l2")
+        if len(short) == 0:
+            # fallback: show the most common features even if rare
+            top = numpy.argsort(prevalence)[::-1][:5]
 
-        clusterer = HDBSCAN(
-            min_cluster_size=min_cluster_size,
-            min_samples=20,
-            metric="euclidean",
-            allow_single_cluster=True
-        )
-        labels = clusterer.fit_predict(X_norm)
+            short = [
+                shorten_feature(feature_names[i])
+                for i in top
+                if prevalence[i] > 0
+            ]
 
-        cluster_names = {}
+        if len(short) == 0:
+            cluster_names[c] = f"_empty"
+        else:
+            cluster_names[c] = f"_".join(short)
 
-        for c in sorted(numpy.unique(labels)):
-            if c == -1:
-                cluster_names[c] = f"_noise"
-                continue
-
-            # Use original binary feature matrix
-            cluster_X = X.tocsr()[labels == c]
-            # Feature prevalence within cluster
-            prevalence = numpy.asarray(cluster_X.mean(axis=0)).ravel()
-            # Include features seen in at least 10% of cluster reads
-            present = feature_names[prevalence >= 0.10]
-            short = [shorten_feature(f) for f in present]
-
-            if len(short) == 0:
-                # fallback: show the most common features even if rare
-                top = numpy.argsort(prevalence)[::-1][:5]
-
-                short = [
-                    shorten_feature(feature_names[i])
-                    for i in top
-                    if prevalence[i] > 0
-                ]
-
-            if len(short) == 0:
-                cluster_names[c] = f"_empty"
-            else:
-                cluster_names[c] = f"_".join(short)
-
-        df["cluster"] = [cluster_names[c] for c in labels]
+    df["cluster"] = [cluster_names[c] for c in labels]
 
     out = df.copy()
     return out, X_norm, feature_names
@@ -274,6 +244,7 @@ def cluster_transcripts(args):
     CLUSTER_MODS = args.cluster_mods.split(',') if args.cluster_mods is not None else None
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
+    MODS = ['m6A', 'm5C', 'pseU', 'm6A_inosine']
 
     NUM_SAMPLES = 4
     MIN_CLUSTER_SIZE = 10 * NUM_SAMPLES
@@ -302,8 +273,6 @@ def cluster_transcripts(args):
 
     print(matches)
 
-    MODS = ['m6A', 'm5C', 'pseU', 'm6A_inosine']
-
     read_table_header = [
         "read_id",
         "label",
@@ -325,9 +294,6 @@ def cluster_transcripts(args):
 
     input_files = process_input_files(INPUT)
 
-    PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
-    bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
-
     bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
 
     # Open once: label -> handle
@@ -346,8 +312,6 @@ def cluster_transcripts(args):
 
             for label in bam_labels:
                 samfile_path = input_files[label]['path']
-                # print("PROCESSING BAM: {}".format(samfile_path))
-
                 samfile = bam_handles[label]
 
                 READS_IN_REGION = list(samfile.fetch(
@@ -439,11 +403,9 @@ def cluster_transcripts(args):
 
                     read_entries.append(read_entry)
                     
-            read_table = pd.DataFrame(read_entries, columns=read_table_header)
+            read_table = pandas.DataFrame(read_entries, columns=read_table_header)
 
             # ------------------- CLUSTER PROCESSING (OPTIMIZED) ------------------- #
-            # read_table = read_table.drop(columns=["poly_a_length", "average_quality", "read_start", "read_end", "read_length", "read_strand"])
-
             df = read_table.reset_index(drop=True).copy()
             num_total_reads = len(df)
 
@@ -502,7 +464,7 @@ def cluster_transcripts(args):
             except ValueError as e:
                 # fallback: one row ID_clusterNA with per-label counts
                 if df is None or df.empty:
-                    ct = pd.DataFrame(index=[f"{row['ID']}_clusterNA"])
+                    ct = pandas.DataFrame(index=[f"{row['ID']}_clusterNA"])
                 else:
                     ct = (
                         df.groupby("label")
@@ -512,10 +474,6 @@ def cluster_transcripts(args):
                     )
                     ct.index = [f"{row['ID']}_clusterNA"]
             all_count_tables.append(ct)
-
-            # HACK remove
-            if row['seq_id'] == "Pf3D7_MIT_v3":
-                break
             
     finally:
         # Always close all handles
@@ -524,7 +482,7 @@ def cluster_transcripts(args):
 
     # after loop: main combined table
     main_count_table = (
-        pd.concat(all_count_tables, axis=0)
+        pandas.concat(all_count_tables, axis=0)
         .fillna(0)
         .astype(int)
         .sort_index()
