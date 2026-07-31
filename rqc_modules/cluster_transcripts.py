@@ -3,7 +3,6 @@ import pysam
 import numpy
 import matplotlib.pyplot as plt
 import umap
-import hdbscan
 import re
 
 from sklearn.preprocessing import StandardScaler
@@ -14,6 +13,7 @@ from sklearn.preprocessing import normalize
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.cluster import HDBSCAN
 
 from rqc_modules.constants import PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
@@ -22,6 +22,27 @@ from rqc_modules.utils import process_input_files, process_annotation_file
 import numpy as np
 import pandas as pd
 from scipy import sparse as sp
+
+# scan region and pileup mods (list of genomic positions and their mod / unmod ratios)
+# create a table where read_ids are row, columns are mods (m6A, m5C, pseU, m6A_inosine) with a list of mod positions (genomic space)
+# other columns include read_start, read_end, read_length, read_strand, poly_A length, average_read_quality (could we cluster by individual base quality?)
+# Perform dimensionality reduction (PCA, tSNE, UMAP) on this table and cluster reads based on their mod positions and other features
+# create cartoon representation of read type that each cluster represents (e.g. m6A at position 100, m5C at position 150, etc.)
+
+
+# Ok I'm considering how this will scale up. This could one day completely ignore annotations.
+# 
+# But I think the first solution
+# - will loop through all gene annotations
+# - generate tsv
+# - umap
+# - cluster (HBDBSCAN)
+# - record gene_id_cluster_id and each read id associated with it
+# output will be a featureCounts like file which can be passed to edgeR or salmon or w/e
+
+# - If analysing a single gene:
+# - segregate BAM files?
+# - IGV screenshots
 
 def shorten_feature(f):
     # intron_409522_409679 -> I409522_409679
@@ -53,234 +74,6 @@ def make_isoform_name(row, gene_id):
         return f"{gene_id}_no_features"
 
     return f"{gene_id}_" + "_".join(present)
-
-def explain_hdbscan_clusters(
-    X,                      # matrix used for clustering (sparse or dense), shape (n_reads, n_features)
-    labels,                 # cluster labels from HDBSCAN, shape (n_reads,)
-    feature_names,          # feature names, len = n_features
-    probabilities=None,     # optional: clusterer.probabilities_
-    outlier_scores=None,    # optional: clusterer.outlier_scores_
-    top_n=10,
-    min_prevalence_in_cluster=0.10,
-    include_noise=False
-):
-    """
-    Returns:
-      feature_table: DataFrame with top driving features per cluster
-      cluster_table: DataFrame with per-cluster summary stats
-      text_summary: dict cluster_id -> explanation string
-    """
-
-    labels = np.asarray(labels).astype(int)
-    feature_names = np.asarray(feature_names, dtype=object)
-
-    if sp.issparse(X):
-        Xb = (X > 0).astype(np.int8)  # presence/absence
-    else:
-        Xb = (np.asarray(X) > 0).astype(np.int8)
-
-    # Select rows to explain
-    if include_noise:
-        row_mask = np.ones(labels.shape[0], dtype=bool)
-    else:
-        row_mask = labels != -1
-
-    Xb_use = Xb[row_mask]
-    y = labels[row_mask]
-
-    if y.size == 0:
-        raise ValueError("No rows to explain (all points are noise).")
-
-    # Cluster-level summary
-    clusters = sorted(np.unique(y))
-    cluster_rows = []
-    for c in clusters:
-        m = y == c
-        n = int(m.sum())
-
-        row = {
-            "cluster": int(c),
-            "n_reads": n,
-            "fraction_of_explained_reads": n / len(y)
-        }
-
-        # Optional confidence/outlier summaries from full arrays
-        if probabilities is not None:
-            p = np.asarray(probabilities)[row_mask][m]
-            row["mean_membership_probability"] = float(np.mean(p))
-            row["median_membership_probability"] = float(np.median(p))
-        if outlier_scores is not None:
-            o = np.asarray(outlier_scores)[row_mask][m]
-            row["mean_outlier_score"] = float(np.mean(o))
-            row["median_outlier_score"] = float(np.median(o))
-
-        cluster_rows.append(row)
-
-    cluster_table = pd.DataFrame(cluster_rows).sort_values("cluster")
-
-    # Feature enrichment per cluster vs rest
-    feat_rows = []
-    text_summary = {}
-
-    # Convert mean(axis=0) safely for sparse/dense
-    def col_mean(mat):
-        if sp.issparse(mat):
-            return np.asarray(mat.mean(axis=0)).ravel()
-        return np.asarray(mat.mean(axis=0)).ravel()
-
-    for c in clusters:
-        in_c = (y == c)
-        out_c = ~in_c
-
-        # Need both sides to compare
-        if in_c.sum() == 0 or out_c.sum() == 0:
-            text_summary[int(c)] = f"Cluster {c}: cannot compare against rest."
-            continue
-
-        p_in = col_mean(Xb_use[in_c])     # prevalence in cluster
-        p_out = col_mean(Xb_use[out_c])   # prevalence outside cluster
-
-        diff = p_in - p_out
-        l2fc = np.log2((p_in + 1e-6) / (p_out + 1e-6))
-
-        # Keep enriched, sufficiently prevalent features
-        candidate = np.where((diff > 0) & (p_in >= min_prevalence_in_cluster))[0]
-
-        if candidate.size == 0:
-            # show "best available" weak features instead of generic message
-            # rank by prevalence diff (then log2FC), even if below thresholds
-            top_weak_idx = np.lexsort((-l2fc, -diff))[::-1][:top_n]
-
-            weak_parts = []
-            for j in top_weak_idx:
-                # only report features that are at least somewhat enriched
-                if diff[j] <= 0:
-                    continue
-                weak_parts.append(
-                    f"{feature_names[j]} ({p_in[j]*100:.1f}% in vs {p_out[j]*100:.1f}% out, "
-                    f"Δ {diff[j]*100:.1f} pp, log2FC {l2fc[j]:.2f})"
-                )
-
-            cluster_n = int(in_c.sum())
-            cluster_frac = 100.0 * cluster_n / len(y)
-
-            if weak_parts:
-                text_summary[int(c)] = (
-                    f"Cluster {c} (n={cluster_n}, {cluster_frac:.1f}%): "
-                    f"no strong single marker passed thresholds "
-                    f"(min_prevalence_in_cluster={min_prevalence_in_cluster:.2f}). "
-                    f"Top weakly enriched features: " + " ; ".join(weak_parts)
-                )
-            else:
-                text_summary[int(c)] = (
-                    f"Cluster {c} (n={cluster_n}, {cluster_frac:.1f}%): "
-                    f"no enriched features over background (cluster likely defined by multifeature pattern or low signal)."
-                )
-            continue
-
-        # Rank by prevalence gain, then log2 fold-change
-        order = np.lexsort((-l2fc[candidate], -diff[candidate]))[::-1]
-        top_idx = candidate[order[:top_n]]
-
-        parts = []
-        for j in top_idx:
-            feat_rows.append({
-                "cluster": int(c),
-                "feature": str(feature_names[j]),
-                "prevalence_in_cluster": float(p_in[j]),
-                "prevalence_outside_cluster": float(p_out[j]),
-                "prevalence_diff": float(diff[j]),
-                "log2_fc": float(l2fc[j]),
-            })
-            parts.append(
-                f"{feature_names[j]} ({p_in[j]*100:.1f}% in vs {p_out[j]*100:.1f}% out, "
-                f"Δ {diff[j]*100:.1f} pp)"
-            )
-
-        text_summary[int(c)] = " ; ".join(parts)
-
-    feature_table = pd.DataFrame(feat_rows)
-    if not feature_table.empty:
-        feature_table = feature_table.sort_values(
-            ["cluster", "prevalence_diff", "log2_fc"],
-            ascending=[True, False, False]
-        )
-
-    return feature_table, cluster_table, text_summary
-
-import numpy as np
-from sklearn.metrics import pairwise_distances
-
-def diagnose_cluster_geometry(X, labels, clusterer, df, feature_names, c, top_n=15):
-    y = np.asarray(labels).astype(int)
-    in_c = (y == c)
-    out_c = ~in_c
-    if in_c.sum() == 0 or out_c.sum() == 0:
-        print(f"Cluster {c}: empty in/out.")
-        return
-
-    # 1) core strength
-    probs = getattr(clusterer, "probabilities_", None)
-    if probs is not None:
-        p_in = probs[in_c]
-        print(f"Cluster {c}: n={in_c.sum()} mean_prob={p_in.mean():.3f} median_prob={np.median(p_in):.3f}")
-
-    # 2) medoid of cluster
-    Xi = X[in_c]
-    D_in = pairwise_distances(Xi, metric="cosine")
-    medoid_local = np.argmin(D_in.mean(axis=1))
-    medoid_global = np.where(in_c)[0][medoid_local]
-
-    # 3) nearest external reads to medoid
-    D_out = pairwise_distances(X[medoid_global], X[out_c], metric="cosine").ravel()
-    out_idx = np.where(out_c)[0]
-    nn_out = out_idx[np.argsort(D_out)[:20]]
-
-    # 4) compare centroid vs nearest-out centroid in feature space
-    ci = np.asarray((X[in_c] > 0).mean(axis=0)).ravel()
-    co = np.asarray((X[nn_out] > 0).mean(axis=0)).ravel()
-    diff = ci - co
-
-    top_pos = np.argsort(-diff)[:top_n]   # more present in cluster
-    top_neg = np.argsort(diff)[:top_n]    # less present in cluster
-
-    print("\nTop +features vs nearest outside:")
-    for j in top_pos:
-        if diff[j] <= 0: break
-        print(f"  {feature_names[j]}: in={ci[j]:.3f}, near_out={co[j]:.3f}, Δ={diff[j]:.3f}")
-
-    print("\nTop -features vs nearest outside:")
-    for j in top_neg:
-        if diff[j] >= 0: break
-        print(f"  {feature_names[j]}: in={ci[j]:.3f}, near_out={co[j]:.3f}, Δ={diff[j]:.3f}")
-
-    # 5) sample composition + technical covariates
-    print("\nSample composition in cluster:")
-    print(df.loc[in_c, "label"].value_counts(normalize=True))
-    for col in ["read_length","average_quality","poly_a_length"]:
-        if col in df.columns:
-            print(f"{col}: in={df.loc[in_c,col].median():.2f}, out={df.loc[out_c,col].median():.2f}")
-
-# scan region and pileup mods (list of genomic positions and their mod / unmod ratios)
-# create a table where read_ids are row, columns are mods (m6A, m5C, pseU, m6A_inosine) with a list of mod positions (genomic space)
-# other columns include read_start, read_end, read_length, read_strand, poly_A length, average_read_quality (could we cluster by individual base quality?)
-# Perform dimensionality reduction (PCA, tSNE, UMAP) on this table and cluster reads based on their mod positions and other features
-# create cartoon representation of read type that each cluster represents (e.g. m6A at position 100, m5C at position 150, etc.)
-
-
-# Ok I'm considering how this will scale up. This could one day completely ignore annotations.
-# 
-# But I think the first solution
-# - will loop through all gene annotations
-# - generate tsv
-# - umap
-# - cluster (HBDBSCAN)
-# - record gene_id_cluster_id and each read id associated with it
-# output will be a featureCounts like file which can be passed to edgeR or salmon or w/e
-
-# - If analysing a single gene:
-# - segregate BAM files?
-# - IGV screenshots
 
 def build_mod_matrix(df, mod_cols):
     """Return sparse matrix from selected mod columns (list-like positions per row)."""
@@ -337,14 +130,14 @@ def compute_freq_weighted(X):
     """
 
     if sp.issparse(X):
-        row_sums = np.asarray(X.sum(axis=1)).ravel()
+        row_sums = numpy.asarray(X.sum(axis=1)).ravel()
         row_sums[row_sums == 0] = 1
 
         # row normalisation
         TF = X.multiply(1 / row_sums[:, None])
 
         # column frequency
-        doc_freq = np.asarray((X > 0).sum(axis=0)).ravel()
+        doc_freq = numpy.asarray((X > 0).sum(axis=0)).ravel()
 
     else:
         row_sums = X.sum(axis=1)
@@ -354,7 +147,7 @@ def compute_freq_weighted(X):
 
         doc_freq = (X > 0).sum(axis=0)
 
-    freq_weight = np.log(1 + doc_freq)
+    freq_weight = numpy.log(1 + doc_freq)
 
     return TF.multiply(freq_weight) if sp.issparse(TF) else TF * freq_weight
 
@@ -366,7 +159,6 @@ def run_clustering(
     use_introns=False,
     intron_col="introns",
     min_feature_reads=None,          # e.g. 0.01*n_reads or min_cluster_size
-    weight_common=True,
     mod_weight=1.0,
     intron_weight=1.0
 ):
@@ -388,7 +180,7 @@ def run_clustering(
     if not blocks:
         raise ValueError("No feature blocks selected or all selected blocks are empty.")
 
-    X = sp.hstack(blocks, format="csr").astype(numpy.float64)
+    X = sp.hstack(blocks, format="csr").astype(numpy.float32)
     feature_names = numpy.concatenate(feat_names) if feat_names else numpy.array([], dtype=object)
 
     # feature frequency filter
@@ -400,38 +192,11 @@ def run_clustering(
     feature_names = feature_names[keep]
     feat_presence = feat_presence[keep]
 
-    print(min_feature_reads)
-    print("Feature abundances:")
-    for name, count in sorted(zip(feature_names, feat_presence), key=lambda x: x[1], reverse=True):
-        print(f"{name:40s} {count:6d} reads ({100*count/X.shape[0]:5.2f}%)")
-
     if X.shape[1] == 0:
         raise ValueError(f"No features remain after filtering with min_feature_reads={min_feature_reads}")
 
-    # FIXME PF3D7_0322000 is too big
-
-    # TF-IDF
-    # tfidf = TfidfTransformer(
-    #     norm="l2",          # usually best for cosine-based clustering
-    #     use_idf=False,
-    #     smooth_idf=True,
-    #     sublinear_tf=False  # set True if you want 1+log(tf)
-    # )
-    # X = tfidf.fit_transform(X).astype(np.float64)
     X = compute_freq_weighted(X)
 
-    n_reads, n_features = X.shape
-    n_unique = np.unique(X.toarray(), axis=0).shape[0]
-
-    print(
-        f"Reads={n_reads}, features={n_features}, unique_patterns={n_unique}"
-    )
-    print(feature_names)
-
-    # TODO: when naming clusters, we should have this name convention
-    # PF3D7_0210000_IA_IC
-    # PF3D7_0210000_IA_IB_IC_m6AA_m6AB_m6AC
-    # and for HDBSCAN, these features should be the top features which explain the cluster (random forest?)
     gene_id = df["ID"].iloc[0]
 
     MIN_FEATURES_CLUSTERING = 10
@@ -447,56 +212,37 @@ def run_clustering(
         df["cluster"] = X_df.apply(make_isoform_name, axis=1, gene_id=gene_id)
 
     else:
-        clusterer = hdbscan.HDBSCAN(
+        # FIXME PF3D7_0322000 is too big
+
+        X_dense = X.toarray().astype(numpy.float32)
+        X_norm = normalize(X_dense, norm="l2")
+
+        clusterer = HDBSCAN(
             min_cluster_size=min_cluster_size,
-            min_samples=min_cluster_size,
-            metric="cosine",
-            cluster_selection_method="eom",
-            allow_single_cluster=True,
-            cluster_selection_epsilon=0.1
+            min_samples=20,
+            metric="euclidean",
+            allow_single_cluster=True
         )
-        labels = clusterer.fit_predict(X)
-
-        # print("X shape:", X.shape)
-        
-        # Xu = np.unique(X.toarray(), axis=0)
-        # print("Unique rows:", Xu.shape[0])
-
-        # print("Clusters:", np.unique(labels))
-
-        # feature_table, cluster_table, text_summary = explain_hdbscan_clusters(
-        #     X=X,
-        #     labels=labels,
-        #     feature_names=feature_names,
-        #     probabilities=getattr(clusterer, "probabilities_", None),
-        #     outlier_scores=getattr(clusterer, "outlier_scores_", None),
-        #     top_n=8,
-        #     min_prevalence_in_cluster=0.10,
-        #     include_noise=False
-        # )
-        # df["cluster"] = labels.astype(int).astype(str)
+        labels = clusterer.fit_predict(X_norm)
 
         cluster_names = {}
 
-        for c in sorted(np.unique(labels)):
+        for c in sorted(numpy.unique(labels)):
             if c == -1:
                 cluster_names[c] = f"_noise"
                 continue
 
             # Use original binary feature matrix
             cluster_X = X.tocsr()[labels == c]
-
             # Feature prevalence within cluster
-            prevalence = np.asarray(cluster_X.mean(axis=0)).ravel()
-
+            prevalence = numpy.asarray(cluster_X.mean(axis=0)).ravel()
             # Include features seen in at least 10% of cluster reads
             present = feature_names[prevalence >= 0.10]
-
             short = [shorten_feature(f) for f in present]
 
             if len(short) == 0:
                 # fallback: show the most common features even if rare
-                top = np.argsort(prevalence)[::-1][:5]
+                top = numpy.argsort(prevalence)[::-1][:5]
 
                 short = [
                     shorten_feature(feature_names[i])
@@ -512,7 +258,7 @@ def run_clustering(
         df["cluster"] = [cluster_names[c] for c in labels]
 
     out = df.copy()
-    return out, X, feature_names
+    return out, X_norm, feature_names
 
 def cluster_transcripts(args):
     INPUT = args.input
@@ -529,14 +275,6 @@ def cluster_transcripts(args):
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
 
-    USE_MOD_INFO = True
-    USE_INTRON_INFO = True
-    USE_CONTINUOUS_INFO = False
-
-    MOD_WEIGHT = 0.3
-    INTRON_WEIGHT = 0.3
-    CONTINUOUS_WEIGHT = 0.4
-
     NUM_SAMPLES = 4
     MIN_CLUSTER_SIZE = 10 * NUM_SAMPLES
     MAX_CLUSTER_SIZE = 200 * NUM_SAMPLES
@@ -544,24 +282,9 @@ def cluster_transcripts(args):
 
     MINIMUM_READS_TO_PROCESS = 40
 
-    UMAP_MIN_DIST = 0.3
     RANDOM_SEED = 42
     numpy.random.seed(RANDOM_SEED)
 
-    # ---------- weights ----------
-    weights = {
-        "mod": MOD_WEIGHT if USE_MOD_INFO else 0.0,
-        "intron": INTRON_WEIGHT if USE_INTRON_INFO else 0.0,
-        "cont": CONTINUOUS_WEIGHT if USE_CONTINUOUS_INFO else 0.0,
-    }
-    s = sum(weights.values())
-    if s == 0:
-        raise ValueError("At least one feature type must be enabled.")
-    weights = {k: v / s for k, v in weights.items()}
-
-    w_mod = weights["mod"]
-    w_intron = weights["intron"]
-    w_cont = weights["cont"]
 
     # -------------------- begin processing -------------------- # 
 
@@ -619,8 +342,7 @@ def cluster_transcripts(args):
         # ------------------- MAIN READ AND FEATURE EXTRACTION LOOP FROM BAMFILES ------------------- #
         for _, row in matches.iterrows():
             print("processing {}...".format(row["ID"]))
-            read_table = pandas.DataFrame(columns=read_table_header)
-            read_table_index = 0
+            read_entries = []
 
             for label in bam_labels:
                 samfile_path = input_files[label]['path']
@@ -634,29 +356,36 @@ def cluster_transcripts(args):
                                     stop=row['end']+COVERAGE_PADDING
                                 ))
                 # filter reads
-                # print(len(READS_IN_REGION))
                 for i in range(len(READS_IN_REGION)):
                     r = READS_IN_REGION[i]
-                    # print(r.query_id)
+
+                    read_is_forward = r.is_forward
+
                     if r.is_secondary or r.is_supplementary:
                         continue
-                    if (row["strand"] == "+" and r.is_reverse) or (row["strand"] == "-" and r.is_forward):
+                    if (row["strand"] == "+" and not read_is_forward) or (row["strand"] == "-" and read_is_forward):
                         continue
 
-                    mod_positions = {}
+                    mod_positions = []
+
+                    ref_pos = r.get_reference_positions(full_length=True)
+                    mb = r.modified_bases
+
+                    read_start = r.reference_start
+                    read_end = r.reference_end
+                    read_qualities = r.query_qualities
+                    read_cigartuples = r.cigartuples
+                    read_name = r.query_name
+                    read_query_length = r.query_length
 
                     for mod in MODS:
-                        mod_positions["{}_positions".format(mod)] = []
-                        if r.is_forward:
+                        if read_is_forward:
                             pysam_mod_tuple_code = '{}_for'.format(mod)
                         else:
                             pysam_mod_tuple_code = '{}_rev'.format(mod)
 
+                        genomic_mod_positions = []
                         if pysam_mod_tuple_code in PYSAM_MOD_TUPLES:
-
-                            ref_pos = r.get_reference_positions(full_length=True)
-
-                            mb = r.modified_bases
                             mods_probs = mb.get(PYSAM_MOD_TUPLES[pysam_mod_tuple_code]) if mb else None
 
                             if mods_probs:
@@ -664,13 +393,13 @@ def cluster_transcripts(args):
                                 read_mod_positions = [x[0] for x in mods_probs if x[1] >= PYSAM_MOD_THRESHOLD]
                                 genomic_mod_positions = [ref_pos[mod] for mod in read_mod_positions if ref_pos[mod] is not None]
 
-                                mod_positions["{}_positions".format(mod)] = genomic_mod_positions
+                        mod_positions.append(genomic_mod_positions)
 
                     # introns
                     introns = []
-                    ref_pos = r.reference_start
+                    ref_pos = read_start
 
-                    for op, length in r.cigartuples:
+                    for op, length in read_cigartuples:
                         if op == 2:  # D = 
                             if length >= MIN_DELETION_LENGTH:
                                 introns.append((ref_pos, ref_pos + length))
@@ -680,8 +409,8 @@ def cluster_transcripts(args):
 
                     # phred quality
                     avg_quality = (
-                        sum(r.query_qualities) / len(r.query_qualities)
-                        if r.query_qualities
+                        sum(read_qualities) / len(read_qualities)
+                        if read_qualities
                         else 0
                     )                
 
@@ -690,29 +419,27 @@ def cluster_transcripts(args):
                     if r.has_tag('pt:i'):
                         poly_a_length = r.get_tag('pt:i')
 
-                    read_strand = '+' if r.is_forward else '-'
-
                     read_entry = [
-                        r.query_name,
+                        read_name,
                         label,
                         MOD_PROB_THRESHOLD,
                         samfile_path,
                         row['seq_id'],
                         row['ID'],
-                        r.reference_start,
-                        r.reference_end,
-                        read_strand,
-                        r.query_length,
+                        read_start,
+                        read_end,
+                        '+' if read_is_forward else '-',
+                        read_query_length,
                         poly_a_length,
                         avg_quality,
                         introns,
                     ]
 
-                    for mod in MODS:
-                        read_entry.append(mod_positions["{}_positions".format(mod)])
+                    read_entry += mod_positions
 
-                    read_table.loc[read_table_index] = read_entry
-                    read_table_index += 1
+                    read_entries.append(read_entry)
+                    
+            read_table = pd.DataFrame(read_entries, columns=read_table_header)
 
             # ------------------- CLUSTER PROCESSING (OPTIMIZED) ------------------- #
             # read_table = read_table.drop(columns=["poly_a_length", "average_quality", "read_start", "read_end", "read_length", "read_strand"])
@@ -733,7 +460,6 @@ def cluster_transcripts(args):
                 if CLUSTER_MODS is not None:
                     mod_col_names = ["{}_positions".format(m) for m in CLUSTER_MODS]
 
-                print("running clustering...")
                 df_clustered, X_final, feat_names = run_clustering(
                     df=df,
                     min_cluster_size=min_cluster_size,
@@ -741,14 +467,10 @@ def cluster_transcripts(args):
                     mod_cols=mod_col_names,  # pick any mod columns
                     use_introns=CLUSTER_INTRONS,
                     intron_col="introns",
-                    min_feature_reads=min_cluster_size,            # or int(np.ceil(0.01 * len(df)))
-                    weight_common=True,
+                    min_feature_reads=min_cluster_size,            # or int(numpy.ceil(0.01 * len(df)))
                     mod_weight=1.0,
                     intron_weight=1.0
                 )
-                print("clustering done...")
-
-                # print(feat_names)
         
                 # ---------- optional UMAP only for visualization ----------
                 if len(matches) == 1:
@@ -769,7 +491,6 @@ def cluster_transcripts(args):
                     UMAP_OUTPUT_FILE = "{}.umap".format(OUTPUT_FILE)
                     df_clustered.to_csv(UMAP_OUTPUT_FILE, sep="\t", index=False)
                     print(f"Done. Wrote: {UMAP_OUTPUT_FILE}")
-                    # print(df_clustered[["read_id", "cluster"]].head())
 
                 ct = (
                     df_clustered
@@ -793,9 +514,8 @@ def cluster_transcripts(args):
             all_count_tables.append(ct)
 
             # HACK remove
-            if row['seq_id'] == "Pf3D7_08_v3":
+            if row['seq_id'] == "Pf3D7_MIT_v3":
                 break
-
             
     finally:
         # Always close all handles
