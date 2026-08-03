@@ -188,6 +188,11 @@ def run_clustering(
     X_dense = X.toarray().astype(numpy.float32)
     X_norm = normalize(X_dense, norm="l2")
 
+    # new idea: take the most common features (>1% of reads)
+    # bin reads by each permutation
+    # assign a mod binary feature cluster id as a new continuous variable
+    # use HDBSCAN on all continuous variables
+
     clusterer = HDBSCAN(
         min_cluster_size=min_cluster_size,
         min_samples=20,
