@@ -63,6 +63,69 @@ def make_isoform_name(row, gene_id):
 
     return f"{gene_id}_" + "_".join(present)
 
+
+def assign_mod_cluster_ids(df, mod_cols):
+    """
+    Append a ``mod_cluster_id`` column to ``df`` based on frequent mod-site combinations.
+
+    For each row, build a tuple of ``(mod_column, position)`` pairs from the selected
+    mod columns. Count combinations across reads, rank them by frequency, and keep
+    combinations that occur in more than 1% of reads. Retained combinations are
+    named by joining their mod positions (e.g. "col1:100_col2:205"); rows with
+    non-retained combinations are labeled "noise".
+    """
+    if not isinstance(mod_cols, (list, tuple)):
+        mod_cols = [mod_cols]
+
+    mod_cols = [col for col in mod_cols if col in df.columns]
+
+    if not mod_cols:
+        df["mod_cluster_id"] = pandas.Series("noise", index=df.index, dtype="object")
+        return df
+
+    def _build_combo(row):
+        sites = []
+        for col in mod_cols:
+            vals = row[col]
+            if isinstance(vals, (list, tuple, set)):
+                for v in vals:
+                    if pandas.notna(v):
+                        sites.append((col, v))
+            elif pandas.notna(vals):
+                sites.append((col, vals))
+
+        if not sites:
+            return pandas.NA
+
+        return tuple(sorted(sites))
+
+    def _combo_to_name(combo):
+        """Turn a tuple of (col, pos) pairs into a readable cluster name."""
+        return "_".join(f"{col}:{pos}" for col, pos in combo)
+
+    combo_series = df.apply(_build_combo, axis=1)
+    counts = combo_series.value_counts(dropna=False)
+    threshold = max(1, int(numpy.ceil(0.01 * len(df))))
+    kept = counts[counts > threshold]
+
+    if kept.empty:
+        df["mod_cluster_id"] = pandas.Series("noise", index=df.index, dtype="object")
+        return df
+
+    combo_to_cluster_id = {
+        combo: _combo_to_name(combo)
+        for combo in kept.sort_values(ascending=False).index
+        if pandas.notna(combo)
+    }
+
+    assigned_ids = [
+        combo_to_cluster_id.get(combo, "noise")
+        for combo in combo_series
+    ]
+    df["mod_cluster_id"] = pandas.Series(assigned_ids, index=df.index, dtype="object")
+    return df
+
+
 def build_mod_matrix(df, mod_cols):
     """Return sparse matrix from selected mod columns (list-like positions per row)."""
     mats = []
@@ -152,6 +215,9 @@ def run_clustering(
 ):
     blocks = []
     feat_names = []
+
+    df = assign_mod_cluster_ids(df, mod_cols)
+    print(df)
 
     if use_mods:
         Xm, fnm = build_mod_matrix(df, mod_cols)
@@ -442,12 +508,10 @@ def cluster_transcripts(args):
                 # ---------- optional UMAP only for visualization ----------
                 if len(matches) == 1:
                     print("generating UMAP embedding (viz only)...")
-                    n_neighbors = min(50, max(15, min_cluster_size // 2))
                     emb = umap.UMAP(
-                        n_neighbors=n_neighbors,
+                        n_neighbors=20,
                         min_dist=0.3,
-                        metric="cosine",
-                        random_state=42
+                        metric="euclidean"
                     ).fit_transform(X_final)
             
                     df_clustered["umap_x"] = emb[:, 0]
@@ -479,6 +543,9 @@ def cluster_transcripts(args):
                     )
                     ct.index = [f"{row['ID']}_clusterNA"]
             all_count_tables.append(ct)
+
+            if row["seq_id"] == "Pf3D7_02_v3":
+                break
             
     finally:
         # Always close all handles

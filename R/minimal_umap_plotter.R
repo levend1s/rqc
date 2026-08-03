@@ -3,7 +3,7 @@
 library(ggplot2)
 
 # change this path to your TSV file
-infile <- c("~/rqc/cluster_transcripts_results_210100.tsv.umap")
+infile <- c("~/rqc/cluster_transcripts_results.tsv.umap")
 df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 
 # make cluster discrete for coloring

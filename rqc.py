@@ -176,7 +176,7 @@ def build_parser():
     cluster_transcripts_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data.")
     cluster_transcripts_parser.add_argument("--type", required=False, help="input file listing coverage data")
 
-    cluster_transcripts_parser.add_argument("-p", "--padding", required=False, type=int, default=100, help="coverage padding")
+    cluster_transcripts_parser.add_argument("-p", "--padding", required=False, type=int, default=0, help="coverage padding")
     cluster_transcripts_parser.add_argument("-o", "--outfile", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
     cluster_transcripts_parser.add_argument("-b", "--bamfile", required=False, help="input bam file with reads to cluster")
     cluster_transcripts_parser.add_argument("-d", "--min_deletion_length", required=False, type=int, default=30, help="min deletion length to consider as a variant indicator")
