@@ -12,201 +12,55 @@ import scipy.sparse as sp
 from rqc_modules.constants import PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
 
-# scan region and pileup mods (list of genomic positions and their mod / unmod ratios)
-# create a table where read_ids are row, columns are mods (m6A, m5C, pseU, m6A_inosine) with a list of mod positions (genomic space)
-# other columns include read_start, read_end, read_length, read_strand, poly_A length, average_read_quality (could we cluster by individual base quality?)
-# Perform dimensionality reduction (PCA, tSNE, UMAP) on this table and cluster reads based on their mod positions and other features
-# create cartoon representation of read type that each cluster represents (e.g. m6A at position 100, m5C at position 150, etc.)
+def append_features_present_in_gt_percent(
+    df: pandas.DataFrame,
+    feature_columns: list[str],
+    threshold: 0,
+    new_suffix: str = "_gt1pct",
+    verbose: bool = True,
+):
 
-# Ok I'm considering how this will scale up. This could one day completely ignore annotations.
-# 
-# But I think the first solution
-# - will loop through all gene annotations
-# - generate tsv
-# - umap
-# - cluster (HBDBSCAN)
-# - record gene_id_cluster_id and each read id associated with it
-# output will be a featureCounts like file which can be passed to edgeR or salmon or w/e
+    out = df.copy()
+    kept_features_by_col = {}
+    kept_counts_by_col = {}
 
-# - If analysing a single gene:
-# - segregate BAM files?
-# - IGV screenshots
+    for col in feature_columns:
+        exploded = (
+            out[col]
+            .apply(lambda x: x if isinstance(x, (list, tuple, set)) else [])
+            .apply(lambda x: list(set(x)))  # de-duplicate within read
+            .explode()
+            .dropna()
+        )
 
-def shorten_feature(f):
-    # intron_409522_409679 -> I409522_409679
-    # m6A_positions_12345 -> m6A12345
+        read_counts = exploded.value_counts()  # feature -> #reads containing feature
+        kept_counts = read_counts[read_counts > threshold].sort_values(ascending=False)
 
-    if f.startswith("intron_"):
-        return "I" + f.replace("intron_", "")
+        keep_set = set(kept_counts.index)
+        kept_features_by_col[col] = keep_set
+        kept_counts_by_col[col] = kept_counts.to_dict()
 
-    if "_positions_" in f:
-        mod, pos = f.split("_positions_")
-        return mod + pos
+        new_col = f"{col}{new_suffix}"
+        out[new_col] = out[col].apply(
+            lambda x: [f for f in (x if isinstance(x, (list, tuple, set)) else []) if f in keep_set]
+        )
 
-    return f
+        # print(f"\nColumn: {col}")
+        # print(f"Threshold: > {threshold:.2f} reads ({min_percent}%)")
+        # if len(kept_counts) == 0:
+        #     print("No features passed threshold.")
+        # else:
+        #     print("Kept features and counts:")
+        #     for feat, cnt in kept_counts.items():
+        #         print(f"  {feat}: {cnt}")
 
-def make_isoform_name(row, gene_id):
-    """
-    Generate an isoform-style cluster name from a binary feature vector.
-
-    Example:
-        PF3D7_0210000_I409522_409679_m6A410000_m6A410200
-    """
-
-    present = [
-        shorten_feature(f)
-        for f in row.index[row]
-    ]
-
-    if len(present) == 0:
-        return f"{gene_id}_no_features"
-
-    return f"{gene_id}_" + "_".join(present)
-
-
-def assign_mod_cluster_ids(df, mod_cols):
-    """
-    Append a ``mod_cluster_id`` column to ``df`` based on frequent mod-site combinations.
-
-    For each row, build a tuple of ``(mod_column, position)`` pairs from the selected
-    mod columns. Count combinations across reads, rank them by frequency, and keep
-    combinations that occur in more than 1% of reads. Retained combinations are
-    named by joining their mod positions (e.g. "col1:100_col2:205"); rows with
-    non-retained combinations are labeled "noise".
-    """
-    if not isinstance(mod_cols, (list, tuple)):
-        mod_cols = [mod_cols]
-
-    mod_cols = [col for col in mod_cols if col in df.columns]
-
-    if not mod_cols:
-        df["mod_cluster_id"] = pandas.Series("noise", index=df.index, dtype="object")
-        return df
-
-    def _build_combo(row):
-        sites = []
-        for col in mod_cols:
-            vals = row[col]
-            if isinstance(vals, (list, tuple, set)):
-                for v in vals:
-                    if pandas.notna(v):
-                        sites.append((col, v))
-            elif pandas.notna(vals):
-                sites.append((col, vals))
-
-        if not sites:
-            return pandas.NA
-
-        return tuple(sorted(sites))
-
-    def _combo_to_name(combo):
-        """Turn a tuple of (col, pos) pairs into a readable cluster name."""
-        return "_".join(f"{col}:{pos}" for col, pos in combo)
-
-    combo_series = df.apply(_build_combo, axis=1)
-    counts = combo_series.value_counts(dropna=False)
-    threshold = max(1, int(numpy.ceil(0.01 * len(df))))
-    kept = counts[counts > threshold]
-
-    if kept.empty:
-        df["mod_cluster_id"] = pandas.Series("noise", index=df.index, dtype="object")
-        return df
-
-    combo_to_cluster_id = {
-        combo: _combo_to_name(combo)
-        for combo in kept.sort_values(ascending=False).index
-        if pandas.notna(combo)
-    }
-
-    assigned_ids = [
-        combo_to_cluster_id.get(combo, "noise")
-        for combo in combo_series
-    ]
-    df["mod_cluster_id"] = pandas.Series(assigned_ids, index=df.index, dtype="object")
-    return df
-
-
-def build_mod_matrix(df, mod_cols):
-    """Return sparse matrix from selected mod columns (list-like positions per row)."""
-    mats = []
-    names = []
-
-    for col in mod_cols:
-        row_dicts = []
-        for vals in df[col]:
-            d = {}
-            if isinstance(vals, list):
-                for v in vals:
-                    k = f"{col}_{v}"          # keeps feature namespace per mod type
-                    d[k] = d.get(k, 0) + 1    # counts per read
-            row_dicts.append(d)
-
-        vec = DictVectorizer(sparse=True)
-        Xm = vec.fit_transform(row_dicts).tocsr()
-        mats.append(Xm)
-        names.extend(vec.get_feature_names_out().tolist())
-
-    if not mats:
-        return sp.csr_matrix((len(df), 0), dtype=numpy.float32), numpy.array([], dtype=object)
-
-    return sp.hstack(mats, format="csr"), numpy.array(names, dtype=object)
-
-
-def build_introns_matrix(df, intron_col="introns_binary"):
-    """
-    introns_binary can be:
-    - scipy sparse matrix already
-    - list/set of active intron ids per read (binary presence)
-    """
-    row_dicts = []
-    for vals in df["introns"]:
-        d = {}
-        if isinstance(vals, list):
-            for intr in vals:
-                if isinstance(intr, tuple) and len(intr) == 2:
-                    s, e = intr
-                    k = f"intron_{s}_{e}"
-                    d[k] = 1   # binary presence per read
-        row_dicts.append(d)
-
-    vec = DictVectorizer(sparse=True)
-    Xi = vec.fit_transform(row_dicts).tocsr()
-    return Xi, numpy.array(vec.get_feature_names_out(), dtype=object)
-
-
-def compute_freq_weighted(X):
-    """
-    Equivalent to R compute_freq_weighted()
-    X: sparse or dense count matrix
-    """
-
-    if sp.issparse(X):
-        row_sums = numpy.asarray(X.sum(axis=1)).ravel()
-        row_sums[row_sums == 0] = 1
-
-        # row normalisation
-        TF = X.multiply(1 / row_sums[:, None])
-
-        # column frequency
-        doc_freq = numpy.asarray((X > 0).sum(axis=0)).ravel()
-
-    else:
-        row_sums = X.sum(axis=1)
-        row_sums[row_sums == 0] = 1
-
-        TF = X / row_sums[:, None]
-
-        doc_freq = (X > 0).sum(axis=0)
-
-    freq_weight = numpy.log(1 + doc_freq)
-
-    return TF.multiply(freq_weight) if sp.issparse(TF) else TF * freq_weight
+    return out, kept_features_by_col, kept_counts_by_col
 
 def run_clustering(
     df,
     min_cluster_size,
     use_mods=True,
-    mod_cols=("m6A_positions",),
+    mod_cols=[],
     use_introns=False,
     intron_col="introns",
     min_feature_reads=None,          # e.g. 0.01*n_reads or min_cluster_size
@@ -216,90 +70,66 @@ def run_clustering(
     blocks = []
     feat_names = []
 
-    df = assign_mod_cluster_ids(df, mod_cols)
+    # TODO implement tolerance
+    min_percent = 1.0
+    n_reads = len(df)
+    min_reads_cluster = (min_percent / 100.0) * n_reads  # strict ">" threshold
+    _, frequent_features, _ = append_features_present_in_gt_percent(df, mod_cols, min_reads_cluster)
+    print(frequent_features)
+    print(n_reads)
+    print(min_reads_cluster)
+    genomic_feature_clusters = {}
+
+    # build a dictionary of the most frequent unique clusters
+    for _, row in df.iterrows():
+        cluster_id = ""
+
+        for col in mod_cols:
+            row_features = set(row.get(col, []))
+            frequent_features_col = frequent_features[col]
+            intersect_features = sorted(row_features & frequent_features_col)
+            cluster_id += "|".join([f"{col}_{f}" for f in intersect_features])
+
+        genomic_feature_clusters[cluster_id] = 1 if cluster_id not in genomic_feature_clusters else genomic_feature_clusters.get(cluster_id, 0) + 1
+
+    # keep only clusters which explain >1% of reads
+    filtered_genomic_feature_clusters = {k: v for k, v in genomic_feature_clusters.items() if v > min_reads_cluster}
+    print(filtered_genomic_feature_clusters)
+
+    unique_features = set()
+    # convert back to sets for quick comparison
+    for k, v in filtered_genomic_feature_clusters.items():
+        features = [f for f in k.split("|") if f]
+        fset = set(features)
+        unique_features.update(fset)
+
+    print(unique_features)
+
+    cluster_ids = []
+    # go through reads again, and assign them to one of the filtered_clusters
+    for _, row in df.iterrows():
+        cluster_id = ""
+
+        for col in mod_cols:
+            row_features = set(row.get(col, []))
+            intersect_features = row_features & unique_features
+            cluster_id += "|".join([f"{col}_{f}" for f in intersect_features])
+
+        cluster_ids.append(cluster_id)
+
+    df["cluster_id"] = cluster_ids
+
+    print(df["cluster_id"])
+
+
+    for k, v in sorted(filtered_genomic_feature_clusters.items(), key=lambda kv: kv[1], reverse=True):
+        print(k, v)
+
     print(df)
 
-    if use_mods:
-        Xm, fnm = build_mod_matrix(df, mod_cols)
-        if Xm.shape[1] > 0:
-            blocks.append(Xm * numpy.sqrt(mod_weight))
-            feat_names.append(fnm)
 
-    if use_introns:
-        Xi, fni = build_introns_matrix(df, intron_col=intron_col)
-        if Xi.shape[1] > 0:
-            blocks.append(Xi * numpy.sqrt(intron_weight))
-            feat_names.append(fni)
 
-    if not blocks:
-        raise ValueError("No feature blocks selected or all selected blocks are empty.")
-
-    X = sp.hstack(blocks, format="csr").astype(numpy.float32)
-    feature_names = numpy.concatenate(feat_names) if feat_names else numpy.array([], dtype=object)
-
-    # feature frequency filter
-    min_feature_reads = int(numpy.ceil(0.01 * len(df)))
-    feat_presence = numpy.asarray((X > 0).sum(axis=0)).ravel()
-
-    keep = feat_presence >= int(min_feature_reads)
-    X = X[:, keep]
-    feature_names = feature_names[keep]
-    feat_presence = feat_presence[keep]
-
-    if X.shape[1] == 0:
-        raise ValueError(f"No features remain after filtering with min_feature_reads={min_feature_reads}")
-
-    X = compute_freq_weighted(X)
-
-    X_dense = X.toarray().astype(numpy.float32)
-    X_norm = normalize(X_dense, norm="l2")
-
-    # new idea: take the most common features (>1% of reads)
-    # bin reads by each permutation
-    # assign a mod binary feature cluster id as a new continuous variable
-    # use HDBSCAN on all continuous variables
-
-    clusterer = HDBSCAN(
-        min_cluster_size=min_cluster_size,
-        min_samples=20,
-        metric="euclidean",
-        allow_single_cluster=True
-    )
-    labels = clusterer.fit_predict(X_norm)
-
-    cluster_names = {}
-
-    for c in sorted(numpy.unique(labels)):
-        if c == -1:
-            cluster_names[c] = f"_noise"
-            continue
-
-        # Use original binary feature matrix
-        cluster_X = X.tocsr()[labels == c]
-        prevalence = numpy.asarray(cluster_X.mean(axis=0)).ravel()
-        # Include features seen in at least 10% of cluster reads
-        present = feature_names[prevalence >= 0.10]
-        short = [shorten_feature(f) for f in present]
-
-        if len(short) == 0:
-            # fallback: show the most common features even if rare
-            top = numpy.argsort(prevalence)[::-1][:5]
-
-            short = [
-                shorten_feature(feature_names[i])
-                for i in top
-                if prevalence[i] > 0
-            ]
-
-        if len(short) == 0:
-            cluster_names[c] = f"_empty"
-        else:
-            cluster_names[c] = f"_".join(short)
-
-    df["cluster"] = [cluster_names[c] for c in labels]
-
-    out = df.copy()
-    return out, X_norm, feature_names
+    # continuous variable encoding for feature clusters may not work, but for single categories (just m6A) could order by the midpoint/max of modification for position information along the transcript
 
 def cluster_transcripts(args):
     INPUT = args.input

@@ -2,23 +2,23 @@ library(tidyverse)
 library(processx)
 
 # --------------------- CONFIG ---------------------
-bam_files <- c(
-  "/Users/joshualevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam",
-  "/Users/joshualevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam"
-)
-
-igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
-genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
-
 # bam_files <- c(
-#   "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28C1_to_pfal.50MAPQ.sorted.bam",
-#   "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28K1_to_pfal.50MAPQ.sorted.bam"
+#   "/Users/joshualevendis/Downloads/bams/28C1_to_pfal.50MAPQ.sorted.bam",
+#   "/Users/joshualevendis/Downloads/bams/28K1_to_pfal.50MAPQ.sorted.bam"
 # )
 # 
-# igv_path   <- "/Applications/IGV_2.19.7.app/Contents/MacOS/IGV"
-# genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-# annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+# igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
+# genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+# annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+
+bam_files <- c(
+  "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28C1_to_pfal.50MAPQ.sorted.bam",
+  "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28K1_to_pfal.50MAPQ.sorted.bam"
+)
+
+igv_path   <- "/Applications/IGV_2.19.7.app/Contents/MacOS/IGV"
+genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 
 infile <- c("~/rqc/cluster_transcripts_results.tsv.umap")
 df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
