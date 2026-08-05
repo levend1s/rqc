@@ -22,7 +22,6 @@ annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gf
 
 infile <- c("~/rqc/cluster_transcripts_results.tsv.umap")
 df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-df$clusters <- df$ mod_cluster_id
 
 # bam_files <- unique(df$bamfile_path)
 igv_port   <- 60151
@@ -35,6 +34,7 @@ MOD_PROB_THRESHOLD <- unique(df$mod_prob_threshold)
 stopifnot(length(MOD_PROB_THRESHOLD) == 1)
 MOD_PROB_THRESHOLD <- MOD_PROB_THRESHOLD[[1]]
 INDEL_THRESHOLD <- 10
+DEBUG <- TRUE
 
 
 # --------------------- IGV socket helpers ---------------------
@@ -199,6 +199,10 @@ for (bam_file in bam_files) {
   igv_send(con, paste("preference SAM.HIDE_SMALL_INDEL_BP_THRESHOLD", INDEL_THRESHOLD))
   igv_send(con, "preference SAM.HIDE_SMALL_INDEL TRUE")
   # igv_send(con, "preference SAM.SHOW_SOFT_CLIPPED TRUE")
+  
+  if (DEBUG) {
+    readline("Press [Enter] to continue (Ctrl+C to interrupt): ")
+  }
   
   # "OK" from these commands confirms IGV finished re-rendering with the
   # new display settings, so a screenshot here reflects the final state -

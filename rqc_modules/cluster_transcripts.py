@@ -58,18 +58,8 @@ def append_features_present_in_gt_percent(
 
 def run_clustering(
     df,
-    min_cluster_size,
-    use_mods=True,
     mod_cols=[],
-    use_introns=False,
-    intron_col="introns",
-    min_feature_reads=None,          # e.g. 0.01*n_reads or min_cluster_size
-    mod_weight=1.0,
-    intron_weight=1.0
 ):
-    blocks = []
-    feat_names = []
-
     # TODO implement tolerance
     min_percent = 1.0
     n_reads = len(df)
@@ -88,46 +78,69 @@ def run_clustering(
             row_features = set(row.get(col, []))
             frequent_features_col = frequent_features[col]
             intersect_features = sorted(row_features & frequent_features_col)
-            cluster_id += "|".join([f"{col}_{f}" for f in intersect_features])
+            something_to_add = "-".join([f"{col}_{f}" for f in intersect_features])
+            if cluster_id and something_to_add:
+                cluster_id += "-"
+            cluster_id += something_to_add
 
         genomic_feature_clusters[cluster_id] = 1 if cluster_id not in genomic_feature_clusters else genomic_feature_clusters.get(cluster_id, 0) + 1
 
     # keep only clusters which explain >1% of reads
     filtered_genomic_feature_clusters = {k: v for k, v in genomic_feature_clusters.items() if v > min_reads_cluster}
+    print(genomic_feature_clusters)
     print(filtered_genomic_feature_clusters)
 
-    unique_features = set()
+
+    # TODO maybe remove
+    # frequent_features_set = []
+    # for k, v in frequent_features.items():
+    #     frequent_features_set += [f"{k}_{e}" for e in v]
+
+    # frequent_features_set = set(frequent_features_set)
+
+    frequent_combination_features_set = []
     # convert back to sets for quick comparison
     for k, v in filtered_genomic_feature_clusters.items():
-        features = [f for f in k.split("|") if f]
-        fset = set(features)
-        unique_features.update(fset)
+        features = [f for f in k.split("-") if f]
+        frequent_combination_features_set.append( set(features))
 
-    print(unique_features)
+
+    print(frequent_combination_features_set)
 
     cluster_ids = []
-    # go through reads again, and assign them to one of the filtered_clusters
+    # go through reads again, and assign them to one of the unique_features
+    # if not assigned to a filtered cluster, try assign to frequent_features
+    # otherwise, assign to noise group
     for _, row in df.iterrows():
         cluster_id = ""
 
+        row_features = []
+
         for col in mod_cols:
-            row_features = set(row.get(col, []))
-            intersect_features = row_features & unique_features
-            cluster_id += "|".join([f"{col}_{f}" for f in intersect_features])
+            row_mod_features = row.get(col, [])
+            row_features += [f"{col}_{f}" for f in row_mod_features]
 
-        cluster_ids.append(cluster_id)
+        row_features = set(row_features)
 
-    df["cluster_id"] = cluster_ids
+        # find intersection in top combos
+        if not row_features:
+            matched_cluster = "empty"          # no features at all
+        else:
+            matched_cluster = "noise"     # has features, but no matching combo yet
 
-    print(df["cluster_id"])
+            for combo in sorted(frequent_combination_features_set, key=len, reverse=True):
+                if not isinstance(combo, set) or not combo:
+                    continue
 
+                intersect_features = row_features & combo
+                if intersect_features:
+                    matched_cluster = "-".join(sorted(intersect_features))
+                    break
 
-    for k, v in sorted(filtered_genomic_feature_clusters.items(), key=lambda kv: kv[1], reverse=True):
-        print(k, v)
+        cluster_ids.append(matched_cluster)
 
-    print(df)
-
-
+    df["cluster"] = cluster_ids
+    return df
 
     # continuous variable encoding for feature clusters may not work, but for single categories (just m6A) could order by the midpoint/max of modification for position information along the transcript
 
@@ -323,34 +336,29 @@ def cluster_transcripts(args):
                 if CLUSTER_MODS is not None:
                     mod_col_names = ["{}_positions".format(m) for m in CLUSTER_MODS]
 
-                df_clustered, X_final, feat_names = run_clustering(
+                df_clustered = run_clustering(
                     df=df,
-                    min_cluster_size=min_cluster_size,
-                    use_mods=CLUSTER_MODS,
                     mod_cols=mod_col_names,  # pick any mod columns
-                    use_introns=CLUSTER_INTRONS,
-                    intron_col="introns",
-                    min_feature_reads=min_cluster_size,            # or int(numpy.ceil(0.01 * len(df)))
-                    mod_weight=1.0,
-                    intron_weight=1.0
                 )
         
                 # ---------- optional UMAP only for visualization ----------
                 if len(matches) == 1:
                     print("generating UMAP embedding (viz only)...")
-                    emb = umap.UMAP(
-                        n_neighbors=20,
-                        min_dist=0.3,
-                        metric="euclidean"
-                    ).fit_transform(X_final)
+
+                    # emb = umap.UMAP(
+                    #     n_neighbors=20,
+                    #     min_dist=0.3,
+                    #     metric="euclidean"
+                    # ).fit_transform(df_clustered)
             
-                    df_clustered["umap_x"] = emb[:, 0]
-                    df_clustered["umap_y"] = emb[:, 1]
-                    print("DONE")
+                    # df_clustered["umap_x"] = emb[:, 0]
+                    # df_clustered["umap_y"] = emb[:, 1]
+                    # print("DONE")
         
                     # ---------- write ----------
                     UMAP_OUTPUT_FILE = "{}.umap".format(OUTPUT_FILE)
                     df_clustered.to_csv(UMAP_OUTPUT_FILE, sep="\t", index=False)
+                    print("UMAP_OUTPUT_FILE")
                     print(f"Done. Wrote: {UMAP_OUTPUT_FILE}")
 
                 ct = (
