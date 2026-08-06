@@ -16,6 +16,11 @@ bam_files <- c(
   "/Users/jlevendis/01_m6A_3p_readthrough_analysis/01_BAM_filtering_output/28K1_to_pfal.50MAPQ.sorted.bam"
 )
 
+# TODO update this to replace bam_files
+labels <- c(
+  "28C1", "28K1"
+)
+
 igv_path   <- "/Applications/IGV_2.19.7.app/Contents/MacOS/IGV"
 genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
 annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
@@ -23,18 +28,27 @@ annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gf
 infile <- c("~/rqc/cluster_transcripts_results.tsv.umap")
 df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 
-# bam_files <- unique(df$bamfile_path)
-igv_port   <- 60151
-base_dir   <- path.expand("~/rqc")
 base_dir   <- path.expand("~/rqc/test")
 
-CLUSTERS_TO_PROCESS <- "all"  # or e.g. c("1","3","5")
-SKIP_BAM_REGENERATION <- TRUE
+# IGV screenshot settings
+igv_port   <- 60151
 MOD_PROB_THRESHOLD <- unique(df$mod_prob_threshold)
 stopifnot(length(MOD_PROB_THRESHOLD) == 1)
 MOD_PROB_THRESHOLD <- MOD_PROB_THRESHOLD[[1]]
 INDEL_THRESHOLD <- 10
+
+
+
+# OPTIONS
+SKIP_BAM_REGENERATION <- FALSE
 DEBUG <- TRUE
+CLUSTERS_TO_PROCESS <- "all"  # or e.g. c("1","3","5")
+
+# HACK
+# df["cluster"] <- df["combined_primary_itemset"]
+
+
+
 
 
 # --------------------- IGV socket helpers ---------------------
