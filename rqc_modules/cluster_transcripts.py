@@ -4,22 +4,19 @@ import numpy
 
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.cluster import HDBSCAN
+from sklearn.preprocessing import MultiLabelBinarizer
 
 from rqc_modules.constants import PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
 
-import umap
+# import umap
 import ast
 
 from mlxtend.frequent_patterns import fpgrowth
 from mlxtend.preprocessing import TransactionEncoder
 
-from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, to_tree
-from scipy.spatial.distance import pdist
-import matplotlib.pyplot as plt
-
-import time
-from functools import wraps
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist, squareform
 
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
@@ -475,170 +472,85 @@ def run_frequent_pattern_analysis_backup(df, mod_cols, min_support):
 
     return df_out, closed_itemsets_by_col
 
+from scipy.cluster.hierarchy import dendrogram
+from matplotlib import pyplot as plt
+from collections import Counter
 
 def run_frequent_pattern_analysis(df, mod_cols, min_support):
-    """
-    UPGMA-based clustering fallback: build binary presence vectors from
-    the combined mod_cols (column-prefixed tokens), compute pairwise
-    Jaccard distances between reads, perform average-linkage
-    hierarchical clustering (UPGMA), plot the dendrogram immediately,
-    and emit a flat clustering into `combined_primary_itemset`.
+    min_rows = int(numpy.ceil(min_support * len(df)))
+    print(min_rows)
+    rows = []
+    for _, row in df.iterrows():
+        tokens = []
+        for col in mod_cols:
+            for value in row.get(col, []) or []:
+                tokens.append(f"{col}_{value}")
+        rows.append(tokens)
 
-    Returns: (df_with_upgma_clusters, None)
-    """
-    # build transactions and binary matrix
-    transactions = _build_combined_transactions(df, mod_cols)
-    nreads = len(transactions)
-    if nreads == 0 or not any(transactions):
-        # nothing to cluster on
-        df_out = df.copy()
-        df_out["combined_primary_itemset"] = "__empty__"
-        return df_out, None
+    # count how many rows each token appears in
+    token_row_counts = Counter()
+    for tokens in rows:
+        for t in set(tokens):  # set() so a token counts once per row, even if repeated
+            token_row_counts[t] += 1
 
-    # Filter out tokens (genomic position tokens) that appear in fewer
-    # than `min_support` fraction of reads to avoid noisy rare sites.
-    min_count = int(numpy.ceil(min_support * nreads))
-    from collections import Counter
+    # keep only tokens meeting the row-count threshold
+    keep_tokens = {t for t, c in token_row_counts.items() if c >= min_rows}
+    rows = [[t for t in tokens if t in keep_tokens] for tokens in rows]
 
-    token_counts = Counter()
-    for t in transactions:
-        # count presence per read (set) to avoid double-counting duplicates
-        token_counts.update(set(t))
-
-    valid_tokens = {tok for tok, c in token_counts.items() if c >= min_count}
-
-    if not valid_tokens:
-        df_out = df.copy()
-        df_out["combined_primary_itemset"] = "__empty__"
-        return df_out, None
-
-    # filter each transaction to keep only valid tokens
-    filtered_transactions = [[tok for tok in t if tok in valid_tokens] for t in transactions]
-
-    # TransactionEncoder -> boolean matrix
-    te = TransactionEncoder()
-    one_hot = te.fit(filtered_transactions).transform(filtered_transactions)
-    # ensure numeric 0/1
-    X = numpy.asarray(one_hot, dtype=int)
-
-    if X.shape[1] == 0:
-        df_out = df.copy()
-        df_out["combined_primary_itemset"] = "__empty__"
-        return df_out, None
-
-    # pairwise Jaccard distances
-    try:
-        dists = pdist(X, metric="jaccard")
-    except Exception as e:
-        print("Failed to compute pairwise Jaccard distances:", e)
-        df_out = df.copy()
-        df_out["combined_primary_itemset"] = "__error__"
-        return df_out, None
-
-    # UPGMA / average linkage
+    mlb = MultiLabelBinarizer()
+    X = mlb.fit_transform(rows)
+    dists = pdist(X, metric="jaccard")
     Z = linkage(dists, method="average")
-    # produce a flat clustering (choose up to min(10, nreads) clusters)
-    nreads = len(df)
-    max_clusters = min(10, max(1, nreads))
-    flat_labels = fcluster(Z, t=max_clusters, criterion="maxclust")
+    labels = fcluster(Z, t=max(1, min(10, len(df))), criterion="maxclust")
 
-    # build descriptive labels for each flat cluster using top tokens
-    unique_labels = numpy.unique(flat_labels)
-    label_map = {}
-    cols = list(te.columns_)
-    for lbl in unique_labels:
-        member_idx = numpy.where(flat_labels == lbl)[0]
-        if member_idx.size == 0:
-            label_map[lbl] = f"upgma_{int(lbl)}:none"
-            continue
-        try:
-            submat = X[numpy.array(member_idx, dtype=int), :]
-            col_counts = numpy.asarray(submat.sum(axis=0)).ravel()
-        except Exception:
-            col_counts = numpy.asarray(X).sum(axis=0)
-
-        nonzero_idx = numpy.where(col_counts > 0)[0]
-        if nonzero_idx.size > 0:
-            sorted_idx = nonzero_idx[numpy.argsort(-col_counts[nonzero_idx])]
-            top_tokens = [cols[j] for j in sorted_idx[:3]]
-            tok_str = "_".join([t.replace(",", "_").replace(" ", "_") for t in top_tokens])
-            label_map[lbl] = f"upgma_{int(lbl)}:{tok_str}"
-        else:
-            label_map[lbl] = f"upgma_{int(lbl)}:none"
-
-    # plot dendrogram immediately, but avoid cluttering x-axis with all read names
-    try:
-        plt.figure(figsize=(12, 6))
-        ax = plt.gca()
-
-        # draw dendrogram without leaf labels (too many read names)
-        d = dendrogram(Z, no_labels=True, ax=ax)
-
-        plt.title("UPGMA dendrogram (average linkage, Jaccard)")
-
-        # annotate the most significant merges: distance, cluster size, majority flat label
-        n = len(df)
-        # build helper to get leaf ids under a node
-        root, nodes = to_tree(Z, rd=True)
-
-        def gather_leaf_ids(node):
-            if node.is_leaf():
-                return [node.id]
-            ids = []
-            if getattr(node, "left", None) is not None:
-                ids += gather_leaf_ids(node.left)
-            if getattr(node, "right", None) is not None:
-                ids += gather_leaf_ids(node.right)
-            return ids
-
-        # collect annotation candidates (avoid annotating tiny merges)
-        annots = []
-        for i in range(Z.shape[0]):
-            node_id = n + i
-            node = nodes[node_id]
-            leaf_ids = gather_leaf_ids(node)
-            cluster_size = len(leaf_ids)
-            # skip trivial small merges
-            if cluster_size < 2:
-                continue
-
-            # determine majority flat label within this node's leaves
-            try:
-                labels_in_node = flat_labels[numpy.array(leaf_ids, dtype=int)]
-                from collections import Counter as _Counter
-
-                most_common_label = _Counter(labels_in_node).most_common(1)[0][0]
-            except Exception:
-                most_common_label = None
-
-            annots.append((i, cluster_size, Z[i, 2], most_common_label))
-
-        # reduce annotations to the top K by cluster size to avoid clutter
-        annots = sorted(annots, key=lambda x: (-x[1], -x[2]))[:20]
-
-        # map dendrogram coordinates: d['icoord'] and d['dcoord'] correspond to merges
-        for (i, cluster_size, dist, majority_label) in annots:
-            try:
-                icoord = d["icoord"][i]
-                dcoord = d["dcoord"][i]
-                x = 0.5 * (icoord[1] + icoord[2])
-                y = dcoord[1]
-                desc = label_map.get(int(majority_label), "") if majority_label is not None else ""
-                label = f"n={cluster_size}\n{dist:.3f} {desc}"
-                ax.text(x, y, label, fontsize=6, ha="center", va="bottom", rotation=0, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
-            except Exception:
-                continue
-
-        # hide x-axis tick labels (they would be the read names)
-        ax.set_xticks([])
-        plt.tight_layout()
-        plt.show()
-    except Exception as e:
-        print("Failed to plot dendrogram:", e)
-
-    # assign descriptive flat-cluster labels (computed earlier)
     df_out = df.copy()
-    df_out["combined_primary_itemset"] = [label_map.get(int(x), f"upgma_{int(x)}:none") for x in flat_labels]
+    df_out["combined_primary_itemset"] = [f"cluster_{int(lbl)}" for lbl in labels]
+
+    # --- summarize which positions define each cluster ---
+    top_n = 3
+    cluster_summary = []
+    for cluster_id in sorted(set(labels)):
+        idx = [i for i, lbl in enumerate(labels) if lbl == cluster_id]
+        counts = Counter()
+        for i in idx:
+            counts.update(set(rows[i]))
+        top = counts.most_common(top_n)
+        top_str = ", ".join(f"{tok} ({c}/{len(idx)})" for tok, c in top)
+        cluster_summary.append({
+            "cluster": f"cluster_{cluster_id}",
+            "n_samples": len(idx),
+            "top_positions": top_str,
+        })
+
+    print(pandas.DataFrame(cluster_summary).to_string(index=False))
+
+    # --- plot dendrogram ---
+    # ddata = dendrogram(Z, no_labels=True)
+    # plt.ylabel("Jaccard distance")
+
+    # # scipy's dendrogram places leaves at x = 5, 15, 25, ... in the ORIGINAL
+    # # left-to-right order given by ddata["leaves"] (a list of original indices)
+    # leaf_order = ddata["leaves"]
+    # leaf_x = {orig_idx: 5 + 10 * pos for pos, orig_idx in enumerate(leaf_order)}
+
+    # # find the x-range (min/max) spanned by each cluster's leaves
+    # cluster_span = {}
+    # for orig_idx, x in leaf_x.items():
+    #     cid = labels[orig_idx]
+    #     cluster_span.setdefault(cid, []).append(x)
+
+    # ax = plt.gca()
+    # for cid, xs in cluster_span.items():
+    #     mid_x = (min(xs) + max(xs)) / 2
+    #     ax.text(mid_x, -0.02 * max(Z[:, 2]), f"cluster_{cid}",
+    #              ha="center", va="top", fontsize=9, rotation=90)
+
+    # plt.xlabel("")
+    # plt.tight_layout()
+    # plt.show()
+
+    
+
     return df_out, None
 
 def gather_read_entries_for_region(
