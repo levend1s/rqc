@@ -14,6 +14,10 @@ import ast
 from mlxtend.frequent_patterns import fpgrowth
 from mlxtend.preprocessing import TransactionEncoder
 
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, to_tree
+from scipy.spatial.distance import pdist
+import matplotlib.pyplot as plt
+
 import time
 from functools import wraps
 
@@ -336,7 +340,7 @@ def build_itemset_membership_combined(df, mod_cols, closed_df):
     return df
 
 # @timeit
-def run_frequent_pattern_analysis(df, mod_cols, min_support):
+def run_frequent_pattern_analysis_backup(df, mod_cols, min_support):
     """
     Full pipeline:
       1. Mine closed frequent itemsets independently per category.
@@ -470,6 +474,172 @@ def run_frequent_pattern_analysis(df, mod_cols, min_support):
     df_out["combined_primary_itemset"] = df_out["combined_primary_itemset"].apply(_merge_map)
 
     return df_out, closed_itemsets_by_col
+
+
+def run_frequent_pattern_analysis(df, mod_cols, min_support):
+    """
+    UPGMA-based clustering fallback: build binary presence vectors from
+    the combined mod_cols (column-prefixed tokens), compute pairwise
+    Jaccard distances between reads, perform average-linkage
+    hierarchical clustering (UPGMA), plot the dendrogram immediately,
+    and emit a flat clustering into `combined_primary_itemset`.
+
+    Returns: (df_with_upgma_clusters, None)
+    """
+    # build transactions and binary matrix
+    transactions = _build_combined_transactions(df, mod_cols)
+    nreads = len(transactions)
+    if nreads == 0 or not any(transactions):
+        # nothing to cluster on
+        df_out = df.copy()
+        df_out["combined_primary_itemset"] = "__empty__"
+        return df_out, None
+
+    # Filter out tokens (genomic position tokens) that appear in fewer
+    # than `min_support` fraction of reads to avoid noisy rare sites.
+    min_count = int(numpy.ceil(min_support * nreads))
+    from collections import Counter
+
+    token_counts = Counter()
+    for t in transactions:
+        # count presence per read (set) to avoid double-counting duplicates
+        token_counts.update(set(t))
+
+    valid_tokens = {tok for tok, c in token_counts.items() if c >= min_count}
+
+    if not valid_tokens:
+        df_out = df.copy()
+        df_out["combined_primary_itemset"] = "__empty__"
+        return df_out, None
+
+    # filter each transaction to keep only valid tokens
+    filtered_transactions = [[tok for tok in t if tok in valid_tokens] for t in transactions]
+
+    # TransactionEncoder -> boolean matrix
+    te = TransactionEncoder()
+    one_hot = te.fit(filtered_transactions).transform(filtered_transactions)
+    # ensure numeric 0/1
+    X = numpy.asarray(one_hot, dtype=int)
+
+    if X.shape[1] == 0:
+        df_out = df.copy()
+        df_out["combined_primary_itemset"] = "__empty__"
+        return df_out, None
+
+    # pairwise Jaccard distances
+    try:
+        dists = pdist(X, metric="jaccard")
+    except Exception as e:
+        print("Failed to compute pairwise Jaccard distances:", e)
+        df_out = df.copy()
+        df_out["combined_primary_itemset"] = "__error__"
+        return df_out, None
+
+    # UPGMA / average linkage
+    Z = linkage(dists, method="average")
+    # produce a flat clustering (choose up to min(10, nreads) clusters)
+    nreads = len(df)
+    max_clusters = min(10, max(1, nreads))
+    flat_labels = fcluster(Z, t=max_clusters, criterion="maxclust")
+
+    # build descriptive labels for each flat cluster using top tokens
+    unique_labels = numpy.unique(flat_labels)
+    label_map = {}
+    cols = list(te.columns_)
+    for lbl in unique_labels:
+        member_idx = numpy.where(flat_labels == lbl)[0]
+        if member_idx.size == 0:
+            label_map[lbl] = f"upgma_{int(lbl)}:none"
+            continue
+        try:
+            submat = X[numpy.array(member_idx, dtype=int), :]
+            col_counts = numpy.asarray(submat.sum(axis=0)).ravel()
+        except Exception:
+            col_counts = numpy.asarray(X).sum(axis=0)
+
+        nonzero_idx = numpy.where(col_counts > 0)[0]
+        if nonzero_idx.size > 0:
+            sorted_idx = nonzero_idx[numpy.argsort(-col_counts[nonzero_idx])]
+            top_tokens = [cols[j] for j in sorted_idx[:3]]
+            tok_str = "_".join([t.replace(",", "_").replace(" ", "_") for t in top_tokens])
+            label_map[lbl] = f"upgma_{int(lbl)}:{tok_str}"
+        else:
+            label_map[lbl] = f"upgma_{int(lbl)}:none"
+
+    # plot dendrogram immediately, but avoid cluttering x-axis with all read names
+    try:
+        plt.figure(figsize=(12, 6))
+        ax = plt.gca()
+
+        # draw dendrogram without leaf labels (too many read names)
+        d = dendrogram(Z, no_labels=True, ax=ax)
+
+        plt.title("UPGMA dendrogram (average linkage, Jaccard)")
+
+        # annotate the most significant merges: distance, cluster size, majority flat label
+        n = len(df)
+        # build helper to get leaf ids under a node
+        root, nodes = to_tree(Z, rd=True)
+
+        def gather_leaf_ids(node):
+            if node.is_leaf():
+                return [node.id]
+            ids = []
+            if getattr(node, "left", None) is not None:
+                ids += gather_leaf_ids(node.left)
+            if getattr(node, "right", None) is not None:
+                ids += gather_leaf_ids(node.right)
+            return ids
+
+        # collect annotation candidates (avoid annotating tiny merges)
+        annots = []
+        for i in range(Z.shape[0]):
+            node_id = n + i
+            node = nodes[node_id]
+            leaf_ids = gather_leaf_ids(node)
+            cluster_size = len(leaf_ids)
+            # skip trivial small merges
+            if cluster_size < 2:
+                continue
+
+            # determine majority flat label within this node's leaves
+            try:
+                labels_in_node = flat_labels[numpy.array(leaf_ids, dtype=int)]
+                from collections import Counter as _Counter
+
+                most_common_label = _Counter(labels_in_node).most_common(1)[0][0]
+            except Exception:
+                most_common_label = None
+
+            annots.append((i, cluster_size, Z[i, 2], most_common_label))
+
+        # reduce annotations to the top K by cluster size to avoid clutter
+        annots = sorted(annots, key=lambda x: (-x[1], -x[2]))[:20]
+
+        # map dendrogram coordinates: d['icoord'] and d['dcoord'] correspond to merges
+        for (i, cluster_size, dist, majority_label) in annots:
+            try:
+                icoord = d["icoord"][i]
+                dcoord = d["dcoord"][i]
+                x = 0.5 * (icoord[1] + icoord[2])
+                y = dcoord[1]
+                desc = label_map.get(int(majority_label), "") if majority_label is not None else ""
+                label = f"n={cluster_size}\n{dist:.3f} {desc}"
+                ax.text(x, y, label, fontsize=6, ha="center", va="bottom", rotation=0, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+            except Exception:
+                continue
+
+        # hide x-axis tick labels (they would be the read names)
+        ax.set_xticks([])
+        plt.tight_layout()
+        plt.show()
+    except Exception as e:
+        print("Failed to plot dendrogram:", e)
+
+    # assign descriptive flat-cluster labels (computed earlier)
+    df_out = df.copy()
+    df_out["combined_primary_itemset"] = [label_map.get(int(x), f"upgma_{int(x)}:none") for x in flat_labels]
+    return df_out, None
 
 def gather_read_entries_for_region(
     row,

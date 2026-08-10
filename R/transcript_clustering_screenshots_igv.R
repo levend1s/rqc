@@ -37,10 +37,10 @@ df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
   )
 
   mod_igv_names <- list(
-    m6A = "BASEMOD.A_COLOR 6mA",
-    pseU = "BASEMOD.17802_COLOR pseU",
-    m6A_inosine = "BASEMOD.17596_COLOR inosine",
-    m5C = "BASEMOD.M_COLOR 5mC"
+    m6A = "BASEMOD.A_COLOR",
+    pseU = "BASEMOD.OTHER_COLOR",
+    m6A_inosine = "BASEMOD.17596_COLOR",
+    m5C = "BASEMOD.M_COLOR"
   )
   default_mod_rgb <- "203,203,203"
 }
@@ -82,7 +82,7 @@ INDEL_THRESHOLD <- 10
 
 
 # OPTIONS
-SKIP_BAM_REGENERATION <- TRUE
+SKIP_BAM_REGENERATION <- FALSE
 DEBUG <- FALSE
 # Select the first 17 unique cluster ids from the data frame. If fewer than
 # 17 clusters exist, select them all. This replaces the previous "all"
@@ -91,10 +91,6 @@ all_clusters <- df %>% pull(cluster) %>% as.character() %>% unique()
 
 # CLUSTERS_TO_PROCESS <- as.character(head(all_clusters, 16))
 CLUSTERS_TO_PROCESS <- "all"
-
-# HACK
-# df["cluster"] <- df["combined_primary_itemset"]
-
 
 # TODO: if many clusters, just process the biggest clusters and print a message
 
@@ -123,15 +119,6 @@ igv_send <- function(con, cmd, timeout_s = 60) {
     resp <- readLines(con, n = 1)
     if (length(resp) > 0) break
     Sys.sleep(0.1)
-  }
-  if (length(resp) == 0) stop("IGV did not respond to: ", cmd)
-  # Print IGV response for debugging and visibility
-  # If DEBUG is set in the environment, print a more detailed message
-  if (exists("DEBUG") && isTRUE(DEBUG)) {
-    message("[IGV CMD] ", cmd)
-    message("[IGV RESP] ", paste(resp, collapse = " "))
-  } else {
-    message(paste(resp, collapse = " "))
   }
 
   if (grepl("^error", resp, ignore.case = TRUE)) {
@@ -278,9 +265,6 @@ for (bam_file in bam_files) {
       message("making pretty...")
       igv_send(con, "squish")
       igv_send(con, paste("preference BASEMOD.THRESHOLD", MOD_PROB_THRESHOLD))
-      
-      # igv_send(con, "preference BASEMOD.17802_COLOR	pseU color	253,210,50")
-      # igv_send(con, "preference BASEMOD.17596_COLOR	inosine	color	21,115,17")
 
       for (mod in mod_candidates) {
         if (!mod %in% colnames(df)) {
@@ -291,14 +275,13 @@ for (bam_file in bam_files) {
           attr <- paste("preference", mod_igv_names[[mod]], mod_colors[[mod]])
           igv_send(con, attr)
         }
-        message(attr)
       }
       
       igv_send(con, "preference SAM.COLOR_BY BASE_MODIFICATION")
       igv_send(con, paste("preference SAM.HIDE_SMALL_INDEL_BP_THRESHOLD", INDEL_THRESHOLD))
       igv_send(con, "preference SAM.HIDE_SMALL_INDEL TRUE")
 
-      if (TRUE) {
+      if (DEBUG) {
         readline(sprintf("Batch %d/%d ready. Press [Enter] to continue (Ctrl+C to interrupt): ", bi, length(batches)))
       }
 
