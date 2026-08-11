@@ -1,3 +1,5 @@
+import re
+
 import pandas
 import pysam
 import numpy
@@ -18,6 +20,10 @@ from mlxtend.preprocessing import TransactionEncoder
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist, squareform
 
+from scipy.cluster.hierarchy import dendrogram
+from matplotlib import pyplot as plt
+from collections import Counter
+
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
 
@@ -31,460 +37,49 @@ def timeit(func):
         return res
     return _wrapped
 
-def _parse_positions(value):
-    """
-    Row entries arrive as either an actual list/set, or a string
-    representation like "[1000, 1010, 1020]" (e.g. read from a CSV).
-    Normalize everything to a python set of ints so downstream set
-    operations (intersection, subset checks) are cheap and consistent.
-    """
-    if isinstance(value, (list, set, tuple)):
-        return set(value)
-    if isinstance(value, str):
-        if not value.strip():
-            return set()
-        return set(ast.literal_eval(value))
-    if value is None or (isinstance(value, float) and pandas.isna(value)):
-        return set()
-    raise TypeError(f"Unrecognized position value type: {type(value)}")
 
-def _intron_to_tokens(value):
-    """Convert an introns value (list/tuple of (start,end) pairs or string) into
-    a list of unique string tokens "start-end" suitable for mining/matching.
-    """
-    if isinstance(value, str):
-        if not value.strip():
-            return []
-        parsed = ast.literal_eval(value)
-    elif value is None or (isinstance(value, float) and pandas.isna(value)):
-        return []
-    else:
-        parsed = value
+def merge_small_clusters(labels, dist_matrix, min_size):
+    labels = labels.copy()
+    counts = pandas.Series(labels).value_counts()
+    small_clusters = counts[counts < min_size].index.tolist()
 
-    tokens = []
-    for t in parsed:
-        if isinstance(t, (list, tuple)) and len(t) >= 2:
-            try:
-                s = int(t[0])
-                e = int(t[1])
-                tokens.append(f"{s}-{e}")
-            except Exception:
-                tokens.append(str(t))
-        else:
-            tokens.append(str(t))
-    # deduplicate while preserving order
-    return list(dict.fromkeys(tokens))
+    for small_cl in small_clusters:
+        idx_small = numpy.where(labels == small_cl)[0]
+        if len(idx_small) == 0:
+            continue  # already absorbed by a previous merge
 
-def _mine_closed_itemsets(transactions, min_support):
-    """
-    Given a list of sets (one set of positions per row, for a single
-    category), mine frequent itemsets with FP-Growth and reduce them to
-    *closed* itemsets.
+        # Find the nearest *other* cluster (avg distance to each other cluster's points)
+        other_labels = numpy.unique(labels[labels != small_cl])
+        if len(other_labels) == 0:
+            break  # only one cluster left, nothing to merge into
 
-    An itemset X is closed if no proper superset of X has the same
-    support. This is a middle ground between "all frequent itemsets"
-    (redundant - lots of subsets carry identical information) and
-    "maximal itemsets" (lossy - can discard a dominant, more general
-    pattern just because a rarer superset happened to still clear the
-    support threshold). Closed itemsets preserve every distinct support
-    "step" in the lattice, so no genuinely different pattern gets
-    silently merged away.
+        best_cl, best_dist = None, numpy.inf
+        for cl in other_labels:
+            idx_other = numpy.where(labels == cl)[0]
+            avg_dist = dist_matrix[numpy.ix_(idx_small, idx_other)].mean()
+            if avg_dist < best_dist:
+                best_dist, best_cl = avg_dist, cl
 
-    Returns a DataFrame with columns: itemset (frozenset of positions),
-    support (float fraction of rows), count (absolute row count).
-    """
-    if not any(transactions):
-        return pandas.DataFrame(columns=["itemset", "support", "count"])
+        labels[idx_small] = best_cl
 
-    encoder = TransactionEncoder()
-    one_hot = encoder.fit(transactions).transform(transactions)
-    one_hot_df = pandas.DataFrame(one_hot, columns=encoder.columns_)
+    return labels
 
-    frequent = fpgrowth(one_hot_df, min_support=min_support, use_colnames=True)
-    if frequent.empty:
-        return pandas.DataFrame(columns=["itemset", "support", "count"])
-
-    # Sort by itemset size descending so we can check "does any larger,
-    # already-confirmed itemset contain this one with equal support"
-    # without recomputing supersets from scratch each time.
-    frequent = frequent.sort_values(
-        by="itemsets", key=lambda s: s.map(len), ascending=False
-    ).reset_index(drop=True)
-
-    itemsets = frequent["itemsets"].tolist()
-    supports = frequent["support"].tolist()
-
-    is_closed = [True] * len(itemsets)
-    for i, (small_set, small_support) in enumerate(zip(itemsets, supports)):
-        for j, (big_set, big_support) in enumerate(zip(itemsets, supports)):
-            if i == j:
-                continue
-            if len(big_set) > len(small_set) and small_set < big_set:
-                if big_support == small_support:
-                    is_closed[i] = False
-                    break
-
-    closed = frequent[is_closed].copy()
-    closed["itemset"] = closed["itemsets"].apply(frozenset)
-    closed["count"] = (closed["support"] * len(transactions)).round().astype(int)
-    return closed[["itemset", "support", "count"]].sort_values(
-        "support", ascending=False
-    ).reset_index(drop=True)
-
-
-    """
-    Run closed-itemset mining independently for each category in
-    mod_cols (kept separate on purpose - see prior discussion: combining
-    categories into one item universe blows up the search space and
-    drowns cross-category patterns in intra-category noise).
-
-    Returns: dict {col_name: closed_itemsets_df}
-    """
-    results = {}
-    for col in mod_cols:
-        if col == "introns":
-            transactions = df[col].apply(_intron_to_tokens).tolist()
-        else:
-            transactions = df[col].apply(_parse_positions).tolist()
-
-        results[col] = _mine_closed_itemsets(transactions, min_support)
-    return results
-
-def _build_combined_transactions(df, mod_cols):
-    """Build combined transactions across multiple columns.
-
-    Each item is prefixed with the column name to keep identifiers
-    unique (e.g. 'm6A_1000', 'introns_725853-726035'). Returns a list
-    of lists (one list of tokens per row) suitable for the
-    TransactionEncoder / _mine_closed_itemsets input.
-    """
-    transactions = []
-    for _, row in df.iterrows():
-        tokens = []
-        for col in mod_cols:
-            if col == "introns":
-                items = _intron_to_tokens(row.get(col, []))
-            else:
-                # _parse_positions returns a set of ints/positions
-                items = _parse_positions(row.get(col, []))
-
-            for it in items:
-                tokens.append(f"{col}_{it}")
-
-        # deduplicate while preserving order
-        transactions.append(list(dict.fromkeys(tokens)))
-    return transactions
-
-def mine_closed_itemsets_combined(df, mod_cols, min_support):
-    """Mine closed itemsets on the combined token universe from all
-    `mod_cols` together (not per-category). Items are column-prefixed so
-    cross-category itemsets are possible.
-
-    Returns a DataFrame with columns: itemset (frozenset of tokens),
-    support (fraction), count (absolute rows).
-    """
-    transactions = _build_combined_transactions(df, mod_cols)
-    # print("Mining combined closed itemsets over cols {} (rows={}, min_support={})".format(
-    #     mod_cols, len(transactions), min_support
-    # ))
-    return _mine_closed_itemsets(transactions, min_support)
-
-def compute_itemset_rows(df, mod_cols, closed, combined=True):
-    """Compute mapping label -> set(row_indices) for itemsets.
-
-    - If `combined` is True, `closed` is expected to be a single
-      DataFrame (as returned by `mine_closed_itemsets_combined`) where
-      each `itemset` is a frozenset of column-prefixed tokens.
-    - If `combined` is False, `closed` is expected to be a dict
-      {col: closed_df} as returned by `mine_closed_itemsets_per_category`.
-
-    Returns a dict mapping textual label -> set(row_indices).
-    """
-    itemset_rows = {}
-    if closed is None:
-        return itemset_rows
-
-    if combined:
-        if closed.empty:
-            return itemset_rows
-
-        labels = ["-".join(sorted(x)) for x in closed["itemset"].tolist()]
-        sets = [set(x) for x in closed["itemset"].tolist()]
-
-        # initialize
-        for lbl in labels:
-            itemset_rows[lbl] = set()
-
-        for idx, row in df.iterrows():
-            tokens = []
-            for col in mod_cols:
-                if col == "introns":
-                    items = _intron_to_tokens(row.get(col, []))
-                else:
-                    items = _parse_positions(row.get(col, []))
-
-                for it in items:
-                    tokens.append(f"{col}_{it}")
-
-            pos_set = set(tokens)
-            for lbl, s in zip(labels, sets):
-                if s <= pos_set:
-                    itemset_rows[lbl].add(idx)
-
-        return itemset_rows
-
-    # per-category dict input
-    if isinstance(closed, dict):
-        for col, closed_df in closed.items():
-            if closed_df is None or closed_df.empty:
-                continue
-            for _, r in closed_df.iterrows():
-                label = "-".join(f"{col}_{p}" for p in sorted(r["itemset"]))
-                itemset_rows[label] = set()
-
-        for idx, row in df.iterrows():
-            for col in mod_cols:
-                if col == "introns":
-                    items = _intron_to_tokens(row.get(col, []))
-                else:
-                    items = _parse_positions(row.get(col, []))
-
-                pos_set = set(items)
-                closed_df = closed.get(col, pandas.DataFrame())
-                if closed_df is None or closed_df.empty:
-                    continue
-                for _, r in closed_df.iterrows():
-                    itemset = set(r["itemset"])
-                    if itemset and itemset <= pos_set:
-                        label = "-".join(f"{col}_{p}" for p in sorted(r["itemset"]))
-                        itemset_rows[label].add(idx)
-
-        return itemset_rows
-
-    return itemset_rows
-
-def build_itemset_membership_combined(df, mod_cols, closed_df):
-    """Build combined-itemset membership for every row using a single
-    closed-itemset dataframe mined over the column-prefixed token
-    universe (see `mine_closed_itemsets_combined`). Adds two columns
-    to the returned DataFrame:
-
-      - `combined_itemsets`: list of matched itemset labels (joined tokens)
-      - `combined_primary_itemset`: the single chosen primary label
-
-    The primary selection prefers larger itemsets and breaks ties by
-    higher support (same rule as the per-category version).
-    """
-    df = df.copy()
-
-    closed = closed_df if closed_df is not None else pandas.DataFrame()
-    itemsets = (
-        sorted(closed["itemset"].tolist(), key=len, reverse=True)
-        if not closed.empty
-        else []
-    )
-
-    support_map = {}
-    size_map = {}
-    if not closed.empty:
-        for _, r in closed.iterrows():
-            # label is the dash-joined sorted tokens (tokens already include col_ prefix)
-            label = "-".join(sorted(r["itemset"]))
-            support_map[label] = float(r.get("support", 0.0))
-            size_map[label] = len(r["itemset"]) if "itemset" in r else 0
-
-    row_labels = []
-    row_primary = []
-
-    for _, row in df.iterrows():
-        tokens = []
-        for col in mod_cols:
-            if col == "introns":
-                items = _intron_to_tokens(row.get(col, []))
-            else:
-                items = _parse_positions(row.get(col, []))
-
-            for it in items:
-                tokens.append(f"{col}_{it}")
-
-        # preserve order, deduplicate
-        tokens = list(dict.fromkeys(tokens))
-
-        if not tokens:
-            row_labels.append(["__empty__"])
-            row_primary.append("__empty__")
-            continue
-
-        pos_set = set(tokens)
-        matches = [
-            "-".join(sorted(itemset))
-            for itemset in itemsets
-            if itemset <= pos_set
-        ]
-
-        if matches:
-            primary = max(
-                matches, key=lambda lbl: (size_map.get(lbl, 0), support_map.get(lbl, 0.0))
-            )
-            row_labels.append(matches)
-            row_primary.append(primary)
-        else:
-            row_labels.append(["__noise__"])
-            row_primary.append("__noise__")
-
-    df["combined_itemsets"] = row_labels
-    df["combined_primary_itemset"] = row_primary
-    return df
-
-# @timeit
-def run_frequent_pattern_analysis_backup(df, mod_cols, min_support):
-    """
-    Full pipeline:
-      1. Mine closed frequent itemsets independently per category.
-      2. Tag each row with every closed itemset it satisfies, per category
-         (multi-hot, since a row can match more than one incomparable
-         itemset).
-      3. Compute cross-category lift between itemsets from different
-         categories, so "does mod1 pattern A relate to mod2 pattern B"
-         is answered with a proper independence-adjusted measure instead
-         of a raw joint count.
-
-    min_percent: minimum % of rows an itemset must appear in to be
-    considered frequent (same semantics as the original min_reads_cluster
-    threshold).
-
-    Returns: (df_with_itemset_columns, closed_itemsets_by_col, lift_df)
-    """
-    closed_itemsets_by_col = mine_closed_itemsets_combined(df, mod_cols, min_support)  # for debugging / inspection only
-    print(closed_itemsets_by_col)
-
-    df_out = build_itemset_membership_combined(df, mod_cols, closed_itemsets_by_col)
-    # an issue with rRNA 18S is that there would be many itemsets, but after finding membership many of those get depleted in
-
-    # TODO: we need to figure out how to merge very low count itemsets into the most similar higher count itemset (e.g., by Jaccard overlap) so that we don't have a combinatorial explosion of itemsets with very low counts. This is a known issue with frequent pattern mining, and we need to implement a merging strategy to handle this.
-
-    cluster_counts = df_out["combined_primary_itemset"].value_counts()
-    print(cluster_counts)
-
-    # For large datasets, run UMAP (jaccard) -> HDBSCAN to discover clusters
-    try:
-        nreads = len(df)
-    except Exception:
-        nreads = df.shape[0] if hasattr(df, "shape") else 0
-
-    # TODO: this logic should be based on length of closed_itemsets
-    if nreads > 5000:
-        try:
-            print(f"Running UMAP+HDBSCAN on {nreads} reads (min_support={min_support})")
-
-            # build binary vectors from combined_itemsets
-            vec = DictVectorizer(sparse=True)
-            rows = []
-            for lst in df_out.get("combined_itemsets", []):
-                if not lst or (len(lst) == 1 and lst[0] in ("__empty__", "__noise__")):
-                    rows.append({})
-                else:
-                    rows.append({lbl: 1 for lbl in lst})
-
-            X = vec.fit_transform(rows)
-
-            if X.shape[1] == 0:
-                print("No itemset features found; skipping UMAP+HDBSCAN")
-            else:
-                min_cluster_size = int(numpy.ceil(min_support * nreads))
-                min_samples = min(10, max(1, int(numpy.ceil(min_cluster_size / 10.0))))
-
-                # UMAP embedding with Jaccard for binary set similarity
-                reducer = umap.UMAP(n_components=10, metric="jaccard", random_state=42)
-                emb = reducer.fit_transform(X)
-
-                # HDBSCAN on embedding (euclidean)
-                clusterer = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples, metric="euclidean")
-                labels = clusterer.fit_predict(emb)
-
-                df_out["hdbscan_cluster"] = labels.astype(str)
-                print("HDBSCAN clusters:", numpy.unique(labels, return_counts=True))
-
-        except Exception as e:
-            print("UMAP+HDBSCAN unavailable or failed:", str(e))
-            print("Skipping HDBSCAN clustering. Install umap-learn and hdbscan to enable this.")
-
-    # Merge small primary itemsets into larger popular itemsets.
-    # Small = count < min_count (min_support * nrows).
-    nrows = len(df)
-    min_count = int(numpy.ceil(min_support * nrows))
-    small_labels = [lab for lab, c in cluster_counts.items() if c < min_count]
-    big_labels = [lab for lab, c in cluster_counts.items() if c >= min_count]
-    print(f"Small labels (count < {min_count}): {small_labels}")
-    print(f"Big labels (count >= {min_count}): {big_labels}")
-
-    merged_mapping = {}
-    removed_labels = []
-    if small_labels:
-        # prepare closed DF with textual labels
-        if closed_itemsets_by_col is None or closed_itemsets_by_col.empty:
-            print("No closed itemsets available to merge into; skipping merge for small labels.")
-        else:
-            closed_tmp = closed_itemsets_by_col.copy()
-            closed_tmp["label"] = closed_tmp["itemset"].apply(lambda s: "-".join(sorted(s)))
-
-            # popular candidates are those already above threshold
-            popular = closed_tmp[closed_tmp["count"] >= min_count].copy()
-            if popular.empty:
-                print("No popular itemsets (count >= min_count); mapping small labels to __noise__")
-                for lab in small_labels:
-                    merged_mapping[lab] = "__noise__"
-                    removed_labels.append(lab)
-            else:
-                # choose the global target as the largest itemset (tie-break by support)
-                popular["size"] = popular["itemset"].apply(len)
-                popular = popular.sort_values(["size", "support"], ascending=[False, False]).reset_index(drop=True)
-                target_label = "-".join(sorted(popular.loc[0, "itemset"]))
-
-                # accumulate increments: move counts of each small label into target
-                total_inc = 0
-                for lab in small_labels:
-                    c = int(cluster_counts.get(lab, 0))
-                    if c <= 0:
-                        # still record removal but no increment
-                        merged_mapping[lab] = target_label
-                        removed_labels.append(lab)
-                        continue
-                    merged_mapping[lab] = target_label
-                    total_inc += c
-                    removed_labels.append(lab)
-
-                # apply increment to target count and recompute support
-                if total_inc > 0:
-                    closed_tmp.loc[closed_tmp["label"] == target_label, "count"] += int(total_inc)
-                    closed_tmp["support"] = closed_tmp["count"] / float(nrows)
-
-                # drop removed small itemsets from closed_tmp
-                closed_tmp = closed_tmp[~closed_tmp["label"].isin(removed_labels)].reset_index(drop=True)
-                # keep only the canonical columns
-                closed_itemsets_by_col = closed_tmp[["itemset", "support", "count"]].copy()
-
-    # Add merged primary column to output (maps small labels -> chosen popular label)
-    def _merge_map(lbl):
-        return merged_mapping.get(lbl, lbl)
-
-    df_out["combined_primary_itemset"] = df_out["combined_primary_itemset"].apply(_merge_map)
-
-    return df_out, closed_itemsets_by_col
-
-from scipy.cluster.hierarchy import dendrogram
-from matplotlib import pyplot as plt
-from collections import Counter
-
-def run_frequent_pattern_analysis(df, mod_cols, min_support):
+def run_pairwise_clustering(df, feature_cols, min_support):
     min_rows = int(numpy.ceil(min_support * len(df)))
-    print(min_rows)
     rows = []
     for _, row in df.iterrows():
         tokens = []
-        for col in mod_cols:
-            for value in row.get(col, []) or []:
-                tokens.append(f"{col}_{value}")
+
+        for col in feature_cols:
+            # handle introns column: list of (start, end) tuples
+            if col == "introns":
+                for value in row.get(col, []) or []:
+                    start, end = value
+                    tokens.append(f"{col}_{start}-{end}")
+            else:
+                for value in row.get(col, []) or []:
+                    tokens.append(f"{col}_{value}")
+
         rows.append(tokens)
 
     # count how many rows each token appears in
@@ -501,13 +96,35 @@ def run_frequent_pattern_analysis(df, mod_cols, min_support):
     X = mlb.fit_transform(rows)
     dists = pdist(X, metric="jaccard")
     Z = linkage(dists, method="average")
-    labels = fcluster(Z, t=max(1, min(10, len(df))), criterion="maxclust")
 
-    df_out = df.copy()
-    df_out["combined_primary_itemset"] = [f"cluster_{int(lbl)}" for lbl in labels]
+    # or look at the biggest jumps directly
+    merge_dists = Z[:, 2]
+    diffs = numpy.diff(merge_dists)
+    knee_idx = numpy.argmax(diffs)  # index of biggest jump
+    suggested_threshold = merge_dists[knee_idx]
+    print(f"Suggested threshold from knee method: {suggested_threshold:.3f}")
+    # suggested_threshold = 0.5  # HACK override for now, since the knee method is not working well
 
-    # --- summarize which positions define each cluster ---
-    top_n = 3
+    labels = fcluster(Z, t=suggested_threshold, criterion="distance")
+
+    # --- Enforce minimum cluster size by merging small clusters into nearest cluster ---
+    dist_matrix = squareform(dists)  # full pairwise distance matrix
+    labels = labels.copy()
+
+    # labels = merge_small_clusters(labels, dist_matrix, min_rows)
+
+    unique_labels = sorted(set(labels))
+    relabel_map = {old: new for new, old in enumerate(unique_labels)}
+    labels = numpy.array([relabel_map[lbl] for lbl in labels])
+
+    # --- build descriptive cluster names from top features ---
+    top_n = 10
+
+    def sanitize(tok):
+        # keep names filesystem/column-friendly: no spaces, slashes, etc.
+        return re.sub(r"[^0-9a-zA-Z_]+", "-", tok)
+
+    cluster_names = {}
     cluster_summary = []
     for cluster_id in sorted(set(labels)):
         idx = [i for i, lbl in enumerate(labels) if lbl == cluster_id]
@@ -516,40 +133,54 @@ def run_frequent_pattern_analysis(df, mod_cols, min_support):
             counts.update(set(rows[i]))
         top = counts.most_common(top_n)
         top_str = ", ".join(f"{tok} ({c}/{len(idx)})" for tok, c in top)
+
+        top_tokens_clean = [sanitize(tok) for tok, _ in top]
+        cluster_name = "_".join([f"cluster{cluster_id}"] + top_tokens_clean)
+        cluster_names[cluster_id] = cluster_name
+
         cluster_summary.append({
-            "cluster": f"cluster_{cluster_id}",
+            "cluster": cluster_name,
             "n_samples": len(idx),
             "top_positions": top_str,
         })
 
+    df_out = df.copy()
+    df_out["combined_primary_itemset"] = [cluster_names[int(lbl)] for lbl in labels]
+
+    # ------------------ plot dendrogram ---------------------
     print(pandas.DataFrame(cluster_summary).to_string(index=False))
+    n_samples = X.shape[0]
+    n_unique = len(numpy.unique(X, axis=0))
+    import sys
+    if n_samples < 2 or n_unique < 2:
+        print(f"Skipping dendrogram: only {n_unique} unique pattern(s) across {n_samples} samples")
+        ddata = None
+    else:
+        sys.setrecursionlimit(max(1000, n_samples + 10))  # avoid recursion limit error for large dendrograms
+        ddata = dendrogram(Z, no_labels=True)
+        plt.ylabel("Jaccard distance")
+        plt.axhline(y=suggested_threshold, color="red", linestyle="--", label="suggested threshold")
 
-    # --- plot dendrogram ---
-    # ddata = dendrogram(Z, no_labels=True)
-    # plt.ylabel("Jaccard distance")
+        # scipy's dendrogram places leaves at x = 5, 15, 25, ... in the ORIGINAL
+        # left-to-right order given by ddata["leaves"] (a list of original indices)
+        leaf_order = ddata["leaves"]
+        leaf_x = {orig_idx: 5 + 10 * pos for pos, orig_idx in enumerate(leaf_order)}
 
-    # # scipy's dendrogram places leaves at x = 5, 15, 25, ... in the ORIGINAL
-    # # left-to-right order given by ddata["leaves"] (a list of original indices)
-    # leaf_order = ddata["leaves"]
-    # leaf_x = {orig_idx: 5 + 10 * pos for pos, orig_idx in enumerate(leaf_order)}
+        # find the x-range (min/max) spanned by each cluster's leaves
+        cluster_span = {}
+        for orig_idx, x in leaf_x.items():
+            cid = labels[orig_idx]
+            cluster_span.setdefault(cid, []).append(x)
 
-    # # find the x-range (min/max) spanned by each cluster's leaves
-    # cluster_span = {}
-    # for orig_idx, x in leaf_x.items():
-    #     cid = labels[orig_idx]
-    #     cluster_span.setdefault(cid, []).append(x)
+        ax = plt.gca()
+        for cid, xs in cluster_span.items():
+            mid_x = (min(xs) + max(xs)) / 2
+            ax.text(mid_x, -0.02 * max(Z[:, 2]), f"cluster_{cid}",
+                    ha="center", va="top", fontsize=9, rotation=90)
 
-    # ax = plt.gca()
-    # for cid, xs in cluster_span.items():
-    #     mid_x = (min(xs) + max(xs)) / 2
-    #     ax.text(mid_x, -0.02 * max(Z[:, 2]), f"cluster_{cid}",
-    #              ha="center", va="top", fontsize=9, rotation=90)
-
-    # plt.xlabel("")
-    # plt.tight_layout()
-    # plt.show()
-
-    
+        plt.xlabel("")
+        plt.tight_layout()
+        plt.show()
 
     return df_out, None
 
@@ -764,7 +395,7 @@ def cluster_transcripts(args):
                 min_support = min_cluster_size / num_total_reads
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
-                df_clustered, closed_sets = run_frequent_pattern_analysis(
+                df_clustered, closed_sets = run_pairwise_clustering(
                     df, CLUSTER_COLS, min_support
                 )
 
@@ -793,7 +424,7 @@ def cluster_transcripts(args):
 
                 ct = (
                     df_clustered
-                    .assign(row_key=lambda d: d["ID"].astype(str) + "_cluster" + d["cluster"].astype(str))
+                    .assign(row_key=lambda d: d["ID"].astype(str) + "_" + d["cluster"].astype(str))
                     .groupby(["row_key", "label"])
                     .size()
                     .unstack(fill_value=0)
@@ -812,8 +443,8 @@ def cluster_transcripts(args):
                     ct.index = [f"{row['ID']}_clusterNA"]
             all_count_tables.append(ct)
 
-            # if row["seq_id"] == "Pf3D7_02_v3":
-            #     break
+            if row["seq_id"] == "Pf3D7_02_v3":
+                break
             
     finally:
         # Always close all handles

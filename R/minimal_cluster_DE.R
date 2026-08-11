@@ -9,10 +9,10 @@ library(ggplot2)
 # 1) Load counts table
 # File format: tab-delimited with first column = ID_cluster
 infile <- c("~/rqc/cluster_transcripts_results.tsv")
-# infile <- c("~/rqc/cluster_transcripts_results_batch.tsv")
+infile <- c("~/rqc/cluster_transcripts_results_batch.tsv")
 
 counts <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-# counts <- counts[!grepl("noise|NA|empty", counts$ID_cluster), ]
+counts <- counts[!grepl("noise|NA|empty", counts$ID_cluster), ]
 
 
 rownames(counts) <- counts$ID_cluster
@@ -27,8 +27,8 @@ stopifnot(length(group) == ncol(counts))
 y <- DGEList(counts = counts, group = group)
 
 # Optional: filter very low-abundance rows
-keep <- filterByExpr(y, group = group)
-y <- y[keep, , keep.lib.sizes = FALSE]
+# keep <- filterByExpr(y, group = group)
+# y <- y[keep, , keep.lib.sizes = FALSE]
 
 # 4) Normalize + estimate dispersion
 y <- calcNormFactors(y)

@@ -158,15 +158,22 @@ if (!SKIP_BAM_REGENERATION) {
     
     for (cl in clusters) {
       ids <- df %>% filter(cluster == cl & bamfile_path == bam_file) %>% pull(read_id) %>% unique()
+      
+      # Extract just the "cluster<N>" prefix from a name like "cluster1_blahblah"
+      cl_short <- sub("^(cluster[0-9]+).*", "\\1", cl)
+      out_bam <- file.path(output_dir, paste0(cl_short, ".bam"))
+      
       if (length(ids) == 0) {
-        message("Skipping empty cluster ", cl)
+        message("Writing empty BAM for cluster ", cl)
+        # Header-only BAM (no reads) so downstream tools still get a valid file.
+        run_checked("samtools view -b -H %s -o %s", bam_file, out_bam)
+        run_checked("samtools index %s", out_bam)
         next
       }
       message("Writing BAM for cluster ", cl, " (", length(ids), " reads)")
       
       id_file <- tempfile(fileext = ".txt")
       writeLines(ids, id_file)
-      out_bam <- file.path(output_dir, paste0("cluster_", cl, ".bam"))
       
       # Extract reads matching ids and sort the resulting BAM before indexing.
       tmp_prefix <- tempfile(pattern = "samtools_sort_")
@@ -200,8 +207,11 @@ for (bam_file in bam_files) {
   
   message("Processing clusters: ", paste(clusters, collapse = ", "))
   
+  # Extract just the "cluster<N>" prefix to match against filenames
+  clusters_short <- sub("^(cluster[0-9]+).*", "\\1", clusters)
+  
   cluster_bams <- cluster_bams[
-    basename(cluster_bams) %in% paste0("cluster_",clusters,".bam")
+    basename(cluster_bams) %in% paste0(clusters_short, ".bam")
   ]
   
   cluster_bams <- cluster_bams[
