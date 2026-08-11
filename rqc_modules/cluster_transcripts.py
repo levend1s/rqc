@@ -88,6 +88,10 @@ def run_pairwise_clustering(df, feature_cols, min_support):
         for t in set(tokens):  # set() so a token counts once per row, even if repeated
             token_row_counts[t] += 1
 
+    print(f"Total unique tokens: {len(token_row_counts)}")
+    for t, c in token_row_counts.most_common(10):
+        print(f"Token: {t}, row count: {c}")
+
     # keep only tokens meeting the row-count threshold
     keep_tokens = {t for t, c in token_row_counts.items() if c >= min_rows}
     rows = [[t for t in tokens if t in keep_tokens] for tokens in rows]
@@ -111,7 +115,7 @@ def run_pairwise_clustering(df, feature_cols, min_support):
     dist_matrix = squareform(dists)  # full pairwise distance matrix
     labels = labels.copy()
 
-    # labels = merge_small_clusters(labels, dist_matrix, min_rows)
+    labels = merge_small_clusters(labels, dist_matrix, min_rows)
 
     unique_labels = sorted(set(labels))
     relabel_map = {old: new for new, old in enumerate(unique_labels)}

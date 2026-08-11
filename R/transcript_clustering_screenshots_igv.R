@@ -82,8 +82,8 @@ INDEL_THRESHOLD <- 10
 
 
 # OPTIONS
-SKIP_BAM_REGENERATION <- FALSE
-DEBUG <- FALSE
+SKIP_BAM_REGENERATION <- TRUE
+DEBUG <- TRUE
 # Select the first 17 unique cluster ids from the data frame. If fewer than
 # 17 clusters exist, select them all. This replaces the previous "all"
 # default so the script processes a manageable subset by default.
