@@ -6,9 +6,12 @@ library(processx)
 # genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
 # annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 
-# TODO update this to replace bam_files
 labels <- c(
   "28C1", "28K1"
+)
+
+labels <- c(
+  "36C1", "36K1"
 )
 
 igv_path   <- "/Applications/IGV_2.19.8.app/Contents/MacOS/IGV"
@@ -82,8 +85,8 @@ INDEL_THRESHOLD <- 10
 
 
 # OPTIONS
-SKIP_BAM_REGENERATION <- TRUE
-DEBUG <- TRUE
+SKIP_BAM_REGENERATION <- FALSE
+DEBUG <- FALSE
 # Select the first 17 unique cluster ids from the data frame. If fewer than
 # 17 clusters exist, select them all. This replaces the previous "all"
 # default so the script processes a manageable subset by default.
@@ -290,6 +293,7 @@ for (bam_file in bam_files) {
       igv_send(con, "preference SAM.COLOR_BY BASE_MODIFICATION")
       igv_send(con, paste("preference SAM.HIDE_SMALL_INDEL_BP_THRESHOLD", INDEL_THRESHOLD))
       igv_send(con, "preference SAM.HIDE_SMALL_INDEL TRUE")
+      igv_send(con, "preference SAM.SHOW_SOFT_CLIPPED TRUE")
 
       if (DEBUG) {
         readline(sprintf("Batch %d/%d ready. Press [Enter] to continue (Ctrl+C to interrupt): ", bi, length(batches)))

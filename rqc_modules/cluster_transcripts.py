@@ -1,4 +1,5 @@
 import re
+import sys
 
 import pandas
 import pysam
@@ -38,20 +39,40 @@ def timeit(func):
     return _wrapped
 
 
-def merge_small_clusters(labels, dist_matrix, min_size):
+
+def merge_small_clusters(labels, dist_matrix, min_size, weights=None):
+    """
+    weights: optional dict mapping index -> count of original rows that
+    index represents (e.g. after deduplicating identical patterns).
+    If None, every index counts as weight 1 (equivalent to unweighted).
+    """
     labels = labels.copy()
-    counts = pandas.Series(labels).value_counts()
-    small_clusters = counts[counts < min_size].index.tolist()
 
-    for small_cl in small_clusters:
+    if weights is None:
+        weights = {i: 1 for i in range(len(labels))}
+
+    def cluster_weight(cl):
+        return sum(weights.get(i, 1) for i in numpy.where(labels == cl)[0])
+
+    while True:
+        unique_clusters = numpy.unique(labels)
+        cluster_weights = {cl: cluster_weight(cl) for cl in unique_clusters}
+        small_clusters = [cl for cl, w in cluster_weights.items() if w < min_size]
+
+        if not small_clusters:
+            break  # every cluster meets min_size — done
+
+        if len(unique_clusters) <= 1:
+            break  # only one cluster left, nothing left to merge into
+
+        # Process the smallest (by weight) cluster first each pass
+        small_cl = min(small_clusters, key=lambda cl: cluster_weights[cl])
+
         idx_small = numpy.where(labels == small_cl)[0]
-        if len(idx_small) == 0:
-            continue  # already absorbed by a previous merge
-
-        # Find the nearest *other* cluster (avg distance to each other cluster's points)
         other_labels = numpy.unique(labels[labels != small_cl])
+
         if len(other_labels) == 0:
-            break  # only one cluster left, nothing to merge into
+            break
 
         best_cl, best_dist = None, numpy.inf
         for cl in other_labels:
@@ -61,17 +82,17 @@ def merge_small_clusters(labels, dist_matrix, min_size):
                 best_dist, best_cl = avg_dist, cl
 
         labels[idx_small] = best_cl
+        # loop again: weights are recomputed fresh next iteration
 
     return labels
 
-def run_pairwise_clustering(df, feature_cols, min_support):
-    min_rows = int(numpy.ceil(min_support * len(df)))
+# https://uc-r.github.io/hc_clustering
+def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1):
     rows = []
+
     for _, row in df.iterrows():
         tokens = []
-
         for col in feature_cols:
-            # handle introns column: list of (start, end) tuples
             if col == "introns":
                 for value in row.get(col, []) or []:
                     start, end = value
@@ -79,43 +100,42 @@ def run_pairwise_clustering(df, feature_cols, min_support):
             else:
                 for value in row.get(col, []) or []:
                     tokens.append(f"{col}_{value}")
-
         rows.append(tokens)
 
-    # count how many rows each token appears in
-    token_row_counts = Counter()
-    for tokens in rows:
-        for t in set(tokens):  # set() so a token counts once per row, even if repeated
-            token_row_counts[t] += 1
+    # --- Deduplicate: cluster unique patterns, weighted by how many rows share them ---
+    pattern_key = [tuple(sorted(set(tokens))) for tokens in rows]
+    unique_patterns = sorted(set(pattern_key))
+    pattern_to_uid = {p: i for i, p in enumerate(unique_patterns)}
+    row_to_uid = numpy.array([pattern_to_uid[p] for p in pattern_key])
 
-    print(f"Total unique tokens: {len(token_row_counts)}")
-    for t, c in token_row_counts.most_common(10):
-        print(f"Token: {t}, row count: {c}")
-
-    # keep only tokens meeting the row-count threshold
-    keep_tokens = {t for t, c in token_row_counts.items() if c >= min_rows}
-    rows = [[t for t in tokens if t in keep_tokens] for tokens in rows]
+    unique_rows = [list(p) for p in unique_patterns]
 
     mlb = MultiLabelBinarizer()
-    X = mlb.fit_transform(rows)
+    X = mlb.fit_transform(unique_rows)
     dists = pdist(X, metric="jaccard")
     Z = linkage(dists, method="average")
 
-    # or look at the biggest jumps directly
-    merge_dists = Z[:, 2]
-    diffs = numpy.diff(merge_dists)
-    knee_idx = numpy.argmax(diffs)  # index of biggest jump
-    suggested_threshold = merge_dists[knee_idx]
-    print(f"Suggested threshold from knee method: {suggested_threshold:.3f}")
-    # suggested_threshold = 0.5  # HACK override for now, since the knee method is not working well
+    # merge_dists = Z[:, 2]
+    # if len(merge_dists) > 1:
+    #     diffs = numpy.diff(merge_dists)
+    #     knee_idx = numpy.argmax(diffs)
+    #     suggested_threshold = merge_dists[knee_idx]
+    # else:
+    #     suggested_threshold = 0.0
+    # print(f"Suggested threshold from knee method: {suggested_threshold:.3f}")
 
-    labels = fcluster(Z, t=suggested_threshold, criterion="distance")
+    unique_labels_arr = fcluster(Z, t=distance_threshold, criterion="distance")
 
-    # --- Enforce minimum cluster size by merging small clusters into nearest cluster ---
-    dist_matrix = squareform(dists)  # full pairwise distance matrix
-    labels = labels.copy()
+    # --- Enforce minimum cluster size (in terms of ORIGINAL row counts, not unique patterns) ---
+    dist_matrix = squareform(dists)
+    pattern_counts = Counter(row_to_uid)  # how many original rows each unique pattern represents
 
-    labels = merge_small_clusters(labels, dist_matrix, min_rows)
+    unique_labels_arr = merge_small_clusters(
+        unique_labels_arr, dist_matrix, min_support, weights=pattern_counts
+    )
+
+    # Map unique-pattern cluster labels back to every original row
+    labels = unique_labels_arr[row_to_uid]
 
     unique_labels = sorted(set(labels))
     relabel_map = {old: new for new, old in enumerate(unique_labels)}
@@ -152,41 +172,82 @@ def run_pairwise_clustering(df, feature_cols, min_support):
     df_out["combined_primary_itemset"] = [cluster_names[int(lbl)] for lbl in labels]
 
     # ------------------ plot dendrogram ---------------------
-    print(pandas.DataFrame(cluster_summary).to_string(index=False))
-    n_samples = X.shape[0]
-    n_unique = len(numpy.unique(X, axis=0))
-    import sys
-    if n_samples < 2 or n_unique < 2:
-        print(f"Skipping dendrogram: only {n_unique} unique pattern(s) across {n_samples} samples")
-        ddata = None
-    else:
-        sys.setrecursionlimit(max(1000, n_samples + 10))  # avoid recursion limit error for large dendrograms
-        ddata = dendrogram(Z, no_labels=True)
-        plt.ylabel("Jaccard distance")
-        plt.axhline(y=suggested_threshold, color="red", linestyle="--", label="suggested threshold")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib import cm
 
-        # scipy's dendrogram places leaves at x = 5, 15, 25, ... in the ORIGINAL
-        # left-to-right order given by ddata["leaves"] (a list of original indices)
+    # ------------------ plot dendrogram, colored by cluster ---------------------
+    n_leaves = X.shape[0]
+
+    if n_leaves < 2:
+        print(f"Skipping dendrogram: only {n_leaves} unique pattern(s)")
+    else:
+        sys.setrecursionlimit(max(1000, n_leaves + 10))
+
+        # unique_labels_arr[i] = cluster id for leaf i (i.e. for unique_rows[i])
+        # Build a color for each cluster id
+        cluster_ids_sorted = sorted(set(unique_labels_arr))
+        cmap = cm.get_cmap("tab20", len(cluster_ids_sorted))
+        cluster_color_map = {
+            cid: cm.colors.to_hex(cmap(i)) for i, cid in enumerate(cluster_ids_sorted)
+        }
+        default_color = "#808080"  # gray for links that span multiple clusters
+
+        # Map each node in Z (leaves 0..n-1, then merged nodes n..2n-2) to the
+        # set of original leaf cluster ids under it, so we know whether a link
+        # is "pure" (all leaves belong to one cluster) or mixed.
+        node_cluster_ids = {}
+        for i in range(n_leaves):
+            node_cluster_ids[i] = {unique_labels_arr[i]}
+
+        for i, (left, right, dist, count) in enumerate(Z):
+            node_id = n_leaves + i
+            left_ids = node_cluster_ids[int(left)]
+            right_ids = node_cluster_ids[int(right)]
+            node_cluster_ids[node_id] = left_ids | right_ids
+
+        def link_color_func(node_id):
+            ids = node_cluster_ids[node_id]
+            if len(ids) == 1:
+                return cluster_color_map[next(iter(ids))]
+            return default_color
+
+        ddata = dendrogram(
+            Z,
+            no_labels=True,
+            link_color_func=link_color_func,
+        )
+        plt.ylabel("Jaccard distance")
+        plt.axhline(y=distance_threshold, color="red", linestyle="--", label="distance threshold")
+
+        # --- one x-axis label per cluster, at the midpoint of its leaf span ---
         leaf_order = ddata["leaves"]
         leaf_x = {orig_idx: 5 + 10 * pos for pos, orig_idx in enumerate(leaf_order)}
 
-        # find the x-range (min/max) spanned by each cluster's leaves
-        cluster_span = {}
+        cluster_positions = {}
         for orig_idx, x in leaf_x.items():
-            cid = labels[orig_idx]
-            cluster_span.setdefault(cid, []).append(x)
+            cid = unique_labels_arr[orig_idx]
+            cluster_positions.setdefault(cid, []).append(x)
 
         ax = plt.gca()
-        for cid, xs in cluster_span.items():
+        y_pos = -0.02 * max(Z[:, 2])
+        for cid, xs in cluster_positions.items():
             mid_x = (min(xs) + max(xs)) / 2
-            ax.text(mid_x, -0.02 * max(Z[:, 2]), f"cluster_{cid}",
-                    ha="center", va="top", fontsize=9, rotation=90)
+            label = cluster_names.get(cid, f"cluster_{cid}")
+            ax.text(mid_x, y_pos, label, ha="center", va="top", fontsize=9, rotation=90)
+
+        # --- legend ---
+        legend_handles = [
+            mpatches.Patch(color=cluster_color_map[cid], label=cluster_names.get(cid, f"cluster_{cid}"))
+            for cid in cluster_ids_sorted
+        ]
+        ax.legend(handles=legend_handles, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8, title="Cluster")
 
         plt.xlabel("")
         plt.tight_layout()
         plt.show()
 
-    return df_out, None
+    return df_out, pandas.DataFrame(cluster_summary)
 
 def gather_read_entries_for_region(
     row,
@@ -314,6 +375,7 @@ def cluster_transcripts(args):
     MIN_DELETION_LENGTH = args.min_deletion_length
     CLUSTER_COLS = args.cluster_cols.split(',') if args.cluster_cols is not None else None
     MIN_CLUSTER_PERC = args.min_cluster_perc
+    DISTANCE_THRESHOLD = args.distance_threshold
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
     MODS = [m for m in CLUSTER_COLS if m != "introns"]
@@ -396,11 +458,11 @@ def cluster_transcripts(args):
                     raise ValueError("not enough reads to process!")
 
                 min_cluster_size = max(MIN_CLUSTER_SIZE_IN_SAMPLE * len(bam_labels), int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
-                min_support = min_cluster_size / num_total_reads
+                print("min_cluster_size: {}".format(min_cluster_size))
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
                 df_clustered, closed_sets = run_pairwise_clustering(
-                    df, CLUSTER_COLS, min_support
+                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD
                 )
 
                 df_clustered["cluster"] = df_clustered["combined_primary_itemset"]
