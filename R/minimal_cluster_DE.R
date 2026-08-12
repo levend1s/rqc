@@ -9,10 +9,10 @@ library(ggplot2)
 # 1) Load counts table
 # File format: tab-delimited with first column = ID_cluster
 infile <- c("~/rqc/cluster_transcripts_results.tsv")
-# infile <- c("~/rqc/cluster_transcripts_results_batch.tsv")
+infile <- c("~/rqc/cluster_transcripts_results_batch.tsv")
 
 counts <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-counts <- counts[!grepl("noise|NA|empty", counts$ID_cluster), ]
+counts <- counts[!grepl("noise|NA|empty|MIT|API", counts$ID_cluster), ]
 
 
 rownames(counts) <- counts$ID_cluster
@@ -44,10 +44,10 @@ res <- topTags(qlf, n = Inf)$table
 res$ID_cluster <- rownames(res)
 res <- res[, c("ID_cluster","logFC","logCPM","F","PValue","FDR")]
 
-res$negLog10FDR <- -log10(res$PValue + 1e-300)
-res$signif <- res$PValue < 0.05 & abs(res$logFC) > 1
+res$negLog10FDR <- -log10(res$FDR + 1e-300)
+res$signif <- res$FDR < 0.05 & abs(res$logFC) > 1
 
-top <- head(res[order(res$PValue), ], 15)
+top <- head(res[order(res$FDR), ], 15)
 
 p <- ggplot(res, aes(x = logFC, y = negLog10FDR)) +
   geom_point(aes(color = signif), alpha = 0.8, size = 2) +

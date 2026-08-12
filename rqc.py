@@ -183,6 +183,7 @@ def build_parser():
     cluster_transcripts_parser.add_argument("--cluster_cols", required=False, type=str, default=None, help="comma-separated list of columns to cluster on")
     cluster_transcripts_parser.add_argument("--min_cluster_perc", required=False, type=float, default=0.01, help="minimum percentage of reads to form a cluster (default: 0.01)")
     cluster_transcripts_parser.add_argument("--distance_threshold", required=False, type=float, default=0.1, help="distance threshold for clustering (default: 0.1)")
+    cluster_transcripts_parser.add_argument("--show_dendrogram", action="store_true", help="if provided, show dendrogram of clustering results")
 
     cluster_transcripts_parser.set_defaults(func=cluster_transcripts.cluster_transcripts)
 

@@ -5,18 +5,10 @@ import pandas
 import pysam
 import numpy
 
-from sklearn.feature_extraction import DictVectorizer
-from sklearn.cluster import HDBSCAN
 from sklearn.preprocessing import MultiLabelBinarizer
 
 from rqc_modules.constants import PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
-
-# import umap
-import ast
-
-from mlxtend.frequent_patterns import fpgrowth
-from mlxtend.preprocessing import TransactionEncoder
 
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist, squareform
@@ -24,6 +16,10 @@ from scipy.spatial.distance import pdist, squareform
 from scipy.cluster.hierarchy import dendrogram
 from matplotlib import pyplot as plt
 from collections import Counter
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib import cm
 
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
@@ -87,7 +83,7 @@ def merge_small_clusters(labels, dist_matrix, min_size, weights=None):
     return labels
 
 # https://uc-r.github.io/hc_clustering
-def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1):
+def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, show_dendrogram=False):
     rows = []
 
     for _, row in df.iterrows():
@@ -172,80 +168,76 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
     df_out["combined_primary_itemset"] = [cluster_names[int(lbl)] for lbl in labels]
 
     # ------------------ plot dendrogram ---------------------
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    from matplotlib import cm
+    if show_dendrogram:
+        n_leaves = X.shape[0]
 
-    # ------------------ plot dendrogram, colored by cluster ---------------------
-    n_leaves = X.shape[0]
+        if n_leaves < 2:
+            print(f"Skipping dendrogram: only {n_leaves} unique pattern(s)")
+        else:
+            sys.setrecursionlimit(max(1000, n_leaves + 10))
 
-    if n_leaves < 2:
-        print(f"Skipping dendrogram: only {n_leaves} unique pattern(s)")
-    else:
-        sys.setrecursionlimit(max(1000, n_leaves + 10))
+            # unique_labels_arr[i] = cluster id for leaf i (i.e. for unique_rows[i])
+            # Build a color for each cluster id
+            cluster_ids_sorted = sorted(set(unique_labels_arr))
+            cmap = cm.get_cmap("tab20", len(cluster_ids_sorted))
+            cluster_color_map = {
+                cid: cm.colors.to_hex(cmap(i)) for i, cid in enumerate(cluster_ids_sorted)
+            }
+            default_color = "#808080"  # gray for links that span multiple clusters
 
-        # unique_labels_arr[i] = cluster id for leaf i (i.e. for unique_rows[i])
-        # Build a color for each cluster id
-        cluster_ids_sorted = sorted(set(unique_labels_arr))
-        cmap = cm.get_cmap("tab20", len(cluster_ids_sorted))
-        cluster_color_map = {
-            cid: cm.colors.to_hex(cmap(i)) for i, cid in enumerate(cluster_ids_sorted)
-        }
-        default_color = "#808080"  # gray for links that span multiple clusters
+            # Map each node in Z (leaves 0..n-1, then merged nodes n..2n-2) to the
+            # set of original leaf cluster ids under it, so we know whether a link
+            # is "pure" (all leaves belong to one cluster) or mixed.
+            node_cluster_ids = {}
+            for i in range(n_leaves):
+                node_cluster_ids[i] = {unique_labels_arr[i]}
 
-        # Map each node in Z (leaves 0..n-1, then merged nodes n..2n-2) to the
-        # set of original leaf cluster ids under it, so we know whether a link
-        # is "pure" (all leaves belong to one cluster) or mixed.
-        node_cluster_ids = {}
-        for i in range(n_leaves):
-            node_cluster_ids[i] = {unique_labels_arr[i]}
+            for i, (left, right, dist, count) in enumerate(Z):
+                node_id = n_leaves + i
+                left_ids = node_cluster_ids[int(left)]
+                right_ids = node_cluster_ids[int(right)]
+                node_cluster_ids[node_id] = left_ids | right_ids
 
-        for i, (left, right, dist, count) in enumerate(Z):
-            node_id = n_leaves + i
-            left_ids = node_cluster_ids[int(left)]
-            right_ids = node_cluster_ids[int(right)]
-            node_cluster_ids[node_id] = left_ids | right_ids
+            def link_color_func(node_id):
+                ids = node_cluster_ids[node_id]
+                if len(ids) == 1:
+                    return cluster_color_map[next(iter(ids))]
+                return default_color
 
-        def link_color_func(node_id):
-            ids = node_cluster_ids[node_id]
-            if len(ids) == 1:
-                return cluster_color_map[next(iter(ids))]
-            return default_color
+            ddata = dendrogram(
+                Z,
+                no_labels=True,
+                link_color_func=link_color_func,
+            )
+            plt.ylabel("Jaccard distance")
+            plt.axhline(y=distance_threshold, color="red", linestyle="--", label="distance threshold")
 
-        ddata = dendrogram(
-            Z,
-            no_labels=True,
-            link_color_func=link_color_func,
-        )
-        plt.ylabel("Jaccard distance")
-        plt.axhline(y=distance_threshold, color="red", linestyle="--", label="distance threshold")
+            # --- one x-axis label per cluster, at the midpoint of its leaf span ---
+            leaf_order = ddata["leaves"]
+            leaf_x = {orig_idx: 5 + 10 * pos for pos, orig_idx in enumerate(leaf_order)}
 
-        # --- one x-axis label per cluster, at the midpoint of its leaf span ---
-        leaf_order = ddata["leaves"]
-        leaf_x = {orig_idx: 5 + 10 * pos for pos, orig_idx in enumerate(leaf_order)}
+            cluster_positions = {}
+            for orig_idx, x in leaf_x.items():
+                cid = unique_labels_arr[orig_idx]
+                cluster_positions.setdefault(cid, []).append(x)
 
-        cluster_positions = {}
-        for orig_idx, x in leaf_x.items():
-            cid = unique_labels_arr[orig_idx]
-            cluster_positions.setdefault(cid, []).append(x)
+            ax = plt.gca()
+            y_pos = -0.02 * max(Z[:, 2])
+            for cid, xs in cluster_positions.items():
+                mid_x = (min(xs) + max(xs)) / 2
+                label = cluster_names.get(cid, f"cluster_{cid}")
+                ax.text(mid_x, y_pos, label, ha="center", va="top", fontsize=9, rotation=90)
 
-        ax = plt.gca()
-        y_pos = -0.02 * max(Z[:, 2])
-        for cid, xs in cluster_positions.items():
-            mid_x = (min(xs) + max(xs)) / 2
-            label = cluster_names.get(cid, f"cluster_{cid}")
-            ax.text(mid_x, y_pos, label, ha="center", va="top", fontsize=9, rotation=90)
+            # --- legend ---
+            legend_handles = [
+                mpatches.Patch(color=cluster_color_map[cid], label=cluster_names.get(cid, f"cluster_{cid}"))
+                for cid in cluster_ids_sorted
+            ]
+            ax.legend(handles=legend_handles, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8, title="Cluster")
 
-        # --- legend ---
-        legend_handles = [
-            mpatches.Patch(color=cluster_color_map[cid], label=cluster_names.get(cid, f"cluster_{cid}"))
-            for cid in cluster_ids_sorted
-        ]
-        ax.legend(handles=legend_handles, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8, title="Cluster")
-
-        plt.xlabel("")
-        plt.tight_layout()
-        plt.show()
+            plt.xlabel("")
+            plt.tight_layout()
+            plt.show()
 
     return df_out, pandas.DataFrame(cluster_summary)
 
@@ -376,6 +368,7 @@ def cluster_transcripts(args):
     CLUSTER_COLS = args.cluster_cols.split(',') if args.cluster_cols is not None else None
     MIN_CLUSTER_PERC = args.min_cluster_perc
     DISTANCE_THRESHOLD = args.distance_threshold
+    SHOW_DENDROGRAM = args.show_dendrogram
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
     MODS = [m for m in CLUSTER_COLS if m != "introns"]
@@ -458,11 +451,11 @@ def cluster_transcripts(args):
                     raise ValueError("not enough reads to process!")
 
                 min_cluster_size = max(MIN_CLUSTER_SIZE_IN_SAMPLE * len(bam_labels), int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
-                print("min_cluster_size: {}".format(min_cluster_size))
+                print(min_cluster_size)
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
                 df_clustered, closed_sets = run_pairwise_clustering(
-                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD
+                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, SHOW_DENDROGRAM
                 )
 
                 df_clustered["cluster"] = df_clustered["combined_primary_itemset"]
@@ -509,8 +502,8 @@ def cluster_transcripts(args):
                     ct.index = [f"{row['ID']}_clusterNA"]
             all_count_tables.append(ct)
 
-            if row["seq_id"] == "Pf3D7_02_v3":
-                break
+            # if row["seq_id"] == "Pf3D7_02_v3":
+            #     break
             
     finally:
         # Always close all handles
