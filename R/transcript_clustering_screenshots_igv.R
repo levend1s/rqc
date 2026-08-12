@@ -2,9 +2,9 @@ library(tidyverse)
 library(processx)
 
 # --------------------- CONFIG ---------------------
-# igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
-# genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-# annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
+genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 
 labels <- c(
   "28C1", "28K1"
@@ -14,9 +14,9 @@ labels <- c(
   "36C1", "36K1"
 )
 
-igv_path   <- "/Applications/IGV_2.19.8.app/Contents/MacOS/IGV"
-genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+# igv_path   <- "/Applications/IGV_2.19.8.app/Contents/MacOS/IGV"
+# genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+# annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 
 infile <- c("~/rqc/cluster_transcripts_results.tsv.umap")
 df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
@@ -50,30 +50,7 @@ df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 
 base_dir   <- path.expand("~/rqc/test")
 
-# Populate `bam_files` from `df` based on `labels` if possible. This
-# overrides any hard-coded `bam_files` above. It looks for common column
-# names for the label and bam path and falls back to the existing
-# `bam_files` variable if none are found.
-{
-  label_cols <- c("label", "sample", "bam_label", "library")
-  bam_path_cols <- c("bamfile_path", "bam_path", "filepath", "path")
-  found_label_col <- intersect(label_cols, names(df))
-  found_bam_col <- intersect(bam_path_cols, names(df))
-  if (length(found_label_col) > 0 && length(found_bam_col) > 0) {
-    labcol <- found_label_col[1]
-    bamcol <- found_bam_col[1]
-    sel <- df[[labcol]] %in% labels
-    new_bams <- unique(df[sel, bamcol])
-    if (length(new_bams) > 0) {
-      bam_files <- as.character(new_bams)
-      message("Using bam_files from df (", length(bam_files), " files) based on labels: ", paste(labels, collapse = ", "))
-    } else {
-      warning("No bam paths found in df for provided labels; keeping existing bam_files")
-    }
-  } else {
-    warning("Could not auto-detect label/bam columns in df; using existing bam_files")
-  }
-}
+bam_files <- unique(df$bamfile_path[df$label %in% labels])
 
 # IGV screenshot settings
 igv_port   <- 60151
@@ -85,7 +62,7 @@ INDEL_THRESHOLD <- 10
 
 
 # OPTIONS
-SKIP_BAM_REGENERATION <- FALSE
+SKIP_BAM_REGENERATION <- TRUE
 DEBUG <- FALSE
 # Select the first 17 unique cluster ids from the data frame. If fewer than
 # 17 clusters exist, select them all. This replaces the previous "all"
@@ -93,7 +70,8 @@ DEBUG <- FALSE
 all_clusters <- df %>% pull(cluster) %>% as.character() %>% unique()
 
 # CLUSTERS_TO_PROCESS <- as.character(head(all_clusters, 16))
-CLUSTERS_TO_PROCESS <- "all"
+# CLUSTERS_TO_PROCESS <- "all"
+CLUSTERS_TO_PROCESS <- setdiff(all_clusters, "cluster2")
 
 # TODO: if many clusters, just process the biggest clusters and print a message
 
