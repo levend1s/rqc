@@ -9,7 +9,7 @@ library(ggplot2)
 # 1) Load counts table
 # File format: tab-delimited with first column = ID_cluster
 infile <- c("~/rqc/cluster_transcripts_results.tsv")
-infile <- c("~/rqc/cluster_transcripts_results_batch.tsv")
+# infile <- c("~/rqc/cluster_transcripts_results_batch.tsv")
 
 counts <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 counts <- counts[!grepl("noise|NA|empty|MIT|API", counts$ID_cluster), ]
@@ -42,7 +42,13 @@ qlf <- glmQLFTest(fit, coef = 2)  # groupK effect
 # 6) Results
 res <- topTags(qlf, n = Inf)$table
 res$ID_cluster <- rownames(res)
-res <- res[, c("ID_cluster","logFC","logCPM","F","PValue","FDR")]
+res <- res[, c("ID_cluster", "logFC","logCPM","F","PValue","FDR")]
+
+res <- res %>%
+  mutate(
+    ID      = sub("^([^_]*_[^_]*)_.*$", "\\1", ID_cluster),
+    cluster = sub("^[^_]*_[^_]*_", "", ID_cluster)
+  )
 
 res$negLog10FDR <- -log10(res$FDR + 1e-300)
 res$signif <- res$FDR < 0.05 & abs(res$logFC) > 1

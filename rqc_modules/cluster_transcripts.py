@@ -35,7 +35,100 @@ def timeit(func):
         return res
     return _wrapped
 
+def merge_small_clusters_tree_aware(labels, Z, min_size, weights=None):
+    """
+    Tree-aware version: a small cluster is only ever merged into its
+    nearest neighbor AS DEFINED BY THE DENDROGRAM (its sibling subtree
+    at the point it first joins something else) — never into a cluster
+    on a completely different branch, even if that cluster happens to
+    be closer by raw distance.
+    """
+    labels = labels.copy()
+    n = len(labels)  # number of leaves == number of unique patterns
 
+    if weights is None:
+        weights = {i: 1 for i in range(n)}
+
+    # --- Precompute tree structure from Z (iterative, no recursion) ---
+    children = {}
+    for i in range(len(Z)):
+        l, r = int(Z[i, 0]), int(Z[i, 1])
+        children[n + i] = (l, r)
+
+    leaves_under = [None] * (2 * n - 1)
+    for i in range(n):
+        leaves_under[i] = frozenset([i])
+    for i in range(len(Z)):
+        l, r = int(Z[i, 0]), int(Z[i, 1])
+        leaves_under[n + i] = leaves_under[l] | leaves_under[r]
+
+    parent = [None] * (2 * n - 1)
+    for i in range(len(Z)):
+        l, r = int(Z[i, 0]), int(Z[i, 1])
+        node = n + i
+        parent[l] = node
+        parent[r] = node
+
+    # Map each exact leaf-set to the node representing it (only valid for
+    # nodes that ARE pure subtrees — every node in a tree qualifies).
+    leafset_to_node = {leaves_under[node]: node for node in range(2 * n - 1)}
+
+    def cluster_weight_map():
+        w = {}
+        for cl in numpy.unique(labels):
+            idx = numpy.where(labels == cl)[0]
+            w[cl] = sum(weights.get(i, 1) for i in idx)
+        return w
+
+    while True:
+        cluster_weights = cluster_weight_map()
+        small_clusters = [cl for cl, w in cluster_weights.items() if w < min_size]
+
+        if not small_clusters:
+            break
+        if len(cluster_weights) <= 1:
+            break
+
+        small_cl = min(small_clusters, key=lambda cl: cluster_weights[cl])
+        idx_small = numpy.where(labels == small_cl)[0]
+
+        node = leafset_to_node.get(frozenset(idx_small.tolist()))
+
+        if node is None:
+            # Small cluster's members no longer form a pure subtree
+            # (can happen after a few merges). Fall back to nearest
+            # currently-existing ancestor subtree that fully contains it.
+            candidate_nodes = [
+                nd for nd, leafset in enumerate(leaves_under)
+                if set(idx_small.tolist()) <= leafset
+            ]
+            node = min(candidate_nodes, key=lambda nd: len(leaves_under[nd])) if candidate_nodes else None
+
+        target_label = None
+        if node is not None and parent[node] is not None:
+            parent_node = parent[node]
+            l, r = children[parent_node]
+            sibling = r if l == node else l
+            sibling_leaves = leaves_under[sibling]
+
+            label_weights = {}
+            for i in sibling_leaves:
+                lbl = labels[i]
+                if lbl == small_cl:
+                    continue  # ignore any of the small cluster's own leaves if present
+                label_weights[lbl] = label_weights.get(lbl, 0) + weights.get(i, 1)
+
+            if label_weights:
+                target_label = max(label_weights, key=label_weights.get)
+
+        if target_label is None:
+            # No usable sibling (e.g. hit the root, or sibling is entirely
+            # the same small cluster) — nothing left to merge into.
+            break
+
+        labels[idx_small] = target_label
+
+    return labels
 
 def merge_small_clusters(labels, dist_matrix, min_size, weights=None):
     """
@@ -84,7 +177,7 @@ def merge_small_clusters(labels, dist_matrix, min_size, weights=None):
     return labels
 
 # https://uc-r.github.io/hc_clustering
-def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, show_dendrogram=False):
+def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, show_dendrogram=False):
     rows = []
 
     for _, row in df.iterrows():
@@ -99,6 +192,20 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
                     tokens.append(f"{col}_{value}")
         rows.append(tokens)
 
+    # --- Drop rare features: keep only tokens present in >= min_feature_freq of reads ---
+    min_token_rows = int(numpy.ceil(min_feature_freq * len(df)))
+    token_row_counts = Counter()
+    for tokens in rows:
+        for t in set(tokens):  # count once per row, even if repeated within a row
+            token_row_counts[t] += 1
+
+    keep_tokens = {t for t, c in token_row_counts.items() if c >= min_token_rows}
+    n_dropped = len(token_row_counts) - len(keep_tokens)
+    # print(f"Dropping {n_dropped} of {len(token_row_counts)} tokens below {min_feature_freq:.1%} frequency "
+    #       f"(< {min_token_rows} of {len(df)} reads)")
+
+    rows = [[t for t in tokens if t in keep_tokens] for tokens in rows]
+
     # --- Deduplicate: cluster unique patterns, weighted by how many rows share them ---
     pattern_key = [tuple(sorted(set(tokens))) for tokens in rows]
     unique_patterns = sorted(set(pattern_key))
@@ -112,23 +219,18 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
     dists = pdist(X, metric="jaccard")
     Z = linkage(dists, method="average")
 
-    # merge_dists = Z[:, 2]
-    # if len(merge_dists) > 1:
-    #     diffs = numpy.diff(merge_dists)
-    #     knee_idx = numpy.argmax(diffs)
-    #     suggested_threshold = merge_dists[knee_idx]
-    # else:
-    #     suggested_threshold = 0.0
-    # print(f"Suggested threshold from knee method: {suggested_threshold:.3f}")
-
     unique_labels_arr = fcluster(Z, t=distance_threshold, criterion="distance")
 
     # --- Enforce minimum cluster size (in terms of ORIGINAL row counts, not unique patterns) ---
-    dist_matrix = squareform(dists)
     pattern_counts = Counter(row_to_uid)  # how many original rows each unique pattern represents
 
-    unique_labels_arr = merge_small_clusters(
-        unique_labels_arr, dist_matrix, min_support, weights=pattern_counts
+    # dist_matrix = squareform(dists)
+    # unique_labels_arr = merge_small_clusters(
+    #     unique_labels_arr, dist_matrix, min_support, weights=pattern_counts
+    # )
+
+    unique_labels_arr = merge_small_clusters_tree_aware(
+        unique_labels_arr, Z, min_support, weights=pattern_counts
     )
 
     # Map unique-pattern cluster labels back to every original row
@@ -171,7 +273,7 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
 
     # ------------------ plot dendrogram ---------------------
     if show_dendrogram:
-        for i, count in pattern_counts.most_common():
+        for i, count in pattern_counts.most_common(10):
             label = ", ".join(unique_rows[i])
             print(f"{count:4d}  {label}")
         n_leaves = X.shape[0]
@@ -252,8 +354,8 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
                 title="Cluster",
             )
 
-            blue_leaf_positions = [pos for pos, orig_idx in enumerate(ddata["leaves"]) if unique_labels_arr[orig_idx] == 0]
-            print(blue_leaf_positions)
+            # blue_leaf_positions = [pos for pos, orig_idx in enumerate(ddata["leaves"]) if unique_labels_arr[orig_idx] == 3]
+            # print(blue_leaf_positions)
 
             plt.xlabel("")
             plt.tight_layout()  # reserve right 15% of figure for the legend
@@ -387,9 +489,10 @@ def cluster_transcripts(args):
     OUTPUT_FILE = args.outfile
     MIN_DELETION_LENGTH = args.min_deletion_length
     CLUSTER_COLS = args.cluster_cols.split(',') if args.cluster_cols is not None else None
-    MIN_CLUSTER_PERC = args.min_cluster_perc
+    MIN_CLUSTER_PERC = args.min_cluster_percent
     MIN_CLUSTER_SIZE = args.min_cluster_size
     DISTANCE_THRESHOLD = args.distance_threshold
+    MIN_FEATURE_FREQ = args.min_feature_freq
     SHOW_DENDROGRAM = args.show_dendrogram
 
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
@@ -472,17 +575,17 @@ def cluster_transcripts(args):
                 if num_total_reads < MINIMUM_READS_TO_PROCESS:
                     raise ValueError("not enough reads to process!")
 
-
-                # min_cluster_size = max(MIN_CLUSTER_SIZE_IN_SAMPLE * len(bam_labels), int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
-                # print(min_cluster_size)
-                # min_cluster_size = MIN_CLUSTER_SIZE
-
-                min_cluster_size = MIN_CLUSTER_SIZE
+                if MIN_CLUSTER_PERC is not None:
+                    min_cluster_size = max(MIN_CLUSTER_SIZE_IN_SAMPLE * len(bam_labels), int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
+                    print("USING MIN_CLUSTER_PERC {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
+                else:
+                    min_cluster_size = MIN_CLUSTER_SIZE
+                    print("USING MIN_CLUSTER_SIZE: min_cluster_size = {}".format(min_cluster_size))
 
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
                 df_clustered, closed_sets = run_pairwise_clustering(
-                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, SHOW_DENDROGRAM
+                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, MIN_FEATURE_FREQ, SHOW_DENDROGRAM
                 )
 
                 df_clustered["cluster"] = df_clustered["combined_primary_itemset"]

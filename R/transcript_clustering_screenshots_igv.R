@@ -2,21 +2,21 @@ library(tidyverse)
 library(processx)
 
 # --------------------- CONFIG ---------------------
-igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
-genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+# igv_path   <- "/Applications/IGV_2.19.6.app/Contents/MacOS/IGV"
+# genome     <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+# annotation <- "/Users/joshualevendis/Documents/RNA/honours/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 
 labels <- c(
   "28C1", "28K1"
 )
 
-labels <- c(
-  "36C1", "36K1"
-)
+# labels <- c(
+#   "36C1", "36K1"
+# )
 
-# igv_path   <- "/Applications/IGV_2.19.8.app/Contents/MacOS/IGV"
-# genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
-# annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
+igv_path   <- "/Applications/IGV_2.19.8.app/Contents/MacOS/IGV"
+genome <- "/Users/jlevendis/Downloads/Pfalciparum3D7/fasta/data/PlasmoDB-67_Pfalciparum3D7_Genome.fasta"
+annotation <- "~/Downloads/Pfalciparum3D7/gff/data/PlasmoDB-67_Pfalciparum3D7.gff"
 
 infile <- c("~/rqc/cluster_transcripts_results.tsv.umap")
 df <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
@@ -62,7 +62,7 @@ INDEL_THRESHOLD <- 10
 
 
 # OPTIONS
-SKIP_BAM_REGENERATION <- TRUE
+SKIP_BAM_REGENERATION <- FALSE
 DEBUG <- FALSE
 # Select the first 17 unique cluster ids from the data frame. If fewer than
 # 17 clusters exist, select them all. This replaces the previous "all"
@@ -70,8 +70,8 @@ DEBUG <- FALSE
 all_clusters <- df %>% pull(cluster) %>% as.character() %>% unique()
 
 # CLUSTERS_TO_PROCESS <- as.character(head(all_clusters, 16))
-# CLUSTERS_TO_PROCESS <- "all"
-CLUSTERS_TO_PROCESS <- setdiff(all_clusters, "cluster2")
+CLUSTERS_TO_PROCESS <- "all"
+# CLUSTERS_TO_PROCESS <- setdiff(all_clusters, "cluster2")
 
 # TODO: if many clusters, just process the biggest clusters and print a message
 
