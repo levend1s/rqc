@@ -22,6 +22,9 @@ import matplotlib.patches as mpatches
 from matplotlib import cm
 import matplotlib
 
+import statsmodels.api as sm
+from statsmodels.stats.multitest import multipletests
+
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
 
@@ -130,51 +133,112 @@ def merge_small_clusters_tree_aware(labels, Z, min_size, weights=None):
 
     return labels
 
-def merge_small_clusters(labels, dist_matrix, min_size, weights=None):
+
+from scipy.stats import fisher_exact
+from statsmodels.stats.multitest import multipletests
+import itertools
+import seaborn as sns
+
+
+def find_correlated_events_multivariate(rows, target_prefixes=None, predictor_prefixes=None,
+                                          min_count=5, fdr_threshold=0.05, show_heatmap=False):
     """
-    weights: optional dict mapping index -> count of original rows that
-    index represents (e.g. after deduplicating identical patterns).
-    If None, every index counts as weight 1 (equivalent to unweighted).
+    rows : list[list[str]]
+        Per-read token lists that have ALREADY been filtered upstream
+        (e.g. by min_feature_freq in run_pairwise_clustering). This
+        function does not re-filter by frequency — it just builds the
+        binary matrix directly from what's passed in.
+
+    min_count : int
+        Minimum reads a token must appear in to be usable as a target
+        or predictor in the regression (guards against unstable fits on
+        near-constant columns even after upstream filtering). Set to 0
+        or 1 to skip this safety check entirely.
     """
-    labels = labels.copy()
+    mlb_full = MultiLabelBinarizer()
+    X_full = mlb_full.fit_transform(rows)
+    tokens = numpy.array(mlb_full.classes_)
 
-    if weights is None:
-        weights = {i: 1 for i in range(len(labels))}
+    n_reads = len(rows)
+    token_counts = X_full.sum(axis=0)
 
-    def cluster_weight(cl):
-        return sum(weights.get(i, 1) for i in numpy.where(labels == cl)[0])
+    # --- print every token and its count, sorted descending ---
+    print(f"\nToken counts (n_reads={n_reads}):")
+    order = numpy.argsort(-token_counts)
+    for idx in order:
+        tok = tokens[idx]
+        cnt = token_counts[idx]
+        print(f"  {tok:40s} {cnt:6d}  ({cnt/n_reads:.2%})")
+    print()
 
-    while True:
-        unique_clusters = numpy.unique(labels)
-        cluster_weights = {cl: cluster_weight(cl) for cl in unique_clusters}
-        small_clusters = [cl for cl, w in cluster_weights.items() if w < min_size]
+    target_idx = [i for i, t in enumerate(tokens) if target_prefixes is None or t.startswith(target_prefixes)]
 
-        if not small_clusters:
-            break  # every cluster meets min_size — done
+    results = []
+    for ti in target_idx:
+        target_tok = tokens[ti]
+        y = X_full[:, ti]
 
-        if len(unique_clusters) <= 1:
-            break  # only one cluster left, nothing left to merge into
+        predictor_idx = [
+            i for i in range(len(tokens))
+            if i != ti and (predictor_prefixes is None or tokens[i].startswith(predictor_prefixes))
+        ]
+        if len(predictor_idx) == 0:
+            continue
 
-        # Process the smallest (by weight) cluster first each pass
-        small_cl = min(small_clusters, key=lambda cl: cluster_weights[cl])
+        Xp = X_full[:, predictor_idx]
+        pred_toks = tokens[predictor_idx]
 
-        idx_small = numpy.where(labels == small_cl)[0]
-        other_labels = numpy.unique(labels[labels != small_cl])
+        # drop predictors with ~zero variance among these reads (all 0s or all 1s)
+        var_mask = (Xp.sum(axis=0) >= min_count) & (Xp.sum(axis=0) <= len(y) - min_count)
+        if var_mask.sum() == 0:
+            continue
+        Xp = Xp[:, var_mask]
+        pred_toks = pred_toks[var_mask]
 
-        if len(other_labels) == 0:
-            break
+        Xp_const = sm.add_constant(Xp)
 
-        best_cl, best_dist = None, numpy.inf
-        for cl in other_labels:
-            idx_other = numpy.where(labels == cl)[0]
-            avg_dist = dist_matrix[numpy.ix_(idx_small, idx_other)].mean()
-            if avg_dist < best_dist:
-                best_dist, best_cl = avg_dist, cl
+        try:
+            model = sm.Logit(y, Xp_const)
+            fit = model.fit(disp=0, method="newton", maxiter=100)
+        except Exception:
+            try:
+                fit = model.fit_regularized(disp=0, alpha=0.1, maxiter=200)
+            except Exception:
+                continue
 
-        labels[idx_small] = best_cl
-        # loop again: weights are recomputed fresh next iteration
+        params = fit.params[1:]
+        pvals = getattr(fit, "pvalues", None)
+        pvals = pvals[1:] if pvals is not None else numpy.full(len(params), numpy.nan)
 
-    return labels
+        for pt, coef, p in zip(pred_toks, params, pvals):
+            results.append({
+                "target": target_tok,
+                "predictor": pt,
+                "coef": coef,
+                "odds_ratio": numpy.exp(coef),
+                "p_value": p,
+            })
+
+    if not results:
+        print("No valid target/predictor combinations — nothing to test.")
+        return pandas.DataFrame(), pandas.DataFrame()
+
+    res_df = pandas.DataFrame(results)
+    valid_p = res_df["p_value"].notna()
+    res_df.loc[valid_p, "p_adj"] = multipletests(res_df.loc[valid_p, "p_value"], method="fdr_bh")[1]
+    res_df = res_df.sort_values("p_adj")
+
+    significant = res_df[res_df["p_adj"] < fdr_threshold].sort_values("coef")
+
+    if show_heatmap and len(res_df) > 0:
+        pivot = res_df.pivot_table(index="target", columns="predictor", values="coef")
+        plt.figure(figsize=(max(6, pivot.shape[1] * 0.4), max(5, pivot.shape[0] * 0.4)))
+        sns.heatmap(pivot, cmap="RdBu_r", center=0, xticklabels=True, yticklabels=True)
+        plt.title("Adjusted association (logistic regression coefficient)\ncontrolling for all other features")
+        plt.tight_layout()
+        plt.show()
+
+    return res_df, significant
 
 # https://uc-r.github.io/hc_clustering
 def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, show_dendrogram=False):
@@ -206,6 +270,24 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
 
     rows = [[t for t in tokens if t in keep_tokens] for tokens in rows]
 
+    print("Top tokens after filtering:")
+    for token, count in token_row_counts.most_common(10):
+        if token in keep_tokens:
+            print(f"  {token}: {count} ({count/len(df):.2%})")
+
+    # --- optional: test for correlated / mutually exclusive feature pairs ---
+    check_correlations = True
+    # NOTE only works for pairs of features
+    if check_correlations:
+        corr_all, corr_sig = find_correlated_events_multivariate(
+            rows,
+            target_prefixes="introns",
+            predictor_prefixes="m6A",
+            min_count=min_token_rows,   # reuse the SAME threshold as the rest of the function
+            fdr_threshold=0.05,
+            show_heatmap=True,
+        )
+
     # --- Deduplicate: cluster unique patterns, weighted by how many rows share them ---
     pattern_key = [tuple(sorted(set(tokens))) for tokens in rows]
     unique_patterns = sorted(set(pattern_key))
@@ -223,11 +305,6 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
 
     # --- Enforce minimum cluster size (in terms of ORIGINAL row counts, not unique patterns) ---
     pattern_counts = Counter(row_to_uid)  # how many original rows each unique pattern represents
-
-    # dist_matrix = squareform(dists)
-    # unique_labels_arr = merge_small_clusters(
-    #     unique_labels_arr, dist_matrix, min_support, weights=pattern_counts
-    # )
 
     unique_labels_arr = merge_small_clusters_tree_aware(
         unique_labels_arr, Z, min_support, weights=pattern_counts
@@ -490,16 +567,13 @@ def cluster_transcripts(args):
     MIN_DELETION_LENGTH = args.min_deletion_length
     CLUSTER_COLS = args.cluster_cols.split(',') if args.cluster_cols is not None else None
     MIN_CLUSTER_PERC = args.min_cluster_percent
-    MIN_CLUSTER_SIZE = args.min_cluster_size
+    MIN_CLUSTER_SIZE_BULK = args.min_cluster_size_bulk
     DISTANCE_THRESHOLD = args.distance_threshold
     MIN_FEATURE_FREQ = args.min_feature_freq
     SHOW_DENDROGRAM = args.show_dendrogram
-
+    MINIMUM_READS_TO_PROCESS = MIN_CLUSTER_SIZE_BULK
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
     MODS = [m for m in CLUSTER_COLS if m != "introns"]
-
-    MINIMUM_READS_TO_PROCESS = 40
-    MIN_CLUSTER_SIZE_IN_SAMPLE = 10
 
     # -------------------- begin processing -------------------- # 
 
@@ -576,10 +650,10 @@ def cluster_transcripts(args):
                     raise ValueError("not enough reads to process!")
 
                 if MIN_CLUSTER_PERC is not None:
-                    min_cluster_size = max(MIN_CLUSTER_SIZE_IN_SAMPLE * len(bam_labels), int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
+                    min_cluster_size = max(MIN_CLUSTER_SIZE_BULK, int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
                     print("USING MIN_CLUSTER_PERC {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
                 else:
-                    min_cluster_size = MIN_CLUSTER_SIZE
+                    min_cluster_size = MIN_CLUSTER_SIZE_BULK
                     print("USING MIN_CLUSTER_SIZE: min_cluster_size = {}".format(min_cluster_size))
 
 
