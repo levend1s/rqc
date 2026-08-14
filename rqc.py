@@ -186,6 +186,7 @@ def build_parser():
     cluster_transcripts_parser.add_argument("--distance_threshold", required=False, type=float, default=0.1, help="distance threshold for clustering (default: 0.1)")
     cluster_transcripts_parser.add_argument("--show_dendrogram", action="store_true", help="if provided, show dendrogram of clustering results")
     cluster_transcripts_parser.add_argument("--min_feature_freq", required=False, type=float, default=0.01, help="minimum frequency of a feature to be considered for clustering (default: 0.01)")
+    cluster_transcripts_parser.add_argument("--exclusivity_threshold", required=False, type=float, default=0.5, help="minimum exclusivity score to consider a feature as mutually exclusive (default: 0.5)")
 
     cluster_transcripts_parser.set_defaults(func=cluster_transcripts.cluster_transcripts)
 

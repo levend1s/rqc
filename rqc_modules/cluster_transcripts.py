@@ -4,26 +4,25 @@ import sys
 import pandas
 import pysam
 import numpy
+from collections import Counter
 
 from sklearn.preprocessing import MultiLabelBinarizer
 
 from rqc_modules.constants import PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
 
-from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.spatial.distance import pdist, squareform
+from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
+from scipy.spatial.distance import pdist
 
-from scipy.cluster.hierarchy import dendrogram
 from matplotlib import pyplot as plt
-from collections import Counter
-
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib import cm
 import matplotlib
 
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
+import seaborn as sns
+from scipy.stats import fisher_exact, combine_pvalues
 
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
@@ -37,6 +36,99 @@ def timeit(func):
         print(f"{func.__name__} took {t1-t0:.3f}s")
         return res
     return _wrapped
+
+def combine_exclusivity_scores(exclusivity_df, target_prefixes, min_expected_both=1.0):
+    """
+    For each target token, combine exclusivity_score across all its
+    predictors using a weighted average — weighted by STATISTICAL
+    CONFIDENCE (-log10(p_value)) rather than expected_both, so a common
+    but weakly-associated predictor doesn't dominate the average just
+    because it has high expected co-occurrence.
+
+    Also reports the single strongest individual predictor per side, so
+    a diluted combined average doesn't hide a genuinely strong signal.
+    """
+    empty_columns = [
+        "target",
+        "n_exclusive_predictors", "exclusive_predictors", "combined_exclusivity_score",
+        "top_exclusive_predictor", "top_exclusive_score",
+        "n_cooccurring_predictors", "cooccurring_predictors", "combined_cooccurrence_score",
+        "top_cooccurring_predictor", "top_cooccurring_score",
+    ]
+
+    if exclusivity_df is None or len(exclusivity_df) == 0:
+        return pandas.DataFrame(columns=empty_columns)
+
+    target_to_pairs = {}
+    for _, r in exclusivity_df.iterrows():
+        a, b = r["token_a"], r["token_b"]
+        score = r["exclusivity_score"]
+        expected_both = r["expected_both"]
+        p_value = r["p_value"]
+
+        if expected_both < min_expected_both or pandas.isna(score):
+            continue
+
+        a_is_target = a.startswith(target_prefixes)
+        b_is_target = b.startswith(target_prefixes)
+
+        if a_is_target and not b_is_target:
+            target_tok, predictor_tok = a, b
+        elif b_is_target and not a_is_target:
+            target_tok, predictor_tok = b, a
+        else:
+            continue
+
+        # confidence weight: -log10(p), clipped so p=0 doesn't blow up to inf
+        p_clipped = max(p_value, 1e-300)
+        weight = -numpy.log10(p_clipped)
+
+        target_to_pairs.setdefault(target_tok, []).append((predictor_tok, score, weight))
+
+    results = []
+    for target_tok, entries in target_to_pairs.items():
+        exclusive_entries = [e for e in entries if e[1] >= 0]
+        cooccurring_entries = [e for e in entries if e[1] < 0]
+
+        def weighted_avg(subset):
+            if not subset:
+                return numpy.nan
+            w_sum = sum(e[2] for e in subset)
+            if w_sum == 0:
+                return numpy.nan
+            return sum(s * w for _, s, w in subset) / w_sum
+
+        def top_entry(subset, most_extreme_fn):
+            if not subset:
+                return None, numpy.nan
+            best = most_extreme_fn(subset, key=lambda e: e[1])
+            return best[0], best[1]
+
+        excl_score = weighted_avg(exclusive_entries)
+        coocc_score = weighted_avg(cooccurring_entries)
+
+        # print(f"Target {target_tok}: {len(exclusive_entries)} exclusive, {len(cooccurring_entries)} co-occurring predictors. Combined exclusivity score: {excl_score:.3f}, combined co-occurrence score: {coocc_score:.3f}")
+        # print(f"Exclusive entries: {exclusive_entries}")
+        # print(f"Co-occurring entries: {cooccurring_entries}")
+
+        top_excl_pred, top_excl_score = top_entry(exclusive_entries, max)          # highest (most exclusive)
+        top_coocc_pred, top_coocc_score = top_entry(cooccurring_entries, min)      # most negative (most co-occurring)
+
+        results.append({
+            "target": target_tok,
+            "n_exclusive_predictors": len(exclusive_entries),
+            "exclusive_predictors": [e[0] for e in exclusive_entries],
+            "combined_exclusivity_score": excl_score,
+            "top_exclusive_predictor": top_excl_pred,
+            "top_exclusive_score": top_excl_score,
+            "n_cooccurring_predictors": len(cooccurring_entries),
+            "cooccurring_predictors": [e[0] for e in cooccurring_entries],
+            "combined_cooccurrence_score": coocc_score,
+            "top_cooccurring_predictor": top_coocc_pred,
+            "top_cooccurring_score": top_coocc_score,
+        })
+
+    return pandas.DataFrame(results, columns=empty_columns) if results else pandas.DataFrame(columns=empty_columns)
 
 def merge_small_clusters_tree_aware(labels, Z, min_size, weights=None):
     """
@@ -134,115 +226,250 @@ def merge_small_clusters_tree_aware(labels, Z, min_size, weights=None):
     return labels
 
 
-from scipy.stats import fisher_exact
-from statsmodels.stats.multitest import multipletests
-import itertools
-import seaborn as sns
-
-
-def find_correlated_events_multivariate(rows, target_prefixes=None, predictor_prefixes=None,
-                                          min_count=5, fdr_threshold=0.05, show_heatmap=False):
+def combine_predictor_evidence(exclusivity_df, target_prefixes, method="fisher"):
     """
-    rows : list[list[str]]
-        Per-read token lists that have ALREADY been filtered upstream
-        (e.g. by min_feature_freq in run_pairwise_clustering). This
-        function does not re-filter by frequency — it just builds the
-        binary matrix directly from what's passed in.
+    For each target token, combine the p-values of ALL its associated
+    predictors (regardless of individual significance) into a single
+    combined p-value, using Fisher's method (or another scipy-supported
+    method). This lets weak-but-consistent evidence across multiple
+    predictors accumulate into stronger evidence for the target.
 
-    min_count : int
-        Minimum reads a token must appear in to be usable as a target
-        or predictor in the regression (guards against unstable fits on
-        near-constant columns even after upstream filtering). Set to 0
-        or 1 to skip this safety check entirely.
+    CAVEAT: this assumes predictors are reasonably independent. If your
+    predictors are correlated (e.g. nearby m6A sites that tend to be
+    modified together), this will overstate significance. Consider
+    checking predictor correlation before trusting results here.
+
+    Parameters
+    ----------
+    exclusivity_df : pandas.DataFrame
+        Output of find_mutually_exclusive_pairs — needs token_a, token_b,
+        p_value (raw, not p_adj — combine raw p-values, then correct once
+        at the end across targets).
+    target_prefixes : str or tuple[str, ...]
+        Prefix(es) identifying which token in each pair is the target.
+    method : str
+        Method passed to scipy.stats.combine_pvalues ("fisher", "pearson",
+        "tippett", "stouffer", etc.).
+
+    Returns
+    -------
+    pandas.DataFrame with columns:
+        target, n_predictors, predictors, combined_statistic,
+        combined_p_value, combined_p_adj
+    One row per target token.
     """
+    target_to_pvals = {}
+    target_to_predictors = {}
+
+    for _, r in exclusivity_df.iterrows():
+        a, b, p = r["token_a"], r["token_b"], r["p_value"]
+
+        a_is_target = a.startswith(target_prefixes)
+        b_is_target = b.startswith(target_prefixes)
+
+        if a_is_target and not b_is_target:
+            target_tok, predictor_tok = a, b
+        elif b_is_target and not a_is_target:
+            target_tok, predictor_tok = b, a
+        else:
+            continue  # ambiguous — skip
+
+        target_to_pvals.setdefault(target_tok, []).append(p)
+        target_to_predictors.setdefault(target_tok, []).append(predictor_tok)
+
+    results = []
+    for target_tok, pvals in target_to_pvals.items():
+        # combine_pvalues needs at least 1 p-value; guard tiny/degenerate p's
+        pvals_clean = [max(p, 1e-300) for p in pvals]  # avoid log(0) issues in fisher's method
+        stat, combined_p = combine_pvalues(pvals_clean, method=method)
+
+        results.append({
+            "target": target_tok,
+            "n_predictors": len(pvals),
+            "predictors": target_to_predictors[target_tok],
+            "combined_statistic": stat,
+            "combined_p_value": combined_p,
+        })
+
+    res_df = pandas.DataFrame(results)
+    if len(res_df) > 0:
+        res_df["combined_p_adj"] = multipletests(res_df["combined_p_value"], method="fdr_bh")[1]
+        res_df = res_df.sort_values("combined_p_adj")
+
+    return res_df
+
+def find_mutually_exclusive_pairs(rows, allowed_tokens=None, target_prefixes=None,
+                                    predictor_prefixes=None, min_individual_count=5):
+    """
+    Rank token pairs by mutual exclusivity, prioritizing pairs that are
+    BOTH reasonably common individually AND never (or almost never)
+    co-occur — rather than pairs that just happen to have few reads.
+
+    Returns a dataframe sorted with the most exclusive pairs first.
+    """
+    if allowed_tokens is not None:
+        rows = [[t for t in tokens if t in allowed_tokens] for tokens in rows]
+
     mlb_full = MultiLabelBinarizer()
     X_full = mlb_full.fit_transform(rows)
     tokens = numpy.array(mlb_full.classes_)
-
     n_reads = len(rows)
-    token_counts = X_full.sum(axis=0)
-
-    # --- print every token and its count, sorted descending ---
-    print(f"\nToken counts (n_reads={n_reads}):")
-    order = numpy.argsort(-token_counts)
-    for idx in order:
-        tok = tokens[idx]
-        cnt = token_counts[idx]
-        print(f"  {tok:40s} {cnt:6d}  ({cnt/n_reads:.2%})")
-    print()
 
     target_idx = [i for i, t in enumerate(tokens) if target_prefixes is None or t.startswith(target_prefixes)]
+    predictor_idx_all = [i for i, t in enumerate(tokens) if predictor_prefixes is None or t.startswith(predictor_prefixes)]
 
     results = []
     for ti in target_idx:
-        target_tok = tokens[ti]
-        y = X_full[:, ti]
-
-        predictor_idx = [
-            i for i in range(len(tokens))
-            if i != ti and (predictor_prefixes is None or tokens[i].startswith(predictor_prefixes))
-        ]
-        if len(predictor_idx) == 0:
-            continue
-
-        Xp = X_full[:, predictor_idx]
-        pred_toks = tokens[predictor_idx]
-
-        # drop predictors with ~zero variance among these reads (all 0s or all 1s)
-        var_mask = (Xp.sum(axis=0) >= min_count) & (Xp.sum(axis=0) <= len(y) - min_count)
-        if var_mask.sum() == 0:
-            continue
-        Xp = Xp[:, var_mask]
-        pred_toks = pred_toks[var_mask]
-
-        Xp_const = sm.add_constant(Xp)
-
-        try:
-            model = sm.Logit(y, Xp_const)
-            fit = model.fit(disp=0, method="newton", maxiter=100)
-        except Exception:
-            try:
-                fit = model.fit_regularized(disp=0, alpha=0.1, maxiter=200)
-            except Exception:
+        for pi in predictor_idx_all:
+            if ti == pi:
                 continue
 
-        params = fit.params[1:]
-        pvals = getattr(fit, "pvalues", None)
-        pvals = pvals[1:] if pvals is not None else numpy.full(len(params), numpy.nan)
+            a = X_full[:, ti]
+            b = X_full[:, pi]
 
-        for pt, coef, p in zip(pred_toks, params, pvals):
+            n_a = int(a.sum())
+            n_b = int(b.sum())
+            n_both = int(((a == 1) & (b == 1)).sum())
+
+            # both tokens need to individually be common enough to be meaningful
+            if n_a < min_individual_count or n_b < min_individual_count:
+                continue
+
+            # expected co-occurrence under independence
+            expected_both = (n_a * n_b) / n_reads
+
+            # exclusivity score: how far actual co-occurrence falls short of
+            # what you'd expect by chance, normalized by expectation.
+            # 1.0 = perfectly exclusive (0 actual vs some expected)
+            # 0.0 = exactly as expected by chance
+            # negative = co-occurring MORE than expected
+            exclusivity_score = (expected_both - n_both) / expected_both if expected_both > 0 else numpy.nan
+
+            table = [[n_both, n_a - n_both], [n_b - n_both, n_reads - n_a - n_b + n_both]]
+            _, p = fisher_exact(table)
+
             results.append({
-                "target": target_tok,
-                "predictor": pt,
-                "coef": coef,
-                "odds_ratio": numpy.exp(coef),
+                "token_a": tokens[ti],
+                "token_b": tokens[pi],
+                "n_a": n_a,
+                "n_b": n_b,
+                "n_both": n_both,
+                "expected_both": round(expected_both, 2),
+                "exclusivity_score": exclusivity_score,
                 "p_value": p,
             })
 
     if not results:
-        print("No valid target/predictor combinations — nothing to test.")
-        return pandas.DataFrame(), pandas.DataFrame()
+        return pandas.DataFrame()
 
     res_df = pandas.DataFrame(results)
-    valid_p = res_df["p_value"].notna()
-    res_df.loc[valid_p, "p_adj"] = multipletests(res_df.loc[valid_p, "p_value"], method="fdr_bh")[1]
-    res_df = res_df.sort_values("p_adj")
+    # dedupe symmetric pairs (a,b) and (b,a) if target/predictor prefixes overlap
+    res_df["pair_key"] = res_df.apply(lambda r: tuple(sorted([r["token_a"], r["token_b"]])), axis=1)
+    res_df = res_df.drop_duplicates("pair_key").drop(columns="pair_key")
 
-    significant = res_df[res_df["p_adj"] < fdr_threshold].sort_values("coef")
+    res_df["p_adj"] = multipletests(res_df["p_value"], method="fdr_bh")[1]
+    res_df = res_df.sort_values(["n_both", "exclusivity_score"], ascending=[True, False])
 
-    if show_heatmap and len(res_df) > 0:
-        pivot = res_df.pivot_table(index="target", columns="predictor", values="coef")
-        plt.figure(figsize=(max(6, pivot.shape[1] * 0.4), max(5, pivot.shape[0] * 0.4)))
-        sns.heatmap(pivot, cmap="RdBu_r", center=0, xticklabels=True, yticklabels=True)
-        plt.title("Adjusted association (logistic regression coefficient)\ncontrolling for all other features")
-        plt.tight_layout()
-        plt.show()
+    return res_df
 
-    return res_df, significant
+def annotate_clusters_with_combined_exclusivity(cluster_summary_df, labels, rows,
+                                                   combined_scores_df,
+                                                   exclusivity_score_threshold=0.7,
+                                                   present_frac_threshold=0.5):
+    """
+    For each cluster (one row per cluster), find which target tokens it
+    carries (>= present_frac_threshold of reads), and attach that target's
+    pre-combined exclusivity/co-occurrence scores from combined_scores_df.
+
+    Parameters
+    ----------
+    combined_scores_df : pandas.DataFrame
+        Output of combine_exclusivity_scores — one row per target, with
+        combined_exclusivity_score, combined_cooccurrence_score, and the
+        associated predictor lists.
+    exclusivity_score_threshold : float
+        Only targets with combined_exclusivity_score >= this are matched.
+        Set to None to skip this filter and match on target presence alone.
+    present_frac_threshold : float
+        Fraction of a cluster's reads that must carry a target token for
+        it to count as "present" in that cluster.
+
+    Returns
+    -------
+    pandas.DataFrame with columns:
+        cluster, n_samples, target, combined_exclusivity_score,
+        exclusive_predictors, combined_cooccurrence_score, cooccurring_predictors
+    Each of target/combined_exclusivity_score/etc. holds a LIST — one
+    entry per matched target token, aligned by position. Empty lists if
+    no matches for that cluster.
+    """
+
+    required_cols = ["target", "combined_exclusivity_score", "exclusive_predictors", "combined_cooccurrence_score", "cooccurring_predictors"]
+    if combined_scores_df is None or len(combined_scores_df) == 0 or "combined_exclusivity_score" not in combined_scores_df.columns:
+        candidates = pandas.DataFrame(columns=required_cols)
+    else:
+        candidates = combined_scores_df
+        if exclusivity_score_threshold is not None:
+            candidates = candidates[candidates["combined_exclusivity_score"] >= exclusivity_score_threshold]
+
+    candidates = combined_scores_df
+    if exclusivity_score_threshold is not None:
+        candidates = candidates[
+            candidates["combined_exclusivity_score"] >= exclusivity_score_threshold
+        ]
+
+    n_samples_lookup = dict(zip(cluster_summary_df["cluster"], cluster_summary_df["n_samples"]))
+    cluster_ids_sorted = sorted(set(labels))
+    cluster_name_lookup = {cid: name for cid, name in zip(cluster_ids_sorted, cluster_summary_df["cluster"])}
+
+    per_cluster_tokens = {}
+    for cid in cluster_ids_sorted:
+        idx = [i for i, lbl in enumerate(labels) if lbl == cid]
+        counts = Counter()
+        for i in idx:
+            counts.update(set(rows[i]))
+        n = len(idx)
+        per_cluster_tokens[cid] = {tok: c / n for tok, c in counts.items()}
+
+    result_rows = []
+    for cid in cluster_ids_sorted:
+        tok_freqs = per_cluster_tokens[cid]
+        present_tokens = {t for t, f in tok_freqs.items() if f >= present_frac_threshold}
+        cluster_name = cluster_name_lookup.get(cid, f"cluster_{cid}")
+        n_samples = n_samples_lookup.get(cluster_name, None)
+
+        target_list = []
+        excl_score_list = []
+        excl_predictors_list = []
+        coocc_score_list = []
+        coocc_predictors_list = []
+
+        for _, r in candidates.iterrows():
+            if r["target"] in present_tokens:
+                target_list.append(r["target"])
+                excl_score_list.append(r["combined_exclusivity_score"])
+                excl_predictors_list.append(r["exclusive_predictors"])
+                coocc_score_list.append(r["combined_cooccurrence_score"])
+                coocc_predictors_list.append(r["cooccurring_predictors"])
+
+        result_rows.append({
+            "cluster": cluster_name,
+            "n_samples": n_samples,
+            "target": target_list,
+            "combined_exclusivity_score": excl_score_list,
+            "exclusive_predictors": excl_predictors_list,
+            "combined_cooccurrence_score": coocc_score_list,
+            "cooccurring_predictors": coocc_predictors_list,
+        })
+
+    return pandas.DataFrame(result_rows, columns=[
+        "cluster", "n_samples", "target", "combined_exclusivity_score",
+        "exclusive_predictors", "combined_cooccurrence_score", "cooccurring_predictors"
+    ])
 
 # https://uc-r.github.io/hc_clustering
-def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, show_dendrogram=False):
-    rows = []
+def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, exclusivity_score_threshold=0.5, show_dendrogram=False):
+    rows_of_tokens = []
 
     for _, row in df.iterrows():
         tokens = []
@@ -254,39 +481,17 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
             else:
                 for value in row.get(col, []) or []:
                     tokens.append(f"{col}_{value}")
-        rows.append(tokens)
+        rows_of_tokens.append(tokens)
 
     # --- Drop rare features: keep only tokens present in >= min_feature_freq of reads ---
     min_token_rows = int(numpy.ceil(min_feature_freq * len(df)))
     token_row_counts = Counter()
-    for tokens in rows:
+    for tokens in rows_of_tokens:
         for t in set(tokens):  # count once per row, even if repeated within a row
             token_row_counts[t] += 1
 
     keep_tokens = {t for t, c in token_row_counts.items() if c >= min_token_rows}
-    n_dropped = len(token_row_counts) - len(keep_tokens)
-    # print(f"Dropping {n_dropped} of {len(token_row_counts)} tokens below {min_feature_freq:.1%} frequency "
-    #       f"(< {min_token_rows} of {len(df)} reads)")
-
-    rows = [[t for t in tokens if t in keep_tokens] for tokens in rows]
-
-    print("Top tokens after filtering:")
-    for token, count in token_row_counts.most_common(10):
-        if token in keep_tokens:
-            print(f"  {token}: {count} ({count/len(df):.2%})")
-
-    # --- optional: test for correlated / mutually exclusive feature pairs ---
-    check_correlations = True
-    # NOTE only works for pairs of features
-    if check_correlations:
-        corr_all, corr_sig = find_correlated_events_multivariate(
-            rows,
-            target_prefixes="introns",
-            predictor_prefixes="m6A",
-            min_count=min_token_rows,   # reuse the SAME threshold as the rest of the function
-            fdr_threshold=0.05,
-            show_heatmap=True,
-        )
+    rows = [[t for t in tokens if t in keep_tokens] for tokens in rows_of_tokens]
 
     # --- Deduplicate: cluster unique patterns, weighted by how many rows share them ---
     pattern_key = [tuple(sorted(set(tokens))) for tokens in rows]
@@ -325,34 +530,89 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
         # keep names filesystem/column-friendly: no spaces, slashes, etc.
         return re.sub(r"[^0-9a-zA-Z_]+", "-", tok)
 
+    min_cluster_freq = 0.5      # token must be present in at least 50% of this cluster's reads
+    min_enrichment = 2.0        # AND at least 2x more frequent in this cluster than elsewhere
+
     cluster_names = {}
     cluster_summary = []
+    important_tokens = set()
+
+    n_total = len(rows)
+    global_counts = Counter()
+    for tokens in rows:
+        global_counts.update(set(tokens))
+
     for cluster_id in sorted(set(labels)):
         idx = [i for i, lbl in enumerate(labels) if lbl == cluster_id]
+        n_cluster = len(idx)
+
         counts = Counter()
         for i in idx:
             counts.update(set(rows[i]))
-        top = counts.most_common(top_n)
-        top_str = ", ".join(f"{tok} ({c}/{len(idx)})" for tok, c in top)
 
-        top_tokens_clean = [sanitize(tok) for tok, _ in top]
-        cluster_name = "_".join([f"cluster{cluster_id}"] + top_tokens_clean)
+        # --- filter to tokens that are actually characteristic of this cluster ---
+        candidates = []
+        for tok, c_in in counts.items():
+            freq_in_cluster = c_in / n_cluster
+
+            c_total = global_counts[tok]
+            c_out = c_total - c_in
+            n_out = n_total - n_cluster
+            freq_outside = c_out / n_out if n_out > 0 else 0.0
+
+            # avoid divide-by-zero when a token is unique to this cluster (freq_outside == 0)
+            enrichment = freq_in_cluster / freq_outside if freq_outside > 0 else numpy.inf
+
+            if freq_in_cluster >= min_cluster_freq and enrichment >= min_enrichment:
+                candidates.append((tok, c_in, freq_in_cluster, enrichment))
+
+        # sort defining tokens by within-cluster frequency (most consistent first)
+        candidates.sort(key=lambda x: x[2], reverse=True)
+
+        top_n = 10
+        top = candidates[:top_n]
+        top_str = ", ".join(f"{tok} ({c}/{n_cluster}, {enr:.1f}x enriched)" for tok, c, freq, enr in top)
+
+        top_tokens_clean = [sanitize(tok) for tok, _, _, _ in top]
+        cluster_name = "_".join([f"cluster{cluster_id}"] + top_tokens_clean) if top_tokens_clean else f"cluster{cluster_id}"
         cluster_names[cluster_id] = cluster_name
+
+        important_tokens.update(tok for tok, _, _, _ in top)
 
         cluster_summary.append({
             "cluster": cluster_name,
-            "n_samples": len(idx),
+            "n_samples": n_cluster,
             "top_positions": top_str,
         })
 
     df_out = df.copy()
     df_out["combined_primary_itemset"] = [cluster_names[int(lbl)] for lbl in labels]
 
+    # --- optional: test for correlated / mutually exclusive feature pairs ---
+    exclusivity_df = find_mutually_exclusive_pairs(
+        rows,
+        allowed_tokens=important_tokens,
+        target_prefixes="introns",
+        predictor_prefixes="m6A",
+        min_individual_count=5,
+    )
+
+    combined_scores = combine_exclusivity_scores(exclusivity_df, target_prefixes="introns")
+    # print(combined_scores)
+    # print(exclusivity_df)
+    # print(important_tokens)
+    cluster_summary_df = pandas.DataFrame(cluster_summary)
+    cluster_summary_df = annotate_clusters_with_combined_exclusivity(
+        cluster_summary_df,
+        labels=labels,
+        rows=rows,
+        combined_scores_df=combined_scores,
+        exclusivity_score_threshold=exclusivity_score_threshold,
+        present_frac_threshold=0.5,
+    )
+
     # ------------------ plot dendrogram ---------------------
     if show_dendrogram:
-        for i, count in pattern_counts.most_common(10):
-            label = ", ".join(unique_rows[i])
-            print(f"{count:4d}  {label}")
         n_leaves = X.shape[0]
 
         if n_leaves < 2:
@@ -431,15 +691,12 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
                 title="Cluster",
             )
 
-            # blue_leaf_positions = [pos for pos, orig_idx in enumerate(ddata["leaves"]) if unique_labels_arr[orig_idx] == 3]
-            # print(blue_leaf_positions)
-
             plt.xlabel("")
             plt.tight_layout()  # reserve right 15% of figure for the legend
 
             plt.show()
 
-    return df_out, pandas.DataFrame(cluster_summary)
+    return df_out, cluster_summary_df
 
 def gather_read_entries_for_region(
     row,
@@ -572,6 +829,7 @@ def cluster_transcripts(args):
     MIN_FEATURE_FREQ = args.min_feature_freq
     SHOW_DENDROGRAM = args.show_dendrogram
     MINIMUM_READS_TO_PROCESS = MIN_CLUSTER_SIZE_BULK
+    EXCLUSIVITY_THRESHOLD = args.exclusivity_threshold
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
     MODS = [m for m in CLUSTER_COLS if m != "introns"]
 
@@ -621,10 +879,14 @@ def cluster_transcripts(args):
     }
 
     all_count_tables = []
+    all_cluster_summaries = []
 
     try:
         # ------------------- MAIN READ AND FEATURE EXTRACTION LOOP FROM BAMFILES ------------------- #
         for _, row in matches.iterrows():
+            if row["seq_id"] != "Pf3D7_12_v3":
+                print("skipping {}...".format(row["ID"]))
+                continue
             print("processing {}...".format(row["ID"]))
             read_entries = []
 
@@ -651,39 +913,23 @@ def cluster_transcripts(args):
 
                 if MIN_CLUSTER_PERC is not None:
                     min_cluster_size = max(MIN_CLUSTER_SIZE_BULK, int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
-                    print("USING MIN_CLUSTER_PERC {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
+                    # print("USING MIN_CLUSTER_PERC {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
                 else:
                     min_cluster_size = MIN_CLUSTER_SIZE_BULK
-                    print("USING MIN_CLUSTER_SIZE: min_cluster_size = {}".format(min_cluster_size))
+                    # print("USING MIN_CLUSTER_SIZE: min_cluster_size = {}".format(min_cluster_size))
 
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
-                df_clustered, closed_sets = run_pairwise_clustering(
-                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, MIN_FEATURE_FREQ, SHOW_DENDROGRAM
+                df_clustered, cluster_summary = run_pairwise_clustering(
+                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, MIN_FEATURE_FREQ, EXCLUSIVITY_THRESHOLD,SHOW_DENDROGRAM
                 )
 
                 df_clustered["cluster"] = df_clustered["combined_primary_itemset"]
-                
-        
-                # ---------- optional UMAP only for visualization ----------
-                if len(matches) == 1:
-                    print("generating UMAP embedding (viz only)...")
+                # print(cluster_summary)
 
-                    # emb = umap.UMAP(
-                    #     n_neighbors=20,
-                    #     min_dist=0.3,
-                    #     metric="euclidean"
-                    # ).fit_transform(df_clustered)
-            
-                    # df_clustered["umap_x"] = emb[:, 0]
-                    # df_clustered["umap_y"] = emb[:, 1]
-                    # print("DONE")
-        
-                    # ---------- write ----------
-                    UMAP_OUTPUT_FILE = "{}.umap".format(OUTPUT_FILE)
-                    df_clustered.to_csv(UMAP_OUTPUT_FILE, sep="\t", index=False)
-                    print("UMAP_OUTPUT_FILE")
-                    print(f"Done. Wrote: {UMAP_OUTPUT_FILE}")
+                # ---------- tag cluster_summary with the same row_key used for ct, and accumulate ----------
+                cs = cluster_summary.copy()
+                cs["row_key"] = str(row["ID"]) + "_" + cs["cluster"].astype(str)
 
                 ct = (
                     df_clustered
@@ -692,6 +938,14 @@ def cluster_transcripts(args):
                     .size()
                     .unstack(fill_value=0)
                 )
+
+                # ---------- optional UMAP only for visualization ----------
+                if len(matches) == 1:
+                    UMAP_OUTPUT_FILE = "{}.umap".format(OUTPUT_FILE)
+                    df_clustered.to_csv(UMAP_OUTPUT_FILE, sep="\t", index=False)
+                    print("UMAP_OUTPUT_FILE")
+                    print(f"Done. Wrote: {UMAP_OUTPUT_FILE}")
+
             except ValueError as e:
                 print("ERROR:", e)
                 # fallback: one row ID_clusterNA with per-label counts
@@ -705,10 +959,15 @@ def cluster_transcripts(args):
                         .T
                     )
                     ct.index = [f"{row['ID']}_clusterNA"]
-            all_count_tables.append(ct)
 
-            # if row["seq_id"] == "Pf3D7_02_v3":
-            #     break
+                cs = pandas.DataFrame([{
+                    "cluster": "clusterNA",
+                    "n_samples": 0 if (df is None or df.empty) else len(df),
+                    "row_key": f"{row['ID']}_clusterNA",
+                }])
+
+            all_cluster_summaries.append(cs)
+            all_count_tables.append(ct)
             
     finally:
         # Always close all handles
@@ -727,3 +986,16 @@ def cluster_transcripts(args):
     out_df = main_count_table.rename_axis("ID_cluster").reset_index()
     out_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
     print(f"Done. Wrote: {OUTPUT_FILE}")
+
+    # ---------- write cluster summaries, ordered the same as the count table ----------
+    main_cluster_summary = (
+        pandas.concat(all_cluster_summaries, axis=0)
+        .set_index("row_key")
+        .rename_axis("ID_cluster")
+        .reindex(main_count_table.index)   # same order as main_count_table
+        .reset_index()
+    )
+
+    CLUSTER_SUMMARY_OUTPUT_FILE = "{}.cluster_summary.tsv".format(OUTPUT_FILE)
+    main_cluster_summary.to_csv(CLUSTER_SUMMARY_OUTPUT_FILE, sep="\t", index=False)
+    print(f"Done. Wrote: {CLUSTER_SUMMARY_OUTPUT_FILE}")
