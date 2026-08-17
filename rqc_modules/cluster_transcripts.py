@@ -698,6 +698,16 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
 
     return df_out, cluster_summary_df
 
+def overlap_length(read, region_start, region_end):
+    """Compute how many bp of a read's aligned blocks overlap [region_start, region_end)."""
+    total = 0
+    for block_start, block_end in read.get_blocks():  # aligned (ref-coordinate) blocks, excludes introns/deletions
+        ov_start = max(block_start, region_start)
+        ov_end = min(block_end, region_end)
+        if ov_end > ov_start:
+            total += ov_end - ov_start
+    return total
+
 def gather_read_entries_for_region(
     row,
     bam_labels,
@@ -707,6 +717,7 @@ def gather_read_entries_for_region(
     MIN_DELETION_LENGTH,
     MODS,
     PYSAM_MOD_THRESHOLD,
+    MIN_GENE_OVERLAP
 ):
     """
     Extract read entries from all BAM labels for a given annotation `row`.
@@ -728,6 +739,12 @@ def gather_read_entries_for_region(
                 stop=row["end"] + COVERAGE_PADDING,
             )
         )
+
+        if MIN_GENE_OVERLAP > 0:
+            READS_IN_REGION = [
+                read for read in READS_IN_REGION
+                if overlap_length(read, row["start"], row["end"]) >= MIN_GENE_OVERLAP
+            ]
 
         # filter reads
         for r in READS_IN_REGION:
@@ -830,6 +847,7 @@ def cluster_transcripts(args):
     SHOW_DENDROGRAM = args.show_dendrogram
     MINIMUM_READS_TO_PROCESS = MIN_CLUSTER_SIZE_BULK
     EXCLUSIVITY_THRESHOLD = args.exclusivity_threshold
+    MIN_GENE_OVERLAP = args.min_gene_overlap
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
     MODS = [m for m in CLUSTER_COLS if m != "introns"]
 
@@ -899,6 +917,7 @@ def cluster_transcripts(args):
                 MIN_DELETION_LENGTH,
                 MODS,
                 PYSAM_MOD_THRESHOLD,
+                MIN_GENE_OVERLAP
             )
 
             read_table = pandas.DataFrame(read_entries, columns=read_table_header)

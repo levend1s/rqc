@@ -71,6 +71,7 @@ all_clusters <- df %>% pull(cluster) %>% as.character() %>% unique()
 
 # CLUSTERS_TO_PROCESS <- as.character(head(all_clusters, 16))
 CLUSTERS_TO_PROCESS <- "all"
+# CLUSTERS_TO_PROCESS <- c("cluster1", "cluster3", "cluster4", "cluster57", "cluster58")
 # CLUSTERS_TO_PROCESS <- setdiff(all_clusters, "cluster2")
 
 # TODO: if many clusters, just process the biggest clusters and print a message
