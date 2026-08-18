@@ -24,6 +24,7 @@ from statsmodels.stats.multitest import multipletests
 import seaborn as sns
 from scipy.stats import fisher_exact, combine_pvalues
 import itertools
+from scipy.stats import spearmanr
 
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
@@ -37,6 +38,10 @@ def timeit(func):
         print(f"{func.__name__} took {t1-t0:.3f}s")
         return res
     return _wrapped
+
+def sanitize(tok):
+    # keep names filesystem/column-friendly: no spaces, slashes, etc.
+    return re.sub(r"[^0-9a-zA-Z_]+", "-", tok)
 
 def combine_exclusivity_scores(exclusivity_df, target_prefixes, min_expected_both=1.0):
     """
@@ -397,79 +402,136 @@ def annotate_clusters_with_combined_exclusivity(cluster_summary_df, labels, rows
     ])
 
 
-def build_phi_matrix(rows, allowed_tokens=None, min_count=5):
-    if allowed_tokens is not None:
-        rows = [[t for t in tokens if t in allowed_tokens] for tokens in rows]
+def build_cluster_feature_presence(rows, labels, cluster_names, min_cluster_reads=5):
+    """
+    STEP 1: cluster x feature presence matrix.
+    presence[cluster_name][feature] = fraction of that cluster's reads
+    containing the feature.
+    """
+    cluster_ids = sorted(set(labels))
+    all_features = sorted(set(tok for tokens in rows for tok in tokens))
 
-    mlb = MultiLabelBinarizer()
-    X = mlb.fit_transform(rows)
-    tokens = numpy.array(mlb.classes_)
-
-    counts = X.sum(axis=0)
-    keep = counts >= min_count
-    tokens, X = tokens[keep], X[:, keep]
-
-    n = X.shape[1]
-    phi = numpy.zeros((n, n))
-    for i, j in itertools.combinations(range(n), 2):
-        a, b = X[:, i], X[:, j]
-        n11 = int(((a == 1) & (b == 1)).sum())
-        n10 = int(((a == 1) & (b == 0)).sum())
-        n01 = int(((a == 0) & (b == 1)).sum())
-        n00 = int(((a == 0) & (b == 0)).sum())
-        denom = numpy.sqrt((n11+n10)*(n01+n00)*(n11+n01)*(n10+n00))
-        val = (n11*n00 - n10*n01) / denom if denom > 0 else 0.0
-        phi[i, j] = phi[j, i] = val
-    numpy.fill_diagonal(phi, 1.0)
-    return tokens, phi
-
-import networkx as nx
-
-def find_cooccurring_groups(tokens, phi, min_phi=0.3):
-    G = nx.Graph()
-    G.add_nodes_from(tokens)
-    n = len(tokens)
-    for i, j in itertools.combinations(range(n), 2):
-        if phi[i, j] >= min_phi:
-            G.add_edge(tokens[i], tokens[j], weight=phi[i, j])
-    groups = [set(c) for c in nx.connected_components(G) if len(c) > 1]
-    singleton_groups = [{t} for t in tokens if not any(t in g for g in groups)]
-    return groups + singleton_groups
-
-def group_opposition(rows, groups, min_count=5):
-    group_presence = []
-    for g in groups:
-        presence = numpy.array([1 if any(t in set(tokens) for t in g) else 0 for tokens in rows])
-        group_presence.append(presence)
-
-    n_reads = len(rows)
-    results = []
-    for i, j in itertools.combinations(range(len(groups)), 2):
-        a, b = group_presence[i], group_presence[j]
-        n_a, n_b = int(a.sum()), int(b.sum())
-        if n_a < min_count or n_b < min_count:
+    presence = {}
+    cluster_sizes = {}
+    for cid in cluster_ids:
+        idx = [i for i, lbl in enumerate(labels) if lbl == cid]
+        n = len(idx)
+        if n < min_cluster_reads:
             continue
-        n_both = int(((a == 1) & (b == 1)).sum())
-        expected_both = (n_a * n_b) / n_reads
-        exclusivity_score = (expected_both - n_both) / expected_both if expected_both > 0 else numpy.nan
 
-        table = [[n_both, n_a-n_both], [n_b-n_both, n_reads-n_a-n_b+n_both]]
-        _, p = fisher_exact(table)
+        cname = cluster_names.get(cid, f"cluster_{cid}")
+        cluster_sizes[cname] = n
+
+        counts = Counter()
+        for i in idx:
+            counts.update(set(rows[i]))
+
+        presence[cname] = {f: counts.get(f, 0) / n for f in all_features}
+
+    presence_df = pandas.DataFrame(presence).T  # rows = clusters, cols = features
+    presence_df = presence_df.fillna(0.0)
+    return presence_df, cluster_sizes
+
+
+def find_never_cooccurring_features(presence_df, present_threshold=0.5, min_clusters_present=2):
+    """
+    STEP 2: hard threshold version.
+    For every feature pair, check whether any cluster has BOTH features
+    "characteristic" (>= present_threshold) at once. Only considers
+    features that are characteristic of at least `min_clusters_present`
+    clusters at all (skips ultra-rare features with too little info).
+
+    Returns a dataframe of candidate mutually-exclusive pairs.
+    """
+    features = presence_df.columns
+    is_present = presence_df >= present_threshold  # bool matrix, clusters x features
+
+    # only test features that are "characteristic" of at least a couple clusters
+    feature_cluster_counts = is_present.sum(axis=0)
+    candidate_features = feature_cluster_counts[feature_cluster_counts >= min_clusters_present].index
+
+    results = []
+    for f1, f2 in itertools.combinations(candidate_features, 2):
+        co_present_clusters = presence_df.index[is_present[f1] & is_present[f2]].tolist()
+        f1_clusters = presence_df.index[is_present[f1]].tolist()
+        f2_clusters = presence_df.index[is_present[f2]].tolist()
 
         results.append({
-            "group_a": sorted(groups[i]),
-            "group_b": sorted(groups[j]),
-            "n_a": n_a, "n_b": n_b, "n_both": n_both,
-            "expected_both": round(expected_both, 2),
-            "exclusivity_score": exclusivity_score,
-            "p_value": p,
+            "feature_a": f1,
+            "feature_b": f2,
+            "n_clusters_a": len(f1_clusters),
+            "n_clusters_b": len(f2_clusters),
+            "n_clusters_both": len(co_present_clusters),
+            "never_cooccur": len(co_present_clusters) == 0,
         })
 
     res_df = pandas.DataFrame(results)
     if len(res_df):
-        res_df["p_adj"] = multipletests(res_df["p_value"], method="fdr_bh")[1]
-        res_df = res_df.sort_values("exclusivity_score", ascending=False)
+        res_df = res_df.sort_values(["never_cooccur", "n_clusters_a", "n_clusters_b"],
+                                     ascending=[False, False, False])
     return res_df
+
+
+def correlate_feature_presence_across_clusters(presence_df, min_clusters_present=2, min_nonzero_variance=True):
+    """
+    STEP 3: soft version. Correlate each feature pair's presence
+    fractions ACROSS clusters (not across reads). rho close to -1
+    means: whenever one feature is common in a cluster, the other
+    tends to be rare in that same cluster.
+    """
+    features = presence_df.columns
+
+    # skip features that are ~constant across clusters (no info, spearman undefined/meaningless)
+    if min_nonzero_variance:
+        variances = presence_df.var(axis=0)
+        features = variances[variances > 0].index
+
+    results = []
+    for f1, f2 in itertools.combinations(features, 2):
+        x = presence_df[f1]
+        y = presence_df[f2]
+
+        n_clusters_either = int(((x > 0) | (y > 0)).sum())
+        if n_clusters_either < min_clusters_present:
+            continue
+
+        rho, p = spearmanr(x, y)
+        results.append({
+            "feature_a": f1,
+            "feature_b": f2,
+            "n_clusters_compared": len(presence_df),
+            "spearman_rho": rho,
+            "spearman_p": p,
+        })
+
+    res_df = pandas.DataFrame(results)
+    if len(res_df):
+        res_df = res_df.sort_values("spearman_rho")  # most negative (opposing) first
+    return res_df
+
+
+def rank_candidate_opposing_pairs(presence_df, present_threshold=0.5,
+                                    min_clusters_present=2, top_n=50):
+    """
+    STEP 4: combine hard-threshold and correlation views into one
+    ranked candidate list, restricted to intron-vs-m6A pairs
+    (adjust the prefix filter to your actual token naming).
+    """
+    never_df = find_never_cooccurring_features(presence_df, present_threshold, min_clusters_present)
+    corr_df = correlate_feature_presence_across_clusters(presence_df, min_clusters_present)
+
+    merged = pandas.merge(never_df, corr_df, on=["feature_a", "feature_b"], how="outer")
+
+    # restrict to cross-type pairs (intron vs m6A), drop same-type pairs
+    def is_cross_type(row):
+        a_is_intron = row["feature_a"].startswith("introns")
+        b_is_intron = row["feature_b"].startswith("introns")
+        return a_is_intron != b_is_intron  # exactly one is an intron
+
+    merged = merged[merged.apply(is_cross_type, axis=1)]
+
+    merged = merged.sort_values(["never_cooccur", "spearman_rho"], ascending=[False, True])
+    return merged.head(top_n)
 
 # https://uc-r.github.io/hc_clustering
 def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, exclusivity_score_threshold=0.5, show_dendrogram=False):
@@ -530,10 +592,6 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
     # --- build descriptive cluster names from top features ---
     top_n = 10
 
-    def sanitize(tok):
-        # keep names filesystem/column-friendly: no spaces, slashes, etc.
-        return re.sub(r"[^0-9a-zA-Z_]+", "-", tok)
-
     min_cluster_freq = 0.5      # token must be present in at least 50% of this cluster's reads
     min_enrichment = 2.0        # AND at least 2x more frequent in this cluster than elsewhere
 
@@ -593,38 +651,29 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
     df_out["combined_primary_itemset"] = [cluster_names[int(lbl)] for lbl in labels]
 
     # --- optional: test for correlated / mutually exclusive feature pairs ---
-    exclusivity_df = find_mutually_exclusive_pairs(
-        rows,
-        allowed_tokens=important_tokens,
-        target_prefixes="introns",
-        predictor_prefixes="m6A",
-        min_individual_count=5,
+    presence_df, cluster_sizes = build_cluster_feature_presence(rows, labels, cluster_names, min_cluster_reads=5)
+
+    candidates_df = rank_candidate_opposing_pairs(
+        presence_df,
+        present_threshold=0.5,
+        min_clusters_present=2,
+        top_n=50,
     )
+    print(candidates_df.to_string(index=False))
 
-    tokens, phi = build_phi_matrix(rows, allowed_tokens=important_tokens, min_count=5)
-    groups = find_cooccurring_groups(tokens, phi, min_phi=0.3)
-    print(f"Found {len(groups)} co-occurring token groups:")
-    for g in groups:
-        if len(g) > 1:
-            print(" ", sorted(g))
+    top_pairs = candidates_df.head(10)
+    for _, r in top_pairs.iterrows():
+        intron_tok = r["feature_a"] if r["feature_a"].startswith("introns") else r["feature_b"]
+        m6a_tok = r["feature_b"] if intron_tok == r["feature_a"] else r["feature_a"]
 
-    opposition_df = group_opposition(rows, groups, min_count=5)
-    print(opposition_df[opposition_df["exclusivity_score"] > 0.5].to_string(index=False))
-
-    combined_scores = combine_exclusivity_scores(exclusivity_df, target_prefixes="introns")
-    # print(combined_scores)
-    # print(exclusivity_df)
-    # print(important_tokens)
-    cluster_summary_df = pandas.DataFrame(cluster_summary)
-    cluster_summary_df = annotate_clusters_with_combined_exclusivity(
-        cluster_summary_df,
-        labels=labels,
-        rows=rows,
-        combined_scores_df=combined_scores,
-        exclusivity_score_threshold=exclusivity_score_threshold,
-        present_frac_threshold=0.5,
-    )
-
+        # reuse your existing read-level test, ideally stratified by `label`/sample
+        result = find_mutually_exclusive_pairs(
+            rows, allowed_tokens={intron_tok, m6a_tok},
+            target_prefixes="introns", predictor_prefixes="m6A",
+            min_individual_count=5,
+        )
+        print(intron_tok, m6a_tok, "->")
+        print(result.to_string(index=False))
     # ------------------ plot dendrogram ---------------------
     if show_dendrogram:
         n_leaves = X.shape[0]
