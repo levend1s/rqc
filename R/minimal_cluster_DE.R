@@ -56,7 +56,7 @@ excl <- excl %>%
     has_exclusivity_score = !(is.na(combined_exclusivity_score) |
                                 combined_exclusivity_score %in% c("", "[]", "NA"))
   ) %>%
-  select(ID_cluster, has_exclusivity_score, target, exclusive_predictors)
+  select(ID_cluster, has_exclusivity_score, target, exclusive_predictors, combined_exclusivity_score)
 
 res <- res %>%
   left_join(excl, by = "ID_cluster") %>%

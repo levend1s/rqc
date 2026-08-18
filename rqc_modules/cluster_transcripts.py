@@ -23,6 +23,7 @@ import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
 import seaborn as sns
 from scipy.stats import fisher_exact, combine_pvalues
+import itertools
 
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
@@ -226,78 +227,6 @@ def merge_small_clusters_tree_aware(labels, Z, min_size, weights=None):
     return labels
 
 
-def combine_predictor_evidence(exclusivity_df, target_prefixes, method="fisher"):
-    """
-    For each target token, combine the p-values of ALL its associated
-    predictors (regardless of individual significance) into a single
-    combined p-value, using Fisher's method (or another scipy-supported
-    method). This lets weak-but-consistent evidence across multiple
-    predictors accumulate into stronger evidence for the target.
-
-    CAVEAT: this assumes predictors are reasonably independent. If your
-    predictors are correlated (e.g. nearby m6A sites that tend to be
-    modified together), this will overstate significance. Consider
-    checking predictor correlation before trusting results here.
-
-    Parameters
-    ----------
-    exclusivity_df : pandas.DataFrame
-        Output of find_mutually_exclusive_pairs — needs token_a, token_b,
-        p_value (raw, not p_adj — combine raw p-values, then correct once
-        at the end across targets).
-    target_prefixes : str or tuple[str, ...]
-        Prefix(es) identifying which token in each pair is the target.
-    method : str
-        Method passed to scipy.stats.combine_pvalues ("fisher", "pearson",
-        "tippett", "stouffer", etc.).
-
-    Returns
-    -------
-    pandas.DataFrame with columns:
-        target, n_predictors, predictors, combined_statistic,
-        combined_p_value, combined_p_adj
-    One row per target token.
-    """
-    target_to_pvals = {}
-    target_to_predictors = {}
-
-    for _, r in exclusivity_df.iterrows():
-        a, b, p = r["token_a"], r["token_b"], r["p_value"]
-
-        a_is_target = a.startswith(target_prefixes)
-        b_is_target = b.startswith(target_prefixes)
-
-        if a_is_target and not b_is_target:
-            target_tok, predictor_tok = a, b
-        elif b_is_target and not a_is_target:
-            target_tok, predictor_tok = b, a
-        else:
-            continue  # ambiguous — skip
-
-        target_to_pvals.setdefault(target_tok, []).append(p)
-        target_to_predictors.setdefault(target_tok, []).append(predictor_tok)
-
-    results = []
-    for target_tok, pvals in target_to_pvals.items():
-        # combine_pvalues needs at least 1 p-value; guard tiny/degenerate p's
-        pvals_clean = [max(p, 1e-300) for p in pvals]  # avoid log(0) issues in fisher's method
-        stat, combined_p = combine_pvalues(pvals_clean, method=method)
-
-        results.append({
-            "target": target_tok,
-            "n_predictors": len(pvals),
-            "predictors": target_to_predictors[target_tok],
-            "combined_statistic": stat,
-            "combined_p_value": combined_p,
-        })
-
-    res_df = pandas.DataFrame(results)
-    if len(res_df) > 0:
-        res_df["combined_p_adj"] = multipletests(res_df["combined_p_value"], method="fdr_bh")[1]
-        res_df = res_df.sort_values("combined_p_adj")
-
-    return res_df
-
 def find_mutually_exclusive_pairs(rows, allowed_tokens=None, target_prefixes=None,
                                     predictor_prefixes=None, min_individual_count=5):
     """
@@ -467,6 +396,81 @@ def annotate_clusters_with_combined_exclusivity(cluster_summary_df, labels, rows
         "exclusive_predictors", "combined_cooccurrence_score", "cooccurring_predictors"
     ])
 
+
+def build_phi_matrix(rows, allowed_tokens=None, min_count=5):
+    if allowed_tokens is not None:
+        rows = [[t for t in tokens if t in allowed_tokens] for tokens in rows]
+
+    mlb = MultiLabelBinarizer()
+    X = mlb.fit_transform(rows)
+    tokens = numpy.array(mlb.classes_)
+
+    counts = X.sum(axis=0)
+    keep = counts >= min_count
+    tokens, X = tokens[keep], X[:, keep]
+
+    n = X.shape[1]
+    phi = numpy.zeros((n, n))
+    for i, j in itertools.combinations(range(n), 2):
+        a, b = X[:, i], X[:, j]
+        n11 = int(((a == 1) & (b == 1)).sum())
+        n10 = int(((a == 1) & (b == 0)).sum())
+        n01 = int(((a == 0) & (b == 1)).sum())
+        n00 = int(((a == 0) & (b == 0)).sum())
+        denom = numpy.sqrt((n11+n10)*(n01+n00)*(n11+n01)*(n10+n00))
+        val = (n11*n00 - n10*n01) / denom if denom > 0 else 0.0
+        phi[i, j] = phi[j, i] = val
+    numpy.fill_diagonal(phi, 1.0)
+    return tokens, phi
+
+import networkx as nx
+
+def find_cooccurring_groups(tokens, phi, min_phi=0.3):
+    G = nx.Graph()
+    G.add_nodes_from(tokens)
+    n = len(tokens)
+    for i, j in itertools.combinations(range(n), 2):
+        if phi[i, j] >= min_phi:
+            G.add_edge(tokens[i], tokens[j], weight=phi[i, j])
+    groups = [set(c) for c in nx.connected_components(G) if len(c) > 1]
+    singleton_groups = [{t} for t in tokens if not any(t in g for g in groups)]
+    return groups + singleton_groups
+
+def group_opposition(rows, groups, min_count=5):
+    group_presence = []
+    for g in groups:
+        presence = numpy.array([1 if any(t in set(tokens) for t in g) else 0 for tokens in rows])
+        group_presence.append(presence)
+
+    n_reads = len(rows)
+    results = []
+    for i, j in itertools.combinations(range(len(groups)), 2):
+        a, b = group_presence[i], group_presence[j]
+        n_a, n_b = int(a.sum()), int(b.sum())
+        if n_a < min_count or n_b < min_count:
+            continue
+        n_both = int(((a == 1) & (b == 1)).sum())
+        expected_both = (n_a * n_b) / n_reads
+        exclusivity_score = (expected_both - n_both) / expected_both if expected_both > 0 else numpy.nan
+
+        table = [[n_both, n_a-n_both], [n_b-n_both, n_reads-n_a-n_b+n_both]]
+        _, p = fisher_exact(table)
+
+        results.append({
+            "group_a": sorted(groups[i]),
+            "group_b": sorted(groups[j]),
+            "n_a": n_a, "n_b": n_b, "n_both": n_both,
+            "expected_both": round(expected_both, 2),
+            "exclusivity_score": exclusivity_score,
+            "p_value": p,
+        })
+
+    res_df = pandas.DataFrame(results)
+    if len(res_df):
+        res_df["p_adj"] = multipletests(res_df["p_value"], method="fdr_bh")[1]
+        res_df = res_df.sort_values("exclusivity_score", ascending=False)
+    return res_df
+
 # https://uc-r.github.io/hc_clustering
 def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, exclusivity_score_threshold=0.5, show_dendrogram=False):
     rows_of_tokens = []
@@ -596,6 +600,16 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
         predictor_prefixes="m6A",
         min_individual_count=5,
     )
+
+    tokens, phi = build_phi_matrix(rows, allowed_tokens=important_tokens, min_count=5)
+    groups = find_cooccurring_groups(tokens, phi, min_phi=0.3)
+    print(f"Found {len(groups)} co-occurring token groups:")
+    for g in groups:
+        if len(g) > 1:
+            print(" ", sorted(g))
+
+    opposition_df = group_opposition(rows, groups, min_count=5)
+    print(opposition_df[opposition_df["exclusivity_score"] > 0.5].to_string(index=False))
 
     combined_scores = combine_exclusivity_scores(exclusivity_df, target_prefixes="introns")
     # print(combined_scores)
