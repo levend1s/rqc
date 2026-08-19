@@ -188,6 +188,8 @@ def build_parser():
     cluster_transcripts_parser.add_argument("--min_feature_freq", required=False, type=float, default=0.01, help="minimum frequency of a feature to be considered for clustering (default: 0.01)")
     cluster_transcripts_parser.add_argument("--exclusivity_threshold", required=False, type=float, default=0.5, help="minimum exclusivity score to consider a feature as mutually exclusive (default: 0.5)")
     cluster_transcripts_parser.add_argument("--min_gene_overlap", required=False, type=float, default=0, help="minimum fraction of read overlapping gene to consider for clustering (default: 0.5)")
+    cluster_transcripts_parser.add_argument("--lift_threshold", required=False, type=float, default=1.1, help="minimum lift score to consider a feature as a predictor of intron presence (default: 1.5)")
+    cluster_transcripts_parser.add_argument("--feature_distance_threshold", required=False, type=int, default=200, help="maximum distance between a feature and an intron to consider for clustering (default: 100)")
 
     cluster_transcripts_parser.set_defaults(func=cluster_transcripts.cluster_transcripts)
 

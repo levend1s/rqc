@@ -53,36 +53,15 @@ excl$ID_cluster <- excl$index
 # Treat empty/NA/empty-list values as "no score".
 excl <- excl %>%
   mutate(
-    has_exclusivity_score = !(is.na(combined_exclusivity_score) |
-                                combined_exclusivity_score %in% c("", "[]", "NA"))
+    has_predictor_combo = !(is.na(predictor_combo) | predictor_combo %in% c("", "[]", "NA"))
   ) %>%
-  select(ID_cluster, has_exclusivity_score, target, exclusive_predictors, combined_exclusivity_score)
-
-res <- res %>%
-  left_join(excl, by = "ID_cluster") %>%
-  mutate(has_exclusivity_score = tidyr::replace_na(has_exclusivity_score, FALSE))
-
-# --- 8) Combine significance + exclusivity into one coloring variable ---
-res <- res %>%
-  mutate(
-    plot_group = case_when(
-      signif & has_exclusivity_score  ~ "Significant + has exclusivity score",
-      signif & !has_exclusivity_score ~ "Significant",
-      !signif & has_exclusivity_score ~ "Has exclusivity score",
-      TRUE                             ~ "Not significant"
-    )
-  )
+  filter(has_predictor_combo) %>%
+  select(ID_cluster, predictor_combo, intron)
 
 top <- head(res[order(res$FDR), ], 15)
 
 p <- ggplot(res, aes(x = logFC, y = negLog10FDR)) +
-  geom_point(aes(color = plot_group), alpha = 0.8, size = 2) +
-  scale_color_manual(values = c(
-    "Not significant"                      = "grey70",
-    "Significant"                          = "red3",
-    "Has exclusivity score"                = "steelblue",
-    "Significant + has exclusivity score"  = "purple3"
-  )) +
+  geom_point(alpha = 0.8, size = 2) +
   geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey40") +
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey40") +
   geom_text_repel(
@@ -105,4 +84,3 @@ p <- ggplot(res, aes(x = logFC, y = negLog10FDR)) +
 
 print(p)
 
-a <- res[res$has_exclusivity_score == TRUE,] %>% select(ID, target, exclusive_predictors)
