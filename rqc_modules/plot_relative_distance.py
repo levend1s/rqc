@@ -3,6 +3,27 @@ import ast
 import scipy.stats
 import matplotlib.pyplot as plt
 
+from scipy.stats import binomtest
+from statsmodels.stats.multitest import multipletests
+
+def test_positional_enrichment_uniform(offset_hist, distance):
+    """
+    offset_hist: list of counts per bin (e.g. d_offset_hists['m6a'])
+    distance: the DISTANCE value used to build x_ticks
+    """
+    total_sites = sum(offset_hist)
+    n_bins = distance * 2
+    p_null = 1.0 / n_bins  # expected proportion per bin under uniform null
+
+    p_values = []
+    for count in offset_hist:
+        result = binomtest(count, total_sites, p_null, alternative='greater')
+        p_values.append(result.pvalue)
+
+    # FDR correction across all bins
+    _, q_values, _, _ = multipletests(p_values, method='fdr_bh')
+
+    return p_values, q_values
 
 def plot_relative_distance(args):
     DISTANCE = args.distance
@@ -68,6 +89,11 @@ def plot_relative_distance(args):
         kde = kernel(x_ticks)
 
         d_offset_kdes[k] = kde
+
+    p_vals, q_vals = test_positional_enrichment_uniform(d_offset_hists['m6a'], DISTANCE)
+
+    peak_bin_index = x_ticks.index(-50)  # or wherever your peak is
+    print("Bin at -50nt: p={:.2e}, q={:.2e}".format(p_vals[peak_bin_index], q_vals[peak_bin_index]))
 
     d_num_pam_sites_hist = {}
     d_num_pam_sites = {}

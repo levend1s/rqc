@@ -903,9 +903,9 @@ def cluster_transcripts(args):
     try:
         # ------------------- MAIN READ AND FEATURE EXTRACTION LOOP FROM BAMFILES ------------------- #
         for _, row in matches.iterrows():
-            # if row["seq_id"] != "Pf3D7_12_v3":
-            #     print("skipping {}...".format(row["ID"]))
-            #     continue
+            if row["seq_id"] != "Pf3D7_12_v3":
+                print("skipping {}...".format(row["ID"]))
+                continue
             print("processing {}...".format(row["ID"]))
             read_entries = []
 
