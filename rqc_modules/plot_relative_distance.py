@@ -2,28 +2,9 @@ import pandas
 import ast
 import scipy.stats
 import matplotlib.pyplot as plt
-
-from scipy.stats import binomtest
+import numpy
+import pandas
 from statsmodels.stats.multitest import multipletests
-
-def test_positional_enrichment_uniform(offset_hist, distance):
-    """
-    offset_hist: list of counts per bin (e.g. d_offset_hists['m6a'])
-    distance: the DISTANCE value used to build x_ticks
-    """
-    total_sites = sum(offset_hist)
-    n_bins = distance * 2
-    p_null = 1.0 / n_bins  # expected proportion per bin under uniform null
-
-    p_values = []
-    for count in offset_hist:
-        result = binomtest(count, total_sites, p_null, alternative='greater')
-        p_values.append(result.pvalue)
-
-    # FDR correction across all bins
-    _, q_values, _, _ = multipletests(p_values, method='fdr_bh')
-
-    return p_values, q_values
 
 def plot_relative_distance(args):
     DISTANCE = args.distance
@@ -31,6 +12,8 @@ def plot_relative_distance(args):
     PLOT_COUNTS = False  # TODO: make this an argument
     INPUT = args.input
     OUTPUT = args.output
+    FOREGROUND_LABEL = args.foreground
+    BACKGROUND_LABEL = args.background
 
     if OUTPUT:
         OUTPUT_FORMAT = OUTPUT.split(".")[-1] if OUTPUT else "png"
@@ -78,7 +61,7 @@ def plot_relative_distance(args):
     for idx, coverages in d_coverages.items():
         for k in keys:
             if len(d_total_offsets[k]) == 0:
-                d_total_offsets[k] = coverages[k]
+                d_total_offsets[k] = list(coverages[k])
             else:
                 d_total_offsets[k] += coverages[k]
 
@@ -90,10 +73,111 @@ def plot_relative_distance(args):
 
         d_offset_kdes[k] = kde
 
-    p_vals, q_vals = test_positional_enrichment_uniform(d_offset_hists['m6a'], DISTANCE)
+    def gene_level_permutation_test_fast(df, foreground_key, background_key, distance,
+                                      n_permutations=100000, seed=42,
+                                      base_resolution=True, window_size=10):
+        """
+        Vectorized gene-level block permutation test for positional enrichment.
 
-    peak_bin_index = x_ticks.index(-50)  # or wherever your peak is
-    print("Bin at -50nt: p={:.2e}, q={:.2e}".format(p_vals[peak_bin_index], q_vals[peak_bin_index]))
+        For each gene, keeps the observed number of foreground sites fixed and
+        redraws that many positions (without replacement) from the gene's own
+        background position list, across ALL permutations at once per gene
+        (avoids the n_permutations x n_genes Python-level loop).
+        """
+        rng = numpy.random.default_rng(seed)
+
+        if base_resolution:
+            bin_edges = numpy.arange(-distance, distance + 2)
+        else:
+            bin_edges = numpy.arange(-distance, distance + 1, window_size)
+
+        n_bins = len(bin_edges) - 1
+
+        # ---- observed histogram ----
+        observed_offsets = []
+        for offsets in df[foreground_key]:
+            observed_offsets.extend(offsets)
+        observed_hist, _ = numpy.histogram(observed_offsets, bins=bin_edges)
+
+        # ---- pre-filter genes with no sites (wasted work otherwise) ----
+        site_counts = df[foreground_key].apply(len)
+        active = df[site_counts > 0]
+        active_bg = active[background_key].tolist()
+        active_n_sites = site_counts[site_counts > 0].tolist()
+
+        print(f"Active genes: {len(active)} / {len(df)}")
+
+        # ---- accumulate null histograms across all permutations ----
+        null_hists = numpy.zeros((n_permutations, n_bins), dtype=numpy.int64)
+
+        for a_positions, n_sites in zip(active_bg, active_n_sites):
+            a_arr = numpy.asarray(a_positions)
+            n_a = len(a_arr)
+            if n_a == 0:
+                continue
+
+            n_draw = min(n_sites, n_a)
+
+            if n_draw == n_a:
+                # every A gets drawn every permutation - same fixed set, no
+                # randomness needed, just bin it once and add to every row
+                hist, _ = numpy.histogram(a_arr, bins=bin_edges)
+                null_hists += hist  # broadcasts across all permutation rows
+                continue
+
+            # vectorized "without replacement" sampling for ALL permutations
+            # at once: argsort of random keys gives a random permutation of
+            # indices per row, take the first n_draw columns
+            random_keys = rng.random((n_permutations, n_a))
+            sampled_indices = numpy.argpartition(random_keys, n_draw, axis=1)[:, :n_draw]
+            sampled_values = a_arr[sampled_indices]  # shape: (n_permutations, n_draw)
+
+            # vectorized binning: map each sampled value to a bin index, then
+            # tally counts per row without a Python-level per-row histogram call
+            bin_idx = numpy.searchsorted(bin_edges, sampled_values, side='right') - 1
+            valid = (bin_idx >= 0) & (bin_idx < n_bins)
+
+            # flatten (row, bin) pairs and use bincount on a combined index to
+            # get per-row, per-bin counts in one vectorized pass
+            row_idx = numpy.repeat(numpy.arange(n_permutations), n_draw).reshape(n_permutations, n_draw)
+            flat_bin = numpy.where(valid, row_idx * n_bins + bin_idx, -1).ravel()
+            flat_bin = flat_bin[flat_bin >= 0]
+
+            counts_flat = numpy.bincount(flat_bin, minlength=n_permutations * n_bins)
+            null_hists += counts_flat.reshape(n_permutations, n_bins)
+
+        # ---- p-values, expected counts, fold enrichment ----
+        p_values = (numpy.sum(null_hists >= observed_hist, axis=0) + 1) / (n_permutations + 1)
+        expected_counts = null_hists.mean(axis=0)
+        fold_enrichment = numpy.divide(
+            observed_hist, expected_counts,
+            out=numpy.full(n_bins, numpy.nan), where=expected_counts > 0
+        )
+
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        results = pandas.DataFrame({
+            "bin_center": bin_centers,
+            "bin_start": bin_edges[:-1],
+            "bin_end": bin_edges[1:],
+            "observed_count": observed_hist,
+            "expected_count": expected_counts,
+            "fold_enrichment": fold_enrichment,
+            "p_value": p_values,
+        })
+
+        _, q_values, _, _ = multipletests(results["p_value"], method="fdr_bh")
+        results["q_value"] = q_values
+
+        return results, null_hists
+
+    results, null_hists = gene_level_permutation_test_fast(
+        df, foreground_key="m6a", background_key="background_adenosines", distance=DISTANCE, n_permutations=10000
+    )
+    _, q_values, _, _ = multipletests(results["p_value"], method="fdr_bh")
+    results["q_value"] = q_values
+
+    significant = results[results["q_value"] < 0.05].sort_values("fold_enrichment", ascending=False)
+    print(significant.to_string(index=False))
 
     d_num_pam_sites_hist = {}
     d_num_pam_sites = {}

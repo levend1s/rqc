@@ -61,6 +61,8 @@ def build_parser():
     plot_relative_distance_parser.add_argument("-l", "--label", required=True, help="label for the plot")
     plot_relative_distance_parser.add_argument("-i", "--input", required=True, help="input file with offsets")
     plot_relative_distance_parser.add_argument("-o", "--output", required=False, help="output file suffix (e.g., 'plot.png', 'plot.pdf'). If not provided, will not save plot to file.")
+    plot_relative_distance_parser.add_argument("--foreground", required=False, default=None, help="foreground column to test for positional enrichment")
+    plot_relative_distance_parser.add_argument("--background", required=False, default=None, help="background column to compare against")
 
     plot_relative_distance_parser.set_defaults(func=plot_relative_distance.plot_relative_distance)
 
