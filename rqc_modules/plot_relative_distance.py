@@ -171,13 +171,15 @@ def plot_relative_distance(args):
         return results, null_hists
 
     results, null_hists = gene_level_permutation_test_fast(
-        df, foreground_key="m6a", background_key="background_adenosines", distance=DISTANCE, n_permutations=10000
+        df, foreground_key="m6a", background_key="background_adenosines", distance=DISTANCE, n_permutations=1000 # ran 100,000 permutations for the final analysis, but this is slow for testing
     )
     _, q_values, _, _ = multipletests(results["p_value"], method="fdr_bh")
     results["q_value"] = q_values
 
     significant = results[results["q_value"] < 0.05].sort_values("fold_enrichment", ascending=False)
     print(significant.to_string(index=False))
+    print("len non-significant: {}".format(len(results[results["q_value"] >= 0.05])))
+    print("len significant: {}".format(len(results[results["q_value"] < 0.05])))
 
     d_num_pam_sites_hist = {}
     d_num_pam_sites = {}
