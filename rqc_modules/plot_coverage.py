@@ -491,6 +491,11 @@ def plot_coverage(args):
                     density_coverages[label] = smoothed_tts_hist
                 else:
                     density_coverages[label] = kernel(x_ticks)
+                    grid = numpy.linspace(min(x_ticks) - 5, max(x_ticks) + 5, 5000)
+                    density = kernel(grid)
+                    area = numpy.trapz(density, grid)
+
+                    print("label: {}, area under curve: {}".format(label, area))
 
             # cdf = numpy.cumsum(smoothed_tts_hist)
 
