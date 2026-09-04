@@ -14,6 +14,7 @@ def plot_relative_distance(args):
     OUTPUT = args.output
     FOREGROUND_LABEL = args.foreground
     BACKGROUND_LABEL = args.background
+    NUM_PERMUTATIONS = args.num_permutations
 
     if OUTPUT:
         OUTPUT_FORMAT = OUTPUT.split(".")[-1] if OUTPUT else "png"
@@ -170,16 +171,20 @@ def plot_relative_distance(args):
 
         return results, null_hists
 
-    results, null_hists = gene_level_permutation_test_fast(
-        df, foreground_key="m6a", background_key="background_adenosines", distance=DISTANCE, n_permutations=1000 # ran 100,000 permutations for the final analysis, but this is slow for testing
-    )
-    _, q_values, _, _ = multipletests(results["p_value"], method="fdr_bh")
-    results["q_value"] = q_values
+    if FOREGROUND_LABEL is None or BACKGROUND_LABEL is None:
+        print("Foreground and/or background labels not provided, skipping permutation test.")
+    else:
+        print(f"Running permutation test with foreground: {FOREGROUND_LABEL}, background: {BACKGROUND_LABEL}, distance: {DISTANCE}, permutations: {NUM_PERMUTATIONS}")
+        results, null_hists = gene_level_permutation_test_fast(
+            df, foreground_key="m6a", background_key="background_adenosines", distance=DISTANCE, n_permutations=NUM_PERMUTATIONS # ran 100,000 permutations for the final analysis, but this is slow for testing
+        )
+        _, q_values, _, _ = multipletests(results["p_value"], method="fdr_bh")
+        results["q_value"] = q_values
 
-    significant = results[results["q_value"] < 0.05].sort_values("fold_enrichment", ascending=False)
-    print(significant.to_string(index=False))
-    print("len non-significant: {}".format(len(results[results["q_value"] >= 0.05])))
-    print("len significant: {}".format(len(results[results["q_value"] < 0.05])))
+        significant = results[results["q_value"] < 0.05].sort_values("fold_enrichment", ascending=False)
+        print(significant.to_string(index=False))
+        print("len non-significant: {}".format(len(results[results["q_value"] >= 0.05])))
+        print("len significant: {}".format(len(results[results["q_value"] < 0.05])))
 
     d_num_pam_sites_hist = {}
     d_num_pam_sites = {}
