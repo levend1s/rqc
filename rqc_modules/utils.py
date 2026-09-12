@@ -3,6 +3,7 @@ import math
 import numpy
 import pandas
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 import pysam
 import gffpandas.gffpandas as gffpandas
 import ast
@@ -350,7 +351,7 @@ def get_plot_color(l):
 
     return this_color
 
-def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_type, log_scale_y, alpha, step, plot_type):    
+def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_type, log_scale_y, alpha, step, plot_type, y_tick_intervals=None, y_scientific_notation=True, y_tick_round_dp=None):    
     sample_labels = {}
     ymax = 0
     for label, cov in coverages['coverages'].items():
@@ -375,6 +376,19 @@ def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_ty
 
     fig, axes = plt.subplots(num_samples, gridspec_kw={'height_ratios': height_ratios})
     x_ticks = numpy.arange(coverages['num_bins'])
+
+    def get_nice_tick_step(max_value, intervals):
+        if max_value <= 0 or intervals is None or intervals <= 0:
+            return 0
+
+        raw_step = max_value / intervals
+        magnitude = 10 ** math.floor(math.log10(raw_step))
+        for multiplier in [1, 2, 5, 10]:
+            candidate = multiplier * magnitude
+            if candidate >= raw_step:
+                return candidate
+
+        return 10 * magnitude
 
     plt_index = 0
 
@@ -443,10 +457,24 @@ def plot_subfeature_coverage(coverages, line_width, separate_y_axes, coverage_ty
 
             # this_axes.legend(loc="upper left", title=k)
             this_axes.set_ylabel(coverages['y_label'], color="black")
-            this_axes.set_ylim(ymin=0, ymax=ymax*1.1)
             this_axes.set_xlim(xmin=0, xmax=coverages['num_bins']-1)
-            this_axes.set_yticks([0, ymax])
-            this_axes.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
+            if y_tick_intervals is None:
+                plot_y_max = ymax * 1.1
+                this_axes.set_yticks([0, ymax])
+            else:
+                tick_step = get_nice_tick_step(ymax, y_tick_intervals)
+                plot_y_max = tick_step * y_tick_intervals
+                this_axes.set_yticks(numpy.arange(0, plot_y_max + (tick_step / 2), tick_step))
+
+            this_axes.set_ylim(ymin=0, ymax=plot_y_max)
+
+            if y_scientific_notation:
+                this_axes.ticklabel_format(style='sci', axis='y', scilimits=(0,0))
+            else:
+                this_axes.ticklabel_format(style='plain', axis='y')
+
+            if y_tick_round_dp is not None:
+                this_axes.yaxis.set_major_formatter(FuncFormatter(lambda value, position: f"{value:.{y_tick_round_dp}f}"))
 
         this_axes.tick_params(
             axis='x',          

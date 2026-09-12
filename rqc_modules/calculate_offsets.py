@@ -137,6 +137,9 @@ def calculate_offsets(args):
             # break
 
     # TODO: write coverages as tsv file for plotting without recalculating offsets
+    print("TOTAL SITES USED FOR EACH INPUT:")
+    for k, v in d_num_pam_sites.items():
+        print("  {}: {}".format(k, sum(v)))
     df = pandas.DataFrame.from_dict(d_coverages, orient='index')
     df = df.rename_axis('gene_id', axis='index')
     df.to_csv(OUTFILE, sep='\t')

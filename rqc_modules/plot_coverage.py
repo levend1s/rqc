@@ -126,6 +126,7 @@ def plot_coverage(args):
 
             # generate coverage for all matches in this bam file
             mal_annotation = []
+            print("NUMBER OF MATCHES: {}".format(num_matches))
             for row_index, row in matches.iterrows():
                 # find subfeatures
                 if VERBOSE:
@@ -558,7 +559,7 @@ def plot_coverage(args):
         coverage_dict['coverages'] = density_coverages
         coverage_dict['y_label'] = "density (au)"
 
-        plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE)
+        plot_subfeature_coverage(coverage_dict, LINE_WIDTH, SEPARATE_Y_AXES, COVERAGE_TYPE, LOG_SCALE, ALPHA, STEP, PLOT_TYPE, y_tick_intervals=4, y_scientific_notation=False, y_tick_round_dp=3)
 
         if OUTPUT:
             plt.savefig(os.path.join(outdir, new_base_density), transparent=True, dpi=300, format=OUTPUT_FORMAT)

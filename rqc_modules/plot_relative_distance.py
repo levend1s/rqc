@@ -72,6 +72,12 @@ def plot_relative_distance(args):
         kernel = scipy.stats.gaussian_kde(v)
         kde = kernel(x_ticks)
 
+        kde_total_mass = kernel.integrate_box_1d(-numpy.inf, numpy.inf)
+        if not numpy.isfinite(kde_total_mass) or abs(kde_total_mass - 1.0) > 1e-3:
+            print("WARNING - KDE density for {} does not integrate to 1 (mass={})".format(k, kde_total_mass))
+        else:
+            print("LOG - KDE density for {} integrates to 1 (mass={})".format(k, kde_total_mass))
+
         d_offset_kdes[k] = kde
 
     def gene_level_permutation_test_fast(df, foreground_key, background_key, distance,
@@ -273,7 +279,7 @@ def plot_relative_distance(args):
         axes.fill_between(x_ticks, v, alpha=0.2, color=get_color(k))
 
     axes.axvline(x=0, color='grey', ls="--", linewidth=1.0)
-    axes.set_ylabel('count')
+    axes.set_ylabel('probability density (au)')
     axes.set_xlabel('offset from {} (nt)'.format(REFERENCE_LABEL))
     axes.set_xlim(xmin=-DISTANCE, xmax=DISTANCE)
     axes.set_ylim(ymin=0)
