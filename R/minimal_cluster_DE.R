@@ -6,13 +6,14 @@ library(ggplot2)
 library(dplyr)
 library(ggrepel)
 
-excl_infile <- c("~/rqc/./cluster_transcripts_results_batch_m6A_28hpi.tsv.cluster_summary.tsv")  # EDIT to your actual filename
+excl_infile <- c("~/rqc/./cluster_transcripts_results_28hpi_batch.tsv.cluster_summary.tsv")  # EDIT to your actual filename
 
 
 # 1) Load counts table
-infile <- c("~/rqc/cluster_transcripts_results_batch_m6A_28hpi.tsv")
+infile <- c("~/rqc/cluster_transcripts_results_28hpi_batch.tsv")
 counts <- read.delim(infile, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 counts <- counts[!grepl("noise|NA|empty|MIT|API", counts$ID_cluster), ]
+counts <- counts[grepl("PF3D7_12", counts$ID_cluster), ]
 rownames(counts) <- counts$ID_cluster
 counts$ID_cluster <- NULL
 

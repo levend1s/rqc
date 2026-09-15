@@ -13,18 +13,14 @@ from rqc_modules.utils import process_input_files, process_annotation_file
 
 from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
 from scipy.spatial.distance import pdist
+from scipy.stats import fisher_exact
 
 from matplotlib import pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib import cm
 import matplotlib
 
-import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
-import seaborn as sns
-from scipy.stats import fisher_exact, combine_pvalues
-import itertools
-from scipy.stats import spearmanr
 
 RANDOM_SEED = 42
 numpy.random.seed(RANDOM_SEED)
@@ -418,8 +414,6 @@ def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens,
         ].sort_values("lift_combo_absent", ascending=False)
 
         res_df = res_df.sort_values("intron")
-
-    print(res_df)
 
     return res_df
 
