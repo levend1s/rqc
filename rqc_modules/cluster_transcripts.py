@@ -1,5 +1,6 @@
 import re
 import sys
+import os
 
 import pandas
 import pysam
@@ -893,6 +894,18 @@ def cluster_transcripts(args):
 
     all_count_tables = []
     all_cluster_summaries = []
+    cluster_bam_writers = {}
+    cluster_bam_read_ids = {}
+
+    # Keep one output BAM per cluster for each input BAM across all annotations.
+    cluster_bam_directories = {}
+    for label in bam_labels:
+        bam_stem = os.path.splitext(os.path.basename(input_files[label]["path"]))[0]
+        cluster_bam_directories[label] = os.path.join(
+            os.path.dirname(os.path.abspath(OUTPUT_FILE)),
+            f"{bam_stem}_cluster_bams",
+        )
+        os.makedirs(cluster_bam_directories[label], exist_ok=True)
 
     try:
         # ------------------- MAIN READ AND FEATURE EXTRACTION LOOP FROM BAMFILES ------------------- #
@@ -958,6 +971,49 @@ def cluster_transcripts(args):
                     print("UMAP_OUTPUT_FILE")
                     print(f"Done. Wrote: {UMAP_OUTPUT_FILE}")
 
+                    # Write reads into cluster BAMs, keeping writers open so output
+                    # accumulates across all annotation rows in this run.
+                    for bam_label, bam_file in bam_handles.items():
+                        cluster_rows = df_clustered[df_clustered["label"] == bam_label]
+                        if cluster_rows.empty:
+                            continue
+
+                        read_to_cluster = (
+                            cluster_rows.drop_duplicates("read_id")
+                            .set_index("read_id")["cluster"]
+                            .to_dict()
+                        )
+
+                        for cluster in set(read_to_cluster.values()):
+                            cluster_key = (bam_label, cluster)
+                            if cluster_key not in cluster_bam_writers:
+                                output_path = os.path.join(
+                                    cluster_bam_directories[bam_label],
+                                    f"{sanitize(str(cluster))}.bam",
+                                )
+                                cluster_bam_writers[cluster_key] = pysam.AlignmentFile(
+                                    output_path, "wb", template=bam_file
+                                )
+                                cluster_bam_read_ids[cluster_key] = set()
+
+                        # Fetch the region once per input BAM, then route each read
+                        # to its cluster instead of rescanning once per cluster.
+                        for read in bam_file.fetch(
+                            contig=row["seq_id"],
+                            start=max(0, row["start"] - COVERAGE_PADDING),
+                            stop=row["end"] + COVERAGE_PADDING,
+                        ):
+                            cluster = read_to_cluster.get(read.query_name)
+                            if cluster is None:
+                                continue
+
+                            cluster_key = (bam_label, cluster)
+                            if read.query_name in cluster_bam_read_ids[cluster_key]:
+                                continue
+
+                            cluster_bam_writers[cluster_key].write(read)
+                            cluster_bam_read_ids[cluster_key].add(read.query_name)
+
             except ValueError as e:
                 print("ERROR:", e)
                 # fallback: one row ID_clusterNA with per-label counts
@@ -981,6 +1037,8 @@ def cluster_transcripts(args):
             all_cluster_summaries.append(cs)
             all_count_tables.append(ct)
     finally:
+        for output_bam in cluster_bam_writers.values():
+            output_bam.close()
         # Always close all handles
         for fh in bam_handles.values():
             fh.close()
