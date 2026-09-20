@@ -973,6 +973,7 @@ def cluster_transcripts(args):
 
                     # Write reads into cluster BAMs, keeping writers open so output
                     # accumulates across all annotation rows in this run.
+                    # TODO: this should only write bam files if there isn't an insane amount of clusters
                     for bam_label, bam_file in bam_handles.items():
                         cluster_rows = df_clustered[df_clustered["label"] == bam_label]
                         if cluster_rows.empty:
