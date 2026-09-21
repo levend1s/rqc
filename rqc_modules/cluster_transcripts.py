@@ -2,6 +2,7 @@ import re
 import sys
 import os
 import shutil
+import json
 
 import pandas
 import pysam
@@ -1108,6 +1109,49 @@ def cluster_transcripts(args):
     main_cluster_summary.to_csv(CLUSTER_SUMMARY_OUTPUT_FILE, sep="\t", index=False)
     print(f"Done. Wrote: {CLUSTER_SUMMARY_OUTPUT_FILE}")
 
+    # Index finalized cluster BAMs and create an IGV Reports track config for
+    # each input BAM label.
+    tracks_by_label = {label: [] for label in bam_labels}
+    for (bam_label, cluster), output_bam in cluster_bam_writers.items():
+        bam_path = os.fsdecode(output_bam.filename)
+        pysam.index(bam_path)
+        print(f"Done. Wrote: {bam_path}.bai")
+
+        bam_filename = os.path.basename(bam_path)
+        tracks_by_label[bam_label].append({
+            "name": str(cluster),
+            "url": bam_filename,
+            "indexURL": f"{bam_filename}.bai",
+            "samplingDepth": 500,
+            "colorBy": "strand",
+            "groupBy": "strand",
+        })
+
+    for bam_label, tracks in tracks_by_label.items():
+        tracks_config_path = os.path.join(
+            cluster_bam_directories[bam_label], "tracksConfig.json"
+        )
+        with open(tracks_config_path, "w") as tracks_config_file:
+            json.dump(tracks, tracks_config_file, indent=2)
+            tracks_config_file.write("\n")
+        print(f"Done. Wrote: {tracks_config_path}")
+
+    # Write the selected annotation region as BED6. GFF coordinates are
+    # 1-based inclusive; BED uses a 0-based half-open interval.
+    gene_bed = matches[["seq_id", "start", "end", "ID", "strand"]].copy()
+    gene_bed["start"] = gene_bed["start"] - 1
+    gene_bed.insert(4, "score", ".")
+    gene_bed_output_path = os.path.join(OUTPUT_DIR, "gene.bed")
+    gene_bed.to_csv(
+        gene_bed_output_path,
+        sep="\t",
+        header=False,
+        index=False,
+    )
+    print(f"Done. Wrote: {gene_bed_output_path}")
+
+    
+
     # set parameters for plotting
     if len(matches) == 1 and SHOW_DENDROGRAM:
         # TODO: move dendrogram plotting to here, where it is currently save to file for plotting here
@@ -1117,13 +1161,6 @@ def cluster_transcripts(args):
             hide_labels=HIDE_DENDROGRAM_LABELS,
             delay_show=True,
         )
-        # Index only after closing the writers so the BAMs have complete BGZF
-        # streams and EOF markers.
-        for output_bam in cluster_bam_writers.values():
-            bam_path = os.fsdecode(output_bam.filename)
-            pysam.index(bam_path)
-            print(f"Done. Wrote: {bam_path}.bai")
-
         # args.input = os.path.expanduser("~/test_rewrite/28C1_read_depth_cluster_bams/input_samples.txt")
         # args.output = os.path.expanduser("~/test_rewrite/28C1_read_depth_cluster_bams/coverage_plots.png")
         # plot_coverage(args)
