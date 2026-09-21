@@ -314,8 +314,13 @@ def plot_coverage(args):
                     STOP_CLOCK("row_start", "coverage_stop")
 
                 if COVERAGE_PADDING:
-                    num_bins_cds = int(COVERAGE_BINS * (1 - (2 * PADDING_RATIO)))
-                    num_bins_padding = int(COVERAGE_BINS * PADDING_RATIO)
+                    if PADDING_RATIO == 0:
+                        gene_length = row['end'] - row['start']
+                        num_bins_cds = int(COVERAGE_BINS * (gene_length / (gene_length + (2 * COVERAGE_PADDING))))
+                        num_bins_padding = COVERAGE_BINS - num_bins_cds
+                    else:
+                        num_bins_cds = int(COVERAGE_BINS * (1 - (2 * PADDING_RATIO)))
+                        num_bins_padding = int(COVERAGE_BINS * PADDING_RATIO)
                 else:
                     num_bins_cds = COVERAGE_BINS
                     num_bins_padding = 0

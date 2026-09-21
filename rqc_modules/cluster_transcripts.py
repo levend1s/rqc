@@ -1,6 +1,7 @@
 import re
 import sys
 import os
+import shutil
 
 import pandas
 import pysam
@@ -11,6 +12,7 @@ from sklearn.preprocessing import MultiLabelBinarizer
 
 from rqc_modules.constants import PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
+from rqc_modules.plot_coverage import plot_coverage
 
 from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
 from scipy.spatial.distance import pdist
@@ -302,6 +304,85 @@ def _within_distance_of_intron(predictor_token, intron_token, max_distance_nt):
     return dist <= max_distance_nt
 
 
+def plot_cluster_dendrogram(
+    Z,
+    unique_rows,
+    unique_labels_arr,
+    pattern_counts,
+    cluster_names,
+    distance_threshold,
+    hide_labels=False,
+    delay_show=False
+):
+    """Plot a dendrogram from clustering results."""
+    n_leaves = len(unique_rows)
+    if n_leaves < 2:
+        print(f"Skipping dendrogram: only {n_leaves} unique pattern(s)")
+        return
+
+    sys.setrecursionlimit(max(1000, n_leaves + 10))
+    cluster_ids_sorted = sorted(set(unique_labels_arr))
+    cmap = matplotlib.colormaps["tab20"].resampled(len(cluster_ids_sorted))
+    cluster_color_map = {
+        cid: cm.colors.to_hex(cmap(i)) for i, cid in enumerate(cluster_ids_sorted)
+    }
+    node_cluster_ids = {i: {unique_labels_arr[i]} for i in range(n_leaves)}
+    for i, (left, right, _, _) in enumerate(Z):
+        node_id = n_leaves + i
+        node_cluster_ids[node_id] = (
+            node_cluster_ids[int(left)] | node_cluster_ids[int(right)]
+        )
+
+    def link_color_func(node_id):
+        ids = node_cluster_ids[node_id]
+        return cluster_color_map[next(iter(ids))] if len(ids) == 1 else "#808080"
+
+    ddata = dendrogram(
+        Z,
+        labels=[", ".join(unique_rows[i]) for i in range(n_leaves)],
+        no_labels=hide_labels,
+        link_color_func=link_color_func,
+    )
+    plt.ylabel("Jaccard distance")
+    plt.axhline(y=distance_threshold, color="red", linestyle="--", label="distance threshold")
+
+    ax = plt.gca()
+    for tick_label, orig_idx in zip(ax.get_xticklabels(), ddata["leaves"]):
+        tick_label.set_color(cluster_color_map[unique_labels_arr[orig_idx]])
+
+    for pos, orig_idx in enumerate(ddata["leaves"]):
+        ax.plot(
+            5 + 10 * pos,
+            0,
+            marker="s",
+            markersize=4,
+            color=cluster_color_map[unique_labels_arr[orig_idx]],
+            clip_on=False,
+        )
+
+    cluster_row_counts = Counter()
+    for i, cid in enumerate(unique_labels_arr):
+        cluster_row_counts[cid] += pattern_counts.get(i, 0)
+
+    ax.legend(
+        handles=[
+            mpatches.Patch(
+                color=cluster_color_map[cid],
+                label=f"(n={cluster_row_counts[cid]}) {cluster_names.get(cid, f'cluster_{cid}')}",
+            )
+            for cid in cluster_ids_sorted
+        ],
+        loc="lower left",
+        bbox_to_anchor=(0, 1.02),
+        fontsize=8,
+        title="Cluster",
+    )
+    plt.xlabel("")
+    plt.subplots_adjust(left=0.08, right=0.98, bottom=0.25, top=0.78)
+    if not delay_show:
+        plt.show()
+
+
 def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens, target_prefix, min_count,
                                                     LIFT_THRESHOLD, max_distance_nt=None):
     """
@@ -420,7 +501,7 @@ def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens,
 
 
 # https://uc-r.github.io/hc_clustering
-def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, exclusivity_score_threshold=0.5, show_dendrogram=False, LIFT_THRESHOLD=1.5, FEATURE_DISTANCE_THRESHOLD=100):
+def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, exclusivity_score_threshold=0.5, show_dendrogram=False, LIFT_THRESHOLD=1.5, FEATURE_DISTANCE_THRESHOLD=100, HIDE_DENDROGRAM_LABELS=False):
     rows_of_tokens = []
 
     for _, row in df.iterrows():
@@ -603,92 +684,15 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
 
 
 
-    # ------------------ plot dendrogram ---------------------
-    if show_dendrogram:
-        n_leaves = X.shape[0]
+    dendrogram_data = {
+        "Z": Z,
+        "unique_rows": unique_rows,
+        "unique_labels_arr": unique_labels_arr,
+        "pattern_counts": pattern_counts,
+        "cluster_names": cluster_names,
+    }
 
-        if n_leaves < 2:
-            print(f"Skipping dendrogram: only {n_leaves} unique pattern(s)")
-        else:
-            sys.setrecursionlimit(max(1000, n_leaves + 10))
-
-            # unique_labels_arr[i] = cluster id for leaf i (i.e. for unique_rows[i])
-            # Build a color for each cluster id
-            cluster_ids_sorted = sorted(set(unique_labels_arr))
-            cmap = matplotlib.colormaps["tab20"].resampled(len(cluster_ids_sorted))            
-            cluster_color_map = {
-                cid: cm.colors.to_hex(cmap(i)) for i, cid in enumerate(cluster_ids_sorted)
-            }
-            default_color = "#808080"  # gray for links that span multiple clusters
-
-            # Map each node in Z (leaves 0..n-1, then merged nodes n..2n-2) to the
-            # set of original leaf cluster ids under it, so we know whether a link
-            # is "pure" (all leaves belong to one cluster) or mixed.
-            node_cluster_ids = {}
-            for i in range(n_leaves):
-                node_cluster_ids[i] = {unique_labels_arr[i]}
-
-            for i, (left, right, dist, count) in enumerate(Z):
-                node_id = n_leaves + i
-                left_ids = node_cluster_ids[int(left)]
-                right_ids = node_cluster_ids[int(right)]
-                node_cluster_ids[node_id] = left_ids | right_ids
-
-            def link_color_func(node_id):
-                ids = node_cluster_ids[node_id]
-                if len(ids) == 1:
-                    return cluster_color_map[next(iter(ids))]
-                return default_color
-
-            leaf_labels = [", ".join(unique_rows[i]) for i in range(n_leaves)]
-
-            ddata = dendrogram(
-                Z,
-                labels=leaf_labels,
-                # no_labels=True,
-                link_color_func=link_color_func,
-            )
-            plt.ylabel("Jaccard distance")
-            plt.axhline(y=distance_threshold, color="red", linestyle="--", label="distance threshold")
-
-            ax = plt.gca()
-            leaf_order = ddata["leaves"]
-            xticklabels = ax.get_xticklabels()
-            for tick_label, orig_idx in zip(xticklabels, leaf_order):
-                tick_label.set_color(cluster_color_map[unique_labels_arr[orig_idx]])
-
-            for pos, orig_idx in enumerate(leaf_order):
-                x = 5 + 10 * pos
-                ax.plot(x, 0, marker="s", markersize=4,
-                        color=cluster_color_map[unique_labels_arr[orig_idx]],
-                        clip_on=False)
-
-            # --- legend ---
-            cluster_row_counts = Counter()
-            for i, cid in enumerate(unique_labels_arr):
-                cluster_row_counts[cid] += pattern_counts.get(i, 0)
-
-            legend_handles = [
-                mpatches.Patch(
-                    color=cluster_color_map[cid],
-                    label=f"(n={cluster_row_counts[cid]}) {cluster_names.get(cid, f'cluster_{cid}')}"
-                )
-                for cid in cluster_ids_sorted
-            ]
-            ax.legend(
-                handles=legend_handles,
-                loc="lower left",
-                bbox_to_anchor=(0, 1.02),
-                fontsize=8,
-                title="Cluster",
-            )
-
-            plt.xlabel("")
-            plt.tight_layout()  # reserve right 15% of figure for the legend
-
-            plt.show()
-
-    return df_out, cluster_summary_df
+    return df_out, cluster_summary_df, dendrogram_data
 
 def overlap_length(read, region_start, region_end):
     """Compute how many bp of a read's aligned blocks overlap [region_start, region_end)."""
@@ -830,7 +834,8 @@ def cluster_transcripts(args):
     FEATURE_TYPE = args.type
     COVERAGE_PADDING = args.padding
     MOD_PROB_THRESHOLD = args.mod_prob_threshold
-    OUTPUT_FILE = args.outfile
+    OUTPUT_DIR = os.path.abspath(os.path.expanduser(args.outfile))
+    FORCE = args.force
     MIN_DELETION_LENGTH = args.min_deletion_length
     CLUSTER_COLS = args.cluster_cols.split(',') if args.cluster_cols is not None else None
     MIN_CLUSTER_PERC = args.min_cluster_percent
@@ -844,6 +849,23 @@ def cluster_transcripts(args):
     PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
     LIFT_THRESHOLD = args.lift_threshold
     FEATURE_DISTANCE_THRESHOLD = args.feature_distance_threshold
+    HIDE_DENDROGRAM_LABELS = args.hide_dendrogram_labels
+
+    if OUTPUT_DIR in (os.path.abspath(os.sep), os.path.expanduser("~")):
+        print(f"WARNING: refusing to use a protected output directory: {OUTPUT_DIR}")
+        return
+
+    if os.path.exists(OUTPUT_DIR):
+        if not os.path.isdir(OUTPUT_DIR):
+            print(f"WARNING: output path exists and is not a directory: {OUTPUT_DIR}")
+            return
+        if not FORCE:
+            print(f"WARNING: output directory already exists: {OUTPUT_DIR}")
+            print("Exiting without changing it. Use -f/--force to overwrite it.")
+            return
+        shutil.rmtree(OUTPUT_DIR)
+
+    os.makedirs(OUTPUT_DIR)
 
     MODS = [m for m in CLUSTER_COLS if m != "introns"]
 
@@ -900,10 +922,9 @@ def cluster_transcripts(args):
     # Keep one output BAM per cluster for each input BAM across all annotations.
     cluster_bam_directories = {}
     for label in bam_labels:
-        bam_stem = os.path.splitext(os.path.basename(input_files[label]["path"]))[0]
         cluster_bam_directories[label] = os.path.join(
-            os.path.dirname(os.path.abspath(OUTPUT_FILE)),
-            f"{bam_stem}_cluster_bams",
+            OUTPUT_DIR,
+            f"{label}_cluster_bams",
         )
         os.makedirs(cluster_bam_directories[label], exist_ok=True)
 
@@ -946,8 +967,8 @@ def cluster_transcripts(args):
                     # print("USING MIN_CLUSTER_SIZE: min_cluster_size = {}".format(min_cluster_size))
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
-                df_clustered, cluster_summary = run_pairwise_clustering(
-                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, MIN_FEATURE_FREQ, EXCLUSIVITY_THRESHOLD,SHOW_DENDROGRAM, LIFT_THRESHOLD, FEATURE_DISTANCE_THRESHOLD
+                df_clustered, cluster_summary, dendrogram_data = run_pairwise_clustering(
+                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, MIN_FEATURE_FREQ, EXCLUSIVITY_THRESHOLD,SHOW_DENDROGRAM, LIFT_THRESHOLD, FEATURE_DISTANCE_THRESHOLD, HIDE_DENDROGRAM_LABELS
                 )
 
                 df_clustered["cluster"] = df_clustered["combined_primary_itemset"]
@@ -966,10 +987,10 @@ def cluster_transcripts(args):
 
                 # ---------- optional UMAP only for visualization ----------
                 if len(matches) == 1:
-                    UMAP_OUTPUT_FILE = "{}.umap".format(OUTPUT_FILE)
-                    df_clustered.to_csv(UMAP_OUTPUT_FILE, sep="\t", index=False)
-                    print("UMAP_OUTPUT_FILE")
-                    print(f"Done. Wrote: {UMAP_OUTPUT_FILE}")
+                    # UMAP_OUTPUT_DIR = "{}.umap".format(OUTPUT_DIR)
+                    # df_clustered.to_csv(UMAP_OUTPUT_DIR, sep="\t", index=False)
+                    # print("UMAP_OUTPUT_DIR")
+                    # print(f"Done. Wrote: {UMAP_OUTPUT_DIR}")
 
                     # Write reads into cluster BAMs, keeping writers open so output
                     # accumulates across all annotation rows in this run.
@@ -1015,6 +1036,22 @@ def cluster_transcripts(args):
                             cluster_bam_writers[cluster_key].write(read)
                             cluster_bam_read_ids[cluster_key].add(read.query_name)
 
+                    # TODO: plot coverage alongside dendrogram
+                    # I think we can just directly call with plot_coverage function using the newly written cluster BAMs.
+                    # This involves a bit of overhead of closing original BAMs and reopening them I guess, but the cluster BAM 
+                    # files will be fairly small so it's probably all good.
+
+                    # TODO: create new input_samples.txt in OUTPUT_DIR
+                    # TODO: simplify
+                    for bam_label in bam_labels:
+                        with open(os.path.join(OUTPUT_DIR, f"{bam_label}_cluster_bams/input_samples.txt"), "w") as f:
+                            for bam_label_inner, cluster_key in cluster_bam_writers:
+                                if bam_label_inner != bam_label:
+                                    continue
+                                cluster_entry = f"{cluster_key} control bam {os.fsdecode(cluster_bam_writers[(bam_label, cluster_key)].filename)}\n"
+                                f.write(cluster_entry)
+                                print(cluster_entry.strip())
+
             except ValueError as e:
                 print("ERROR:", e)
                 # fallback: one row ID_clusterNA with per-label counts
@@ -1054,8 +1091,9 @@ def cluster_transcripts(args):
 
     # ---------- write ----------
     out_df = main_count_table.rename_axis("ID_cluster").reset_index()
-    out_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
-    print(f"Done. Wrote: {OUTPUT_FILE}")
+    counts_table_output_path = "{}/counts_table.tsv".format(OUTPUT_DIR)
+    out_df.to_csv(counts_table_output_path, sep="\t", index=False)
+    print(f"Done. Wrote: {counts_table_output_path}")
 
     # ---------- write cluster summaries, ordered the same as the count table ----------
     main_cluster_summary = (
@@ -1066,6 +1104,26 @@ def cluster_transcripts(args):
         .reset_index()
     )
 
-    CLUSTER_SUMMARY_OUTPUT_FILE = "{}.cluster_summary.tsv".format(OUTPUT_FILE)
+    CLUSTER_SUMMARY_OUTPUT_FILE = "{}/cluster_summary.tsv".format(OUTPUT_DIR)
     main_cluster_summary.to_csv(CLUSTER_SUMMARY_OUTPUT_FILE, sep="\t", index=False)
     print(f"Done. Wrote: {CLUSTER_SUMMARY_OUTPUT_FILE}")
+
+    # set parameters for plotting
+    if len(matches) == 1 and SHOW_DENDROGRAM:
+        # TODO: move dendrogram plotting to here, where it is currently save to file for plotting here
+        plot_cluster_dendrogram(
+            **dendrogram_data,
+            distance_threshold=DISTANCE_THRESHOLD,
+            hide_labels=HIDE_DENDROGRAM_LABELS,
+            delay_show=True,
+        )
+        # Index only after closing the writers so the BAMs have complete BGZF
+        # streams and EOF markers.
+        for output_bam in cluster_bam_writers.values():
+            bam_path = os.fsdecode(output_bam.filename)
+            pysam.index(bam_path)
+            print(f"Done. Wrote: {bam_path}.bai")
+
+        # args.input = os.path.expanduser("~/test_rewrite/28C1_read_depth_cluster_bams/input_samples.txt")
+        # args.output = os.path.expanduser("~/test_rewrite/28C1_read_depth_cluster_bams/coverage_plots.png")
+        # plot_coverage(args)
