@@ -1122,9 +1122,14 @@ def cluster_transcripts(args):
             "name": str(cluster),
             "url": bam_filename,
             "indexURL": f"{bam_filename}.bai",
-            "samplingDepth": 500,
-            "colorBy": "strand",
-            "groupBy": "strand",
+            # "samplingDepth": 500,
+            "colorBy": "basemod",
+            # "groupBy": "strand",
+            "baseModificationThreshold": 1,
+            # "height": 500,
+            "displayMode": "COLLAPSED",
+            # "hideSmallIndels": True,
+            # "indelSizeThreshold": 10
         })
 
     for bam_label, tracks in tracks_by_label.items():
