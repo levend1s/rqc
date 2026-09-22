@@ -194,27 +194,7 @@ def build_parser():
     cluster_transcripts_parser.add_argument("--lift_threshold", required=False, type=float, default=1.1, help="minimum lift score to consider a feature as a predictor of intron presence (default: 1.5)")
     cluster_transcripts_parser.add_argument("--feature_distance_threshold", required=False, type=int, default=200, help="maximum distance between a feature and an intron to consider for clustering (default: 100)")
     cluster_transcripts_parser.add_argument("--hide_dendrogram_labels",  action="store_true", help="if provided, hide the labels on the dendrogram (default: False)")
-
-    # for plot coverage calling
-    cluster_transcripts_parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode, benchmarking and printing additional information")
-    cluster_transcripts_parser.add_argument("-r", "--padding_ratio", required=False, type=float, default=0.0, help="input file listing coverage data")
-    cluster_transcripts_parser.add_argument("--mode", required=False, default="gene", help="input file listing coverage data")
-    cluster_transcripts_parser.add_argument("--bins", required=False, type=int, default=100, help="input file listing coverage data")
-    cluster_transcripts_parser.add_argument("--read_depth", required=False, type=int, default=0, help="input file listing coverage data")
-    cluster_transcripts_parser.add_argument("--coverage_method", required=False, default="max", help="How to calculate the coverage for each bin: sum, average, max")
-    cluster_transcripts_parser.add_argument("--mod_normalisation", required=False, default="raw", help="input file listing coverage data")
-    cluster_transcripts_parser.add_argument("--plot_density", action="store_true", help="plot density of coverage (expensive)")
-    cluster_transcripts_parser.add_argument("--separate_y_axes", action="store_true", help="plot density of coverage (expensive)")
-    cluster_transcripts_parser.add_argument("--skip_malannotations", action="store_true", help="plot density of coverage (expensive)")
-    cluster_transcripts_parser.add_argument("--ignore_strand", action="store_true", default=False, help="plot density of coverage (expensive)")
-    cluster_transcripts_parser.add_argument("--line_width", required=False, type=int, default=1, help="input file listing coverage data")
-    cluster_transcripts_parser.add_argument("--log_scale", required=False, default=False, action="store_true", help="input file listing coverage data")
-    cluster_transcripts_parser.add_argument("--alpha", required=False, type=float, default=0.2, help="transparency level for the plot")
-    cluster_transcripts_parser.add_argument("--step", required=False, type=str, default="mid", help="step mode for the plot")
-    cluster_transcripts_parser.add_argument("--plot_type", required=False, type=str, default="line", help="type of plot to create (bar, line)")
-    cluster_transcripts_parser.add_argument("--scale_density_by_total_coverage", action="store_true", default=False, help="If plotting density, scale the density by the total coverage (makes areas under the curve comparable to total coverage)")
-
-    
+    cluster_transcripts_parser.add_argument("--call_mods",  action="store_true", help="if provided, call modifications on the reads (default: False)")
 
     cluster_transcripts_parser.set_defaults(func=cluster_transcripts.cluster_transcripts)
 

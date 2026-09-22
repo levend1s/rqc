@@ -1,8 +1,10 @@
+import faulthandler
 import re
 import sys
 import os
 import shutil
 import json
+import array
 
 import pandas
 import pysam
@@ -11,7 +13,7 @@ from collections import Counter
 
 from sklearn.preprocessing import MultiLabelBinarizer
 
-from rqc_modules.constants import PYSAM_MOD_TUPLES
+from rqc_modules.constants import PYSAM_MOD_CODES, PYSAM_MOD_TUPLES
 from rqc_modules.utils import process_input_files, process_annotation_file
 from rqc_modules.plot_coverage import plot_coverage
 
@@ -42,6 +44,16 @@ def timeit(func):
 def sanitize(tok):
     # keep names filesystem/column-friendly: no spaces, slashes, etc.
     return re.sub(r"[^0-9a-zA-Z_]+", "-", tok)
+
+
+def cluster_order_key(cluster_label):
+    """Return a stable ordering key so cluster names are written as cluster0, cluster1, ..."""
+    text = str(cluster_label)
+    match = re.match(r"^cluster(\d+)", text)
+    if match:
+        return (0, int(match.group(1)), text)
+    return (1, text)
+
 
 def merge_small_clusters_tree_aware(labels, Z, min_size, weights=None):
     """
@@ -851,6 +863,7 @@ def cluster_transcripts(args):
     LIFT_THRESHOLD = args.lift_threshold
     FEATURE_DISTANCE_THRESHOLD = args.feature_distance_threshold
     HIDE_DENDROGRAM_LABELS = args.hide_dendrogram_labels
+    CALL_MODS = args.call_mods
 
     if OUTPUT_DIR in (os.path.abspath(os.sep), os.path.expanduser("~")):
         print(f"WARNING: refusing to use a protected output directory: {OUTPUT_DIR}")
@@ -996,6 +1009,8 @@ def cluster_transcripts(args):
                     # Write reads into cluster BAMs, keeping writers open so output
                     # accumulates across all annotation rows in this run.
                     # TODO: this should only write bam files if there isn't an insane amount of clusters
+
+                    print("Writing cluster BAMs...")
                     for bam_label, bam_file in bam_handles.items():
                         cluster_rows = df_clustered[df_clustered["label"] == bam_label]
                         if cluster_rows.empty:
@@ -1007,12 +1022,31 @@ def cluster_transcripts(args):
                             .to_dict()
                         )
 
-                        for cluster in set(read_to_cluster.values()):
+                        ordered_clusters = sorted(
+                            set(read_to_cluster.values()),
+                            key=cluster_order_key,
+                        )
+
+                        if len(ordered_clusters) > 20:
+                            print(f"{bam_label} has {len(ordered_clusters)} cluster BAMs.")
+                            response = input(
+                                f"{bam_label} has {len(ordered_clusters)} cluster BAMs. Write them anyway? [y/N]: "
+                            ).strip().lower()
+                            if response not in {"y", "yes"}:
+                                print(f"Skipping BAM export for {bam_label}: {len(ordered_clusters)} clusters exceeds the 20-cluster limit.")
+                                continue
+
+                        cluster_file_names = {
+                            cluster: f"cluster{idx}"
+                            for idx, cluster in enumerate(ordered_clusters)
+                        }
+
+                        for cluster in ordered_clusters:
                             cluster_key = (bam_label, cluster)
                             if cluster_key not in cluster_bam_writers:
                                 output_path = os.path.join(
                                     cluster_bam_directories[bam_label],
-                                    f"{sanitize(str(cluster))}.bam",
+                                    f"{cluster_file_names[cluster]}.bam",
                                 )
                                 cluster_bam_writers[cluster_key] = pysam.AlignmentFile(
                                     output_path, "wb", template=bam_file
@@ -1034,6 +1068,47 @@ def cluster_transcripts(args):
                             if read.query_name in cluster_bam_read_ids[cluster_key]:
                                 continue
 
+                            # print(read)
+                            # print(read.modified_bases)
+
+                            # HACK: this is only necessary because igv.js isn't rendering mods properly, or allows control over specific mods to render.
+                            if CALL_MODS:
+                                wanted_codes = []
+                                for m in MODS:
+                                    wanted_codes.append(PYSAM_MOD_CODES[m + ("_for" if read.is_forward else "_rev")])
+
+                                mm = read.get_tag("MM")
+                                ml = list(read.get_tag("ML")) if read.has_tag("ML") else []
+
+                                groups = [g for g in mm.split(";") if g]
+
+                                new_groups = []
+                                new_ml = []
+                                idx = 0
+
+                                for group in groups:
+                                    header, *deltas = group.split(",")
+                                    n = len(deltas)
+                                    group_ml = ml[idx:idx + n]
+                                    idx += n
+
+                                    if header.strip(".") not in wanted_codes:
+                                        continue  # drop whole group + its ML slice
+
+                                    new_groups.append(group + ";")
+                                    new_ml.extend(q if q >= PYSAM_MOD_THRESHOLD else 0 for q in group_ml)
+
+
+                                if new_groups:
+                                    new_mm = "".join(new_groups)
+                                    new_ml = array.array("B", new_ml)
+                                    read.set_tag("MM", new_mm, value_type="Z")
+                                    read.set_tag("ML", array.array("B", new_ml))
+                                else:
+                                    read.set_tag("MM", None)
+                                    read.set_tag("ML", None)
+
+
                             cluster_bam_writers[cluster_key].write(read)
                             cluster_bam_read_ids[cluster_key].add(read.query_name)
 
@@ -1046,12 +1121,16 @@ def cluster_transcripts(args):
                     # TODO: simplify
                     for bam_label in bam_labels:
                         with open(os.path.join(OUTPUT_DIR, f"{bam_label}_cluster_bams/input_samples.txt"), "w") as f:
-                            for bam_label_inner, cluster_key in cluster_bam_writers:
-                                if bam_label_inner != bam_label:
-                                    continue
-                                cluster_entry = f"{cluster_key} control bam {os.fsdecode(cluster_bam_writers[(bam_label, cluster_key)].filename)}\n"
+                            ordered_cluster_entries = [
+                                (cluster_label, cluster_bam_writers[(bam_label, cluster_label)])
+                                for bam_label_inner, cluster_label in cluster_bam_writers
+                                if bam_label_inner == bam_label
+                            ]
+                            ordered_cluster_entries.sort(key=lambda item: cluster_order_key(item[0]))
+                            for cluster_label, writer in ordered_cluster_entries:
+                                cluster_entry = f"{cluster_label} control bam {os.fsdecode(writer.filename)}\n"
                                 f.write(cluster_entry)
-                                print(cluster_entry.strip())
+                                # print(cluster_entry.strip())
 
             except ValueError as e:
                 print("ERROR:", e)
@@ -1112,25 +1191,31 @@ def cluster_transcripts(args):
     # Index finalized cluster BAMs and create an IGV Reports track config for
     # each input BAM label.
     tracks_by_label = {label: [] for label in bam_labels}
-    for (bam_label, cluster), output_bam in cluster_bam_writers.items():
-        bam_path = os.fsdecode(output_bam.filename)
-        pysam.index(bam_path)
-        print(f"Done. Wrote: {bam_path}.bai")
+    for bam_label in bam_labels:
+        for (stored_bam_label, cluster), output_bam in sorted(
+            [((label, cluster_name), writer) for (label, cluster_name), writer in cluster_bam_writers.items() if label == bam_label],
+            key=lambda item: cluster_order_key(item[0][1]),
+        ):
+            bam_path = os.fsdecode(output_bam.filename)
+            pysam.index(bam_path)
 
-        bam_filename = os.path.basename(bam_path)
-        tracks_by_label[bam_label].append({
-            "name": str(cluster),
-            "url": bam_filename,
-            "indexURL": f"{bam_filename}.bai",
-            # "samplingDepth": 500,
-            "colorBy": "basemod",
-            # "groupBy": "strand",
-            "baseModificationThreshold": 1,
-            # "height": 500,
-            "displayMode": "COLLAPSED",
-            # "hideSmallIndels": True,
-            # "indelSizeThreshold": 10
-        })
+            bam_filename = os.path.basename(bam_path)
+            tracks_by_label[bam_label].append({
+                "type": "alignment",
+                "format": "bam",
+                "name": str(cluster),
+                "url": bam_filename,
+                "indexURL": f"{bam_filename}.bai",
+                "colorBy": "basemod",
+                "showCoverage": True,
+                # "groupBy": "strand",
+                "baseModificationThreshold": MOD_PROB_THRESHOLD,
+                "height": 200,
+                "displayMode": "squished",
+                "hideSmallIndels": True,
+                "indelSizeThreshold": 10,
+                "showMismatches": False
+            })
 
     for bam_label, tracks in tracks_by_label.items():
         tracks_config_path = os.path.join(
@@ -1139,7 +1224,6 @@ def cluster_transcripts(args):
         with open(tracks_config_path, "w") as tracks_config_file:
             json.dump(tracks, tracks_config_file, indent=2)
             tracks_config_file.write("\n")
-        print(f"Done. Wrote: {tracks_config_path}")
 
     # Write the selected annotation region as BED6. GFF coordinates are
     # 1-based inclusive; BED uses a 0-based half-open interval.
@@ -1166,6 +1250,4 @@ def cluster_transcripts(args):
             hide_labels=HIDE_DENDROGRAM_LABELS,
             delay_show=True,
         )
-        # args.input = os.path.expanduser("~/test_rewrite/28C1_read_depth_cluster_bams/input_samples.txt")
-        # args.output = os.path.expanduser("~/test_rewrite/28C1_read_depth_cluster_bams/coverage_plots.png")
-        # plot_coverage(args)
+        plt.show()
