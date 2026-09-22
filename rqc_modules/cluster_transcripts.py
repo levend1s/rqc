@@ -1212,9 +1212,11 @@ def cluster_transcripts(args):
                 "baseModificationThreshold": MOD_PROB_THRESHOLD,
                 "height": 200,
                 "displayMode": "squished",
+                "showMismatches": False,
                 "hideSmallIndels": True,
                 "indelSizeThreshold": 10,
-                "showMismatches": False
+                "deletionColor": "rgb(170, 170, 170)"
+                # "insertionColor": "rgb(170, 170, 170)"
             })
 
     for bam_label, tracks in tracks_by_label.items():
