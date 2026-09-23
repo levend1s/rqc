@@ -175,6 +175,7 @@ def build_parser():
     cluster_transcripts_parser.add_argument("-m", "--mod",                required=False,  default="m6A", help="output filtered bam file.")
     cluster_transcripts_parser.add_argument("--exclude_tol",  required=False,  type=int, default=0, help="filter for only reads without m6A modification at these positions")
     cluster_transcripts_parser.add_argument("-a", "--annotation",         required=False,  help="annotation file (GFF)")
+    cluster_transcripts_parser.add_argument("-g", "--genome",         required=False, help="genome for igv reports")
     cluster_transcripts_parser.add_argument("--ids", required=False, nargs="*", help="input file listing coverage data.")
     cluster_transcripts_parser.add_argument("--type", required=False, help="input file listing coverage data")
 
@@ -186,6 +187,7 @@ def build_parser():
     cluster_transcripts_parser.add_argument("--cluster_cols", required=False, type=str, default=None, help="comma-separated list of columns to cluster on")
     cluster_transcripts_parser.add_argument("--min_cluster_percent", required=False, type=float, default=None, help="minimum percentage of reads to form a cluster (default: 0.01)")
     cluster_transcripts_parser.add_argument("--min_cluster_size_bulk", required=False, type=int, default=40, help="minimum number of reads to form a cluster (default: 40)")
+    cluster_transcripts_parser.add_argument("--min_reads_to_process", required=False, type=int, default=40, help="minimum number of reads to process (default: 40)")
     cluster_transcripts_parser.add_argument("--distance_threshold", required=False, type=float, default=0.1, help="distance threshold for clustering (default: 0.1)")
     cluster_transcripts_parser.add_argument("--show_dendrogram", action="store_true", help="if provided, show dendrogram of clustering results")
     cluster_transcripts_parser.add_argument("--min_feature_freq", required=False, type=float, default=0.01, help="minimum frequency of a feature to be considered for clustering (default: 0.01)")
@@ -195,6 +197,7 @@ def build_parser():
     cluster_transcripts_parser.add_argument("--feature_distance_threshold", required=False, type=int, default=200, help="maximum distance between a feature and an intron to consider for clustering (default: 100)")
     cluster_transcripts_parser.add_argument("--hide_dendrogram_labels",  action="store_true", help="if provided, hide the labels on the dendrogram (default: False)")
     cluster_transcripts_parser.add_argument("--call_mods",  action="store_true", help="if provided, call modifications on the reads (default: False)")
+    cluster_transcripts_parser.add_argument("--generate_igv_reports",  action="store_true", help="if provided, generate IGV reports for each cluster (default: False)")
 
     cluster_transcripts_parser.set_defaults(func=cluster_transcripts.cluster_transcripts)
 

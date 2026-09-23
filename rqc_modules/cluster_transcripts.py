@@ -5,6 +5,7 @@ import os
 import shutil
 import json
 import array
+import subprocess
 
 import pandas
 import pysam
@@ -841,29 +842,55 @@ def gather_read_entries_for_region(
     # continuous variable encoding for feature clusters may not work, but for single categories (just m6A) could order by the midpoint/max of modification for position information along the transcript
 
 def cluster_transcripts(args):
+    # general options
     INPUT = args.input
     ANNOTATION_FILE = args.annotation
+    GENOME_FILE = args.genome
     IDS = args.ids
     FEATURE_TYPE = args.type
-    COVERAGE_PADDING = args.padding
-    MOD_PROB_THRESHOLD = args.mod_prob_threshold
     OUTPUT_DIR = os.path.abspath(os.path.expanduser(args.outfile))
+    CALL_MODS = args.call_mods
     FORCE = args.force
+    HIDE_DENDROGRAM_LABELS = args.hide_dendrogram_labels
+    SHOW_DENDROGRAM = args.show_dendrogram
+    GENERATE_IGV_REPORT = args.generate_igv_reports
+
+    # read processing options
+    COVERAGE_PADDING = args.padding
     MIN_DELETION_LENGTH = args.min_deletion_length
     CLUSTER_COLS = args.cluster_cols.split(',') if args.cluster_cols is not None else None
+    MIN_GENE_OVERLAP = args.min_gene_overlap
+    MOD_PROB_THRESHOLD = args.mod_prob_threshold
+    PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
+    MINIMUM_READS_TO_PROCESS = args.min_reads_to_process
+    print("Read processing options:")
+    print(f"  COVERAGE_PADDING: {COVERAGE_PADDING}")
+    print(f"  MIN_DELETION_LENGTH: {MIN_DELETION_LENGTH}")
+    print(f"  CLUSTER_COLS: {CLUSTER_COLS}")
+    print(f"  MIN_GENE_OVERLAP: {MIN_GENE_OVERLAP}")
+    print(f"  MOD_PROB_THRESHOLD: {MOD_PROB_THRESHOLD}")
+    print(f"  MINIMUM_READS_TO_PROCESS: {MINIMUM_READS_TO_PROCESS}")
+
+    print("Clustering options:")
     MIN_CLUSTER_PERC = args.min_cluster_percent
     MIN_CLUSTER_SIZE_BULK = args.min_cluster_size_bulk
     DISTANCE_THRESHOLD = args.distance_threshold
     MIN_FEATURE_FREQ = args.min_feature_freq
-    SHOW_DENDROGRAM = args.show_dendrogram
-    MINIMUM_READS_TO_PROCESS = MIN_CLUSTER_SIZE_BULK
-    EXCLUSIVITY_THRESHOLD = args.exclusivity_threshold
-    MIN_GENE_OVERLAP = args.min_gene_overlap
-    PYSAM_MOD_THRESHOLD = int(256 * MOD_PROB_THRESHOLD)
+    print(f"  MIN_CLUSTER_PERC: {MIN_CLUSTER_PERC}")
+    print(f"  MIN_CLUSTER_SIZE_BULK: {MIN_CLUSTER_SIZE_BULK}")
+    print(f"  DISTANCE_THRESHOLD: {DISTANCE_THRESHOLD}")
+    print(f"  MIN_FEATURE_FREQ: {MIN_FEATURE_FREQ}")
+
+    # Variables for intron prediction
+    print("Intron prediction options:")
     LIFT_THRESHOLD = args.lift_threshold
-    FEATURE_DISTANCE_THRESHOLD = args.feature_distance_threshold
-    HIDE_DENDROGRAM_LABELS = args.hide_dendrogram_labels
-    CALL_MODS = args.call_mods
+    EXCLUSIVITY_THRESHOLD = args.exclusivity_threshold
+    FEATURE_DISTANCE_THRESHOLD = args.feature_distance_threshold # min distance the two features must be apart to be considered for exclusivity
+    print(f"  LIFT_THRESHOLD: {LIFT_THRESHOLD}")
+    print(f"  EXCLUSIVITY_THRESHOLD: {EXCLUSIVITY_THRESHOLD}")
+    print(f"  FEATURE_DISTANCE_THRESHOLD: {FEATURE_DISTANCE_THRESHOLD}")
+
+    
 
     if OUTPUT_DIR in (os.path.abspath(os.sep), os.path.expanduser("~")):
         print(f"WARNING: refusing to use a protected output directory: {OUTPUT_DIR}")
@@ -972,13 +999,14 @@ def cluster_transcripts(args):
             try:
                 if num_total_reads < MINIMUM_READS_TO_PROCESS:
                     raise ValueError("not enough reads to process!")
+                print("Number of total reads: {}".format(num_total_reads))
 
                 if MIN_CLUSTER_PERC is not None:
                     min_cluster_size = max(MIN_CLUSTER_SIZE_BULK, int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
-                    # print("USING MIN_CLUSTER_PERC {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
+                    print("USING MIN_CLUSTER_SIZE from PERC: {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
                 else:
                     min_cluster_size = MIN_CLUSTER_SIZE_BULK
-                    # print("USING MIN_CLUSTER_SIZE: min_cluster_size = {}".format(min_cluster_size))
+                    print("USING MIN_CLUSTER_SIZE from BULK: min_cluster_size = {}".format(min_cluster_size))
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
                 df_clustered, cluster_summary, dendrogram_data = run_pairwise_clustering(
@@ -1219,14 +1247,6 @@ def cluster_transcripts(args):
                 # "insertionColor": "rgb(170, 170, 170)"
             })
 
-    for bam_label, tracks in tracks_by_label.items():
-        tracks_config_path = os.path.join(
-            cluster_bam_directories[bam_label], "tracksConfig.json"
-        )
-        with open(tracks_config_path, "w") as tracks_config_file:
-            json.dump(tracks, tracks_config_file, indent=2)
-            tracks_config_file.write("\n")
-
     # Write the selected annotation region as BED6. GFF coordinates are
     # 1-based inclusive; BED uses a 0-based half-open interval.
     gene_bed = matches[["seq_id", "start", "end", "ID", "strand"]].copy()
@@ -1241,7 +1261,32 @@ def cluster_transcripts(args):
     )
     print(f"Done. Wrote: {gene_bed_output_path}")
 
-    
+    for bam_label, tracks in tracks_by_label.items():
+        tracks_config_path = os.path.join(
+            cluster_bam_directories[bam_label], "tracksConfig.json"
+        )
+        with open(tracks_config_path, "w") as tracks_config_file:
+            json.dump(tracks, tracks_config_file, indent=2)
+            tracks_config_file.write("\n")
+
+        if GENERATE_IGV_REPORT:
+            igv_report_path = os.path.join(
+                cluster_bam_directories[bam_label], "igv_report.html"
+            )
+            report_cmd = [
+                "create_report",
+                gene_bed_output_path,
+                "--fasta",
+                GENOME_FILE,
+                "--track-config",
+                tracks_config_path,
+                "--tracks",
+                ANNOTATION_FILE,
+                "--output",
+                igv_report_path,
+            ]
+            subprocess.run(report_cmd, check=True)
+            print(f"Done. Wrote: {igv_report_path}")
 
     # set parameters for plotting
     if len(matches) == 1 and SHOW_DENDROGRAM:
