@@ -693,9 +693,6 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
 
     # for each cluster, grab the top tokens and test whether those tokens are better at predicting each intron than the background
     if predict_column is not None:
-        print(f"Evaluating cluster tokens as predictors of {predict_column}...")
-        print(f"  LIFT_THRESHOLD = {LIFT_THRESHOLD}")
-        print(f"  FEATURE_DISTANCE_THRESHOLD = {FEATURE_DISTANCE_THRESHOLD}")
         predictor_results = evaluate_cluster_tokens_as_target_predictors(
             rows, cluster_important_tokens, predict_column, 5, LIFT_THRESHOLD, FEATURE_DISTANCE_THRESHOLD
         )
@@ -923,6 +920,10 @@ def cluster_transcripts(args):
     LIFT_THRESHOLD = args.lift_threshold
     FEATURE_DISTANCE_THRESHOLD = args.feature_distance_threshold # min distance the two features must be apart to be considered for exclusivity
     PREDICT_COLUMN = args.predict
+    if PREDICT_COLUMN is not None:
+        print(f"Evaluating cluster tokens as predictors of {PREDICT_COLUMN}...")
+        print(f"  LIFT_THRESHOLD = {LIFT_THRESHOLD}")
+        print(f"  FEATURE_DISTANCE_THRESHOLD = {FEATURE_DISTANCE_THRESHOLD}")
     
 
     if OUTPUT_DIR in (os.path.abspath(os.sep), os.path.expanduser("~")):
@@ -1032,14 +1033,14 @@ def cluster_transcripts(args):
             try:
                 if num_total_reads < MINIMUM_READS_TO_PROCESS:
                     raise ValueError("not enough reads to process!")
-                print("Number of total reads: {}".format(num_total_reads))
+                # print("Number of total reads: {}".format(num_total_reads))
 
                 if MIN_CLUSTER_PERC is not None:
                     min_cluster_size = max(MIN_CLUSTER_SIZE_BULK, int(numpy.ceil(MIN_CLUSTER_PERC * num_total_reads / len(bam_labels))))
-                    print("USING MIN_CLUSTER_SIZE from PERC: {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
+                    # print("USING MIN_CLUSTER_SIZE from PERC: {}: min_cluster_size = {}".format(MIN_CLUSTER_PERC, min_cluster_size))
                 else:
                     min_cluster_size = MIN_CLUSTER_SIZE_BULK
-                    print("USING MIN_CLUSTER_SIZE from BULK: min_cluster_size = {}".format(min_cluster_size))
+                    # print("USING MIN_CLUSTER_SIZE from BULK: min_cluster_size = {}".format(min_cluster_size))
 
                 # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or 
                 # by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
