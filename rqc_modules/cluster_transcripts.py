@@ -397,7 +397,7 @@ def plot_cluster_dendrogram(
         plt.show()
 
 
-def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens, target_prefix, min_count,
+def evaluate_cluster_tokens_as_target_predictors(rows, cluster_important_tokens, target_prefix, min_count,
                                                     LIFT_THRESHOLD, max_distance_nt=None):
     """
     For each UNIQUE combination of non-intron predictor tokens across all
@@ -428,13 +428,13 @@ def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens,
     tok_to_idx = {t: i for i, t in enumerate(tokens)}
     n_reads = len(rows)
 
-    all_intron_tokens = sorted({
+    all_target_tokens = sorted({
         tok for imp_tokens in cluster_important_tokens.values()
         for tok in imp_tokens if tok.startswith(target_prefix)
     })
 
-    if not all_intron_tokens:
-        print("No intron tokens found among any cluster's important tokens.")
+    if not all_target_tokens:
+        print(f"No target tokens {target_prefix} found among any cluster's important tokens.")
         return pandas.DataFrame()
 
     # --- deduplicate predictor sets across clusters (full set, before distance filtering) ---
@@ -447,14 +447,14 @@ def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens,
 
     results = []
     for predictor_set, cids in combo_to_clusters.items():
-        for intron_tok in all_intron_tokens:
-            if intron_tok not in tok_to_idx:
+        for target_tok in all_target_tokens:
+            if target_tok not in tok_to_idx:
                 continue
 
             # --- filter predictors to those near THIS intron ---
             filtered_predictor_tokens = sorted(
                 t for t in predictor_set
-                if _within_distance_of_intron(t, intron_tok, max_distance_nt)
+                if _within_distance_of_intron(t, target_tok, max_distance_nt)
             )
             if not filtered_predictor_tokens:
                 continue  # nothing left close enough to this intron -> skip this pair
@@ -467,16 +467,16 @@ def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens,
             if n_present < min_count or n_absent < min_count:
                 continue
 
-            y = X[:, tok_to_idx[intron_tok]]
-            p_intron_overall = y.mean()
-            if p_intron_overall == 0:
+            y = X[:, tok_to_idx[target_tok]]
+            p_target_overall = y.mean()
+            if p_target_overall == 0:
                 continue
 
-            p_intron_given_present = y[p_combo == 1].mean()
-            p_intron_given_absent = y[p_combo == 0].mean()
+            p_target_given_present = y[p_combo == 1].mean()
+            p_target_given_absent = y[p_combo == 0].mean()
 
-            lift_present = p_intron_given_present / p_intron_overall
-            lift_absent = p_intron_given_absent / p_intron_overall
+            lift_present = p_target_given_present / p_target_overall
+            lift_absent = p_target_given_absent / p_target_overall
 
             n11 = int(((y == 1) & (p_combo == 1)).sum())
             n10 = int(((y == 1) & (p_combo == 0)).sum())
@@ -488,11 +488,11 @@ def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens,
                 "clusters": ", ".join(str(c) for c in sorted(cids, key=str)),
                 "predictor_combo": " | ".join(filtered_predictor_tokens),
                 "n_predictor_tokens": len(filtered_predictor_tokens),
-                "intron": intron_tok,
-                "p_intron_overall": p_intron_overall,
-                "p_intron_given_combo_present": p_intron_given_present,
+                "target": target_tok,
+                "p_target_overall": p_target_overall,
+                "p_target_given_combo_present": p_target_given_present,
                 "lift_combo_present": lift_present,
-                "p_intron_given_combo_absent": p_intron_given_absent,
+                "p_target_given_combo_absent": p_target_given_absent,
                 "lift_combo_absent": lift_absent,
                 "p_value": p_value,
             })
@@ -509,13 +509,13 @@ def evaluate_cluster_tokens_as_intron_predictors(rows, cluster_important_tokens,
             (res_df["lift_combo_present"] <= INV_LIFT_THRESHOLD)
         ].sort_values("lift_combo_absent", ascending=False)
 
-        res_df = res_df.sort_values("intron")
+        res_df = res_df.sort_values("target")
 
     return res_df
 
 
 # https://uc-r.github.io/hc_clustering
-def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, exclusivity_score_threshold=0.5, show_dendrogram=False, LIFT_THRESHOLD=1.5, FEATURE_DISTANCE_THRESHOLD=100, HIDE_DENDROGRAM_LABELS=False):
+def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.1, min_feature_freq=0.01, LIFT_THRESHOLD=1.5, FEATURE_DISTANCE_THRESHOLD=100, distance_metric="jaccard", linkage_method="average", predict_column=None):
     rows_of_tokens = []
 
     for _, row in df.iterrows():
@@ -540,7 +540,7 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
     keep_tokens = {t for t, c in token_row_counts.items() if c >= min_token_rows}
     rows = [[t for t in tokens if t in keep_tokens] for tokens in rows_of_tokens]
 
-    # --- Deduplicate: cluster unique patterns, weighted by how many rows share them ---
+    # --- Deduplicate: cluster unique patterns
     pattern_key = [tuple(sorted(set(tokens))) for tokens in rows]
     unique_patterns = sorted(set(pattern_key))
     pattern_to_uid = {p: i for i, p in enumerate(unique_patterns)}
@@ -550,17 +550,46 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
 
     mlb = MultiLabelBinarizer()
     X = mlb.fit_transform(unique_rows)
-    dists = pdist(X, metric="jaccard")
-    Z = linkage(dists, method="average")
+    dists = pdist(X, metric=distance_metric)
+    Z = linkage(dists, method=linkage_method)
 
-    unique_labels_arr = fcluster(Z, t=distance_threshold, criterion="distance")
+    # Extract the distances (heights) from the linkage matrix
+    distances = Z[:, 2]
+
+    # # Plot the elbow-style curve of merge distances
+    # sorted_distances = sorted(distances, reverse=True)
+    # plt.plot(range(1, len(sorted_distances) + 1), sorted_distances, marker="o")
+    # plt.title("Elbow Plot for Hierarchical Clustering")
+    # plt.xlabel("Merge Step / Number of Clusters")
+    # plt.ylabel("Merge Distance")
+    # plt.show()
+
+    # Find the elbow point in the dendrogram
+    last_n = 15
+    last_n = min(last_n, len(distances) - 1)
+    recent = distances[-last_n:]
+
+    if distance_threshold == 0:
+        diffs = numpy.diff(recent)
+        # index of largest jump
+        jump_idx = numpy.argmax(diffs)
+
+        # Threshold: just above the height before the big jump
+        threshold = recent[jump_idx]
+        print(f"Suggested distance threshold (elbow method): {threshold:.4f}")
+    else:
+        threshold = distance_threshold
+
+    unique_labels_arr = fcluster(Z, t=threshold, criterion="distance")
 
     # --- Enforce minimum cluster size (in terms of ORIGINAL row counts, not unique patterns) ---
     pattern_counts = Counter(row_to_uid)  # how many original rows each unique pattern represents
 
-    unique_labels_arr = merge_small_clusters_tree_aware(
-        unique_labels_arr, Z, min_support, weights=pattern_counts
-    )
+    # merge small clusters upward, weighted by how many rows share them
+    if (min_support > 0):
+        unique_labels_arr = merge_small_clusters_tree_aware(
+            unique_labels_arr, Z, min_support, weights=pattern_counts
+        )
 
     # Map unique-pattern cluster labels back to every original row
     labels = unique_labels_arr[row_to_uid]
@@ -663,38 +692,42 @@ def run_pairwise_clustering(df, feature_cols, min_support, distance_threshold=0.
     cluster_summary_df = pandas.DataFrame(cluster_summary).sort_values("n_samples", ascending=False).reset_index(drop=True)
 
     # for each cluster, grab the top tokens and test whether those tokens are better at predicting each intron than the background
-    intron_predictor_results = evaluate_cluster_tokens_as_intron_predictors(
-        rows, cluster_important_tokens, "introns", 5, LIFT_THRESHOLD, FEATURE_DISTANCE_THRESHOLD
-    )
-
-    if not intron_predictor_results.empty:
-        collapsed_predictor_results = collapse_redundant_predictor_combos(
-            intron_predictor_results, lift_col="lift_combo_absent", tolerance=0.05
+    if predict_column is not None:
+        print(f"Evaluating cluster tokens as predictors of {predict_column}...")
+        print(f"  LIFT_THRESHOLD = {LIFT_THRESHOLD}")
+        print(f"  FEATURE_DISTANCE_THRESHOLD = {FEATURE_DISTANCE_THRESHOLD}")
+        predictor_results = evaluate_cluster_tokens_as_target_predictors(
+            rows, cluster_important_tokens, predict_column, 5, LIFT_THRESHOLD, FEATURE_DISTANCE_THRESHOLD
         )
-        # 2. Explode "clusters" so each row has ONE cluster_id
-        collapsed_predictor_results["clusters"] = collapsed_predictor_results["clusters"].astype(str)
-        predictor_exploded = collapsed_predictor_results.assign(
-            cluster_id=collapsed_predictor_results["clusters"].str.split(",")
-        ).explode("cluster_id")
-        predictor_exploded["cluster_id"] = predictor_exploded["cluster_id"].str.strip().astype(int)
-        predictor_exploded = predictor_exploded.drop(columns="clusters")
 
-        # 3. Merge onto cluster_summary_df (this WILL produce multiple rows per cluster again — expected)
-        cluster_summary_df["cluster_id"] = cluster_summary_df["cluster"].str.extract(r"^cluster(\d+)")[0].astype(int)
-        merged_long = cluster_summary_df.merge(predictor_exploded, on="cluster_id", how="left")
+        if not predictor_results.empty:
+            collapsed_predictor_results = collapse_redundant_predictor_combos(
+                predictor_results, lift_col="lift_combo_absent", tolerance=0.05
+            )
+            # 2. Explode "clusters" so each row has ONE cluster_id
+            collapsed_predictor_results["clusters"] = collapsed_predictor_results["clusters"].astype(str)
+            predictor_exploded = collapsed_predictor_results.assign(
+                cluster_id=collapsed_predictor_results["clusters"].str.split(",")
+            ).explode("cluster_id")
+            predictor_exploded["cluster_id"] = predictor_exploded["cluster_id"].str.strip().astype(int)
+            predictor_exploded = predictor_exploded.drop(columns="clusters")
 
-        # 4. Collapse BACK to one row per cluster, aggregating predictor-result columns into lists
-        list_cols = [c for c in predictor_exploded.columns if c != "cluster_id"]
-        cluster_cols = [c for c in cluster_summary_df.columns if c != "cluster_id"]
+            # 3. Merge onto cluster_summary_df (this WILL produce multiple rows per cluster again — expected)
+            cluster_summary_df["cluster_id"] = cluster_summary_df["cluster"].str.extract(r"^cluster(\d+)")[0].astype(int)
+            merged_long = cluster_summary_df.merge(predictor_exploded, on="cluster_id", how="left")
 
-        agg_dict = {c: (lambda s: list(s.dropna())) for c in list_cols}
-        agg_dict.update({c: "first" for c in cluster_cols})
+            # 4. Collapse BACK to one row per cluster, aggregating predictor-result columns into lists
+            list_cols = [c for c in predictor_exploded.columns if c != "cluster_id"]
+            cluster_cols = [c for c in cluster_summary_df.columns if c != "cluster_id"]
 
-        cluster_summary_df = (
-            merged_long
-            .groupby("cluster_id", as_index=False)
-            .agg(agg_dict)
-        )
+            agg_dict = {c: (lambda s: list(s.dropna())) for c in list_cols}
+            agg_dict.update({c: "first" for c in cluster_cols})
+
+            cluster_summary_df = (
+                merged_long
+                .groupby("cluster_id", as_index=False)
+                .agg(agg_dict)
+            )
 
 
 
@@ -876,20 +909,20 @@ def cluster_transcripts(args):
     MIN_CLUSTER_SIZE_BULK = args.min_cluster_size_bulk
     DISTANCE_THRESHOLD = args.distance_threshold
     MIN_FEATURE_FREQ = args.min_feature_freq
+    DISTANCE_METRIC = args.distance_metric
+    LINKAGE_METHOD = args.linkage_method
     print(f"  MIN_CLUSTER_PERC: {MIN_CLUSTER_PERC}")
     print(f"  MIN_CLUSTER_SIZE_BULK: {MIN_CLUSTER_SIZE_BULK}")
     print(f"  DISTANCE_THRESHOLD: {DISTANCE_THRESHOLD}")
     print(f"  MIN_FEATURE_FREQ: {MIN_FEATURE_FREQ}")
+    print(f"  DISTANCE_METRIC: {DISTANCE_METRIC}")
+    print(f"  LINKAGE_METHOD: {LINKAGE_METHOD}")
 
     # Variables for intron prediction
     print("Intron prediction options:")
     LIFT_THRESHOLD = args.lift_threshold
-    EXCLUSIVITY_THRESHOLD = args.exclusivity_threshold
     FEATURE_DISTANCE_THRESHOLD = args.feature_distance_threshold # min distance the two features must be apart to be considered for exclusivity
-    print(f"  LIFT_THRESHOLD: {LIFT_THRESHOLD}")
-    print(f"  EXCLUSIVITY_THRESHOLD: {EXCLUSIVITY_THRESHOLD}")
-    print(f"  FEATURE_DISTANCE_THRESHOLD: {FEATURE_DISTANCE_THRESHOLD}")
-
+    PREDICT_COLUMN = args.predict
     
 
     if OUTPUT_DIR in (os.path.abspath(os.sep), os.path.expanduser("~")):
@@ -1008,9 +1041,19 @@ def cluster_transcripts(args):
                     min_cluster_size = MIN_CLUSTER_SIZE_BULK
                     print("USING MIN_CLUSTER_SIZE from BULK: min_cluster_size = {}".format(min_cluster_size))
 
-                # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
+                # So for a gene you can cluster by continuous variables (euclidean distance) or by categorical features (Jaccard distance) or 
+                # by a combination of both (e.g. weighted sum of distances). The latter is experimental and may not work well, but it is possible to implement.
                 df_clustered, cluster_summary, dendrogram_data = run_pairwise_clustering(
-                    df, CLUSTER_COLS, min_cluster_size, DISTANCE_THRESHOLD, MIN_FEATURE_FREQ, EXCLUSIVITY_THRESHOLD,SHOW_DENDROGRAM, LIFT_THRESHOLD, FEATURE_DISTANCE_THRESHOLD, HIDE_DENDROGRAM_LABELS
+                    df, 
+                    CLUSTER_COLS, 
+                    min_cluster_size, 
+                    DISTANCE_THRESHOLD, 
+                    MIN_FEATURE_FREQ, 
+                    LIFT_THRESHOLD, 
+                    FEATURE_DISTANCE_THRESHOLD, 
+                    DISTANCE_METRIC, 
+                    LINKAGE_METHOD,
+                    PREDICT_COLUMN
                 )
 
                 df_clustered["cluster"] = df_clustered["combined_primary_itemset"]
@@ -1249,9 +1292,11 @@ def cluster_transcripts(args):
 
     # Write the selected annotation region as BED6. GFF coordinates are
     # 1-based inclusive; BED uses a 0-based half-open interval.
+    # TODO: add feature defining clusters to this file for ease of inspection in IGV reports
     gene_bed = matches[["seq_id", "start", "end", "ID", "strand"]].copy()
     gene_bed["start"] = gene_bed["start"] - 1
     gene_bed.insert(4, "score", ".")
+
     gene_bed_output_path = os.path.join(OUTPUT_DIR, "gene.bed")
     gene_bed.to_csv(
         gene_bed_output_path,
