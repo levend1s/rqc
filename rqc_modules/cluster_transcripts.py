@@ -981,6 +981,45 @@ def cluster_transcripts(args):
 
     input_files = process_input_files(INPUT)
 
+    config_path = os.path.join(OUTPUT_DIR, "config.txt")
+    with open(config_path, "w") as config_file:
+        config_file.write("Input files:\n")
+        config_file.write(f"  ANNOTATION_FILE: {ANNOTATION_FILE}\n")
+        config_file.write("  BAM files:\n")
+        for label, input_file in input_files.items():
+            if input_file["type"] == "bam":
+                config_file.write(f"    {label}: {input_file['path']}\n")
+        config_file.write("Annotation selection:\n")
+        if FEATURE_TYPE:
+            config_file.write(f"  TYPE: {FEATURE_TYPE}\n")
+        else:
+            config_file.write(f"  IDS: {IDS}\n")
+        config_file.write("Read processing options:\n")
+        config_file.write(f"  COVERAGE_PADDING: {COVERAGE_PADDING}\n")
+        config_file.write(f"  MIN_DELETION_LENGTH: {MIN_DELETION_LENGTH}\n")
+        config_file.write(f"  CLUSTER_COLS: {CLUSTER_COLS}\n")
+        config_file.write(f"  MIN_GENE_OVERLAP: {MIN_GENE_OVERLAP}\n")
+        config_file.write(f"  MOD_PROB_THRESHOLD: {MOD_PROB_THRESHOLD}\n")
+        config_file.write(f"  MINIMUM_READS_TO_PROCESS: {MINIMUM_READS_TO_PROCESS}\n")
+        config_file.write("Clustering options:\n")
+        config_file.write(f"  MIN_CLUSTER_PERC: {MIN_CLUSTER_PERC}\n")
+        config_file.write(f"  MIN_CLUSTER_SIZE_BULK: {MIN_CLUSTER_SIZE_BULK}\n")
+        config_file.write(f"  DISTANCE_THRESHOLD: {DISTANCE_THRESHOLD}\n")
+        config_file.write(f"  MIN_FEATURE_FREQ: {MIN_FEATURE_FREQ}\n")
+        config_file.write(f"  DISTANCE_METRIC: {DISTANCE_METRIC}\n")
+        config_file.write(f"  LINKAGE_METHOD: {LINKAGE_METHOD}\n")
+        config_file.write("Intron prediction options:\n")
+        if PREDICT_COLUMN is not None:
+            config_file.write(
+                f"Evaluating cluster tokens as predictors of {PREDICT_COLUMN}...\n"
+            )
+            config_file.write(f"  LIFT_THRESHOLD = {LIFT_THRESHOLD}\n")
+            config_file.write(
+                f"  FEATURE_DISTANCE_THRESHOLD = {FEATURE_DISTANCE_THRESHOLD}\n"
+            )
+
+    print(f"Done. Wrote: {config_path}")
+
     bam_labels = [l for l in input_files.keys() if input_files[l]['type'] == 'bam']
 
     # Open once: label -> handle
@@ -1306,6 +1345,8 @@ def cluster_transcripts(args):
         index=False,
     )
     print(f"Done. Wrote: {gene_bed_output_path}")
+
+    
 
     for bam_label, tracks in tracks_by_label.items():
         tracks_config_path = os.path.join(
