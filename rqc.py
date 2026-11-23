@@ -63,6 +63,7 @@ def build_parser():
     plot_relative_distance_parser.add_argument("--foreground", required=False, default=None, help="foreground column to test for positional enrichment")
     plot_relative_distance_parser.add_argument("--background", required=False, default=None, help="background column to compare against")
     plot_relative_distance_parser.add_argument("--num_permutations", required=False, type=int, default=1000, help="number of permutations to run for the permutation test (default: 100000)")
+    plot_relative_distance_parser.add_argument("--custom_y_max", required=False, type=float, default=None, help="If provided, set the maximum y-axis value to this number (default: None)")
 
     plot_relative_distance_parser.set_defaults(func=plot_relative_distance.plot_relative_distance)
 

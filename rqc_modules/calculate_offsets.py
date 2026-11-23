@@ -92,44 +92,54 @@ def calculate_offsets(args):
         d_coverages[row.ID]["position"] = offset_point
 
         # for k, v in d_offset_files.items():
-        for k, v in d_offset_files_by_contig[row.contig].items():
-            if SAME_STRAND:
-                if row.strand == "+":
-                    in_range = v[(v.start >= (offset_point - DISTANCE))
-                                & (v.start <= (offset_point + DISTANCE))
-                                & (v.contig == row.contig)
-                                & (v.strand == row.strand)]
-                    
-                    offsets = [x - offset_point for x in in_range.start.to_list()]
+
+        motif_files = d_offset_files_by_contig.get(row.contig, {})
+
+        for k in d_num_pam_sites:
+            v = motif_files.get(k)
+
+            if v is None:
+                d_coverages[row.ID][k] = []
+                d_coverages[row.ID][f"{k}_count"] = 0
+                d_num_pam_sites[k].append(0)
+            else:
+                if SAME_STRAND:
+                    if row.strand == "+":
+                        in_range = v[(v.start >= (offset_point - DISTANCE))
+                                    & (v.start <= (offset_point + DISTANCE))
+                                    & (v.contig == row.contig)
+                                    & (v.strand == row.strand)]
+                        
+                        offsets = [x - offset_point for x in in_range.start.to_list()]
+                    else:
+                        in_range = v[(v.end >= (offset_point - DISTANCE))
+                                    & (v.end <= (offset_point + DISTANCE))
+                                    & (v.contig == row.contig)
+                                    & (v.strand == row.strand)]
+                        
+                        offsets = [x - offset_point for x in in_range.end.to_list()]
+                        offsets = [-x for x in offsets]
                 else:
                     in_range = v[(v.end >= (offset_point - DISTANCE))
-                                & (v.end <= (offset_point + DISTANCE))
-                                & (v.contig == row.contig)
-                                & (v.strand == row.strand)]
+                                    & (v.start <= (offset_point + DISTANCE))]
+
+                    for_in_range = in_range[in_range.strand == "+"]
+                    rev_in_range = in_range[in_range.strand == "-"]
+
+                    for_offsets = [x - offset_point for x in for_in_range.start.to_list()]
+                    rev_offsets = [x - offset_point for x in rev_in_range.end.to_list()]
+
+                    offsets = for_offsets + rev_offsets
+
+                    if row.strand == "-":
+                        offsets = [-x for x in offsets]
                     
-                    offsets = [x - offset_point for x in in_range.end.to_list()]
-                    offsets = [-x for x in offsets]
-            else:
-                in_range = v[(v.end >= (offset_point - DISTANCE))
-                                & (v.start <= (offset_point + DISTANCE))]
-
-                for_in_range = in_range[in_range.strand == "+"]
-                rev_in_range = in_range[in_range.strand == "-"]
-
-                for_offsets = [x - offset_point for x in for_in_range.start.to_list()]
-                rev_offsets = [x - offset_point for x in rev_in_range.end.to_list()]
-
-                offsets = for_offsets + rev_offsets
-
-                if row.strand == "-":
-                    offsets = [-x for x in offsets]
-                
-            # print("offset_point: {}".format(offset_point))
-            # print(in_range)
-            # print(offsets)
-            d_coverages[row.ID][k] = offsets
-            d_coverages[row.ID]["{}_count".format(k)] = len(offsets)
-            d_num_pam_sites[k].append(len(offsets))
+                # print("offset_point: {}".format(offset_point))
+                # print(in_range)
+                # print(offsets)
+                d_coverages[row.ID][k] = offsets
+                d_coverages[row.ID]["{}_count".format(k)] = len(offsets)
+                d_num_pam_sites[k].append(len(offsets))
             # if (len(offsets)) > 70:
                 # print(row)
 

@@ -15,6 +15,7 @@ def plot_relative_distance(args):
     FOREGROUND_LABEL = args.foreground
     BACKGROUND_LABEL = args.background
     NUM_PERMUTATIONS = args.num_permutations
+    CUSTOM_Y_MAX = args.custom_y_max
 
     if OUTPUT:
         OUTPUT_FORMAT = OUTPUT.split(".")[-1] if OUTPUT else "png"
@@ -208,6 +209,8 @@ def plot_relative_distance(args):
         'NGG_count': 'green',
         'TTTN': 'blue',
         'TTTN_count': 'blue',
+        'TTTV': 'blue',
+        'TTTV_count': 'blue',
         'm6a': 'purple',
         'm6a_count': 'purple',
         'annotation_three_p': 'green',
@@ -233,7 +236,8 @@ def plot_relative_distance(args):
         'annotation_three_p': 'annotated 3\' end',
         'm6a': 'canonical m6A',
         "NGG": 'NGG',
-        "TTTN": 'TTTN'
+        "TTTN": 'TTTN',
+        "TTTV": 'TTTV'
     }
 
     def get_label(label):
@@ -250,9 +254,6 @@ def plot_relative_distance(args):
         # axes.plot(x_ticks, v, label=k, color=d_colors[k])
         axes.plot(x_ticks, normalised_v_by_reference_count, label=k, color=get_color(k))
         axes.fill_between(x_ticks, normalised_v_by_reference_count, alpha=0.2, color=get_color(k))
-
-    # TODO HACK
-    CUSTOM_Y_MAX = None
 
     axes.axvline(x=0, color='grey', ls="--", linewidth=1.0)
     # axes.set_ylabel('count')
@@ -309,8 +310,10 @@ def plot_relative_distance(args):
     for k, v in d_num_pam_sites_hist.items():
         print(max_pam_count)
         max_pam_sites_range = int(max_pam_count * 1.1)
-        max_pam_sites_range = 100
-        num_gene_x_ticks = list(range(max_pam_sites_range))
+        # max_pam_sites_range = 100
+        y = v[:max_pam_sites_range]
+        num_gene_x_ticks = list(range(len(y)))
+        # num_gene_x_ticks = list(range(max_pam_sites_range))
         axes.plot(num_gene_x_ticks, v[:max_pam_sites_range], label=k, color=get_color(k))
         print(v[:max_pam_sites_range])
         axes.fill_between(num_gene_x_ticks, v[:max_pam_sites_range], alpha=0.2, color=get_color(k))
