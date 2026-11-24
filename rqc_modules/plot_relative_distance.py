@@ -323,11 +323,6 @@ def plot_relative_distance(args):
     # axes.set_xscale('log')
     axes.set_xlim(xmin=0, xmax=max_pam_sites_range)
     axes.set_ylim(ymin=0)
-
-
-    # TODO HACK
-    if CUSTOM_Y_MAX:
-        axes.set_ylim(ymin=0, ymax=1200)
     axes.legend()
     plt.legend(loc="upper right")
 
